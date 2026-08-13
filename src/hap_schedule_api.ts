@@ -16,6 +16,7 @@ interface RoborockRequestOptions {
   allowOfflineCloudSend?: boolean;
   requestTimeoutMs?: number;
   waitForResult?: boolean;
+  throwOnError?: boolean;
 }
 
 interface RoborockScheduleApi {
@@ -29,12 +30,23 @@ interface RoborockScheduleApi {
     enabled: boolean,
     options?: RoborockRequestOptions
   ) => Promise<unknown>;
-  startCommand: (
+  startCommand?: (
     duid: string,
     command: string,
     parameters: unknown,
     options?: RoborockRequestOptions
   ) => Promise<unknown>;
+  vacuums?: Record<
+    string,
+    {
+      command?: (
+        duid: string,
+        command: string,
+        parameters: unknown,
+        options?: RoborockRequestOptions
+      ) => Promise<unknown>;
+    }
+  >;
 }
 
 function scheduleRequestOptions(
@@ -77,7 +89,9 @@ export async function updateServerTimer(
 
 /**
  * Fallback for robots that expose the standard timer endpoint rather than
- * applying upd_server_timer. This mirrors the proven vacuum2 schedule retry.
+ * applying upd_server_timer. This deliberately calls the underlying vacuum's
+ * command method rather than a broad platform command wrapper: vacuum.command
+ * supports throwOnError, so a failed fallback cannot be mistaken for success.
  */
 export async function updateTimer(
   api: RoborockScheduleApi,
@@ -92,10 +106,30 @@ export async function updateTimer(
     throw new Error(`Invalid Roborock schedule ID: ${String(timerId)}`);
   }
 
-  return api.startCommand(
-    duid,
-    "upd_timer",
-    [timerId, enabled ? "on" : "off"],
-    scheduleRequestOptions({ ...options, waitForResult: true })
-  );
+  const requestOptions = scheduleRequestOptions({
+    ...options,
+    waitForResult: true,
+    throwOnError: true,
+  });
+
+  if (typeof api.startCommand === "function") {
+    return api.startCommand(
+      duid,
+      "upd_timer",
+      [timerId, enabled ? "on" : "off"],
+      requestOptions
+    );
+  }
+
+  const vacuum = api.vacuums?.[duid];
+  if (typeof vacuum?.command === "function") {
+    return vacuum.command(
+      duid,
+      "upd_timer",
+      [timerId, enabled ? "on" : "off"],
+      requestOptions
+    );
+  }
+
+  throw new Error("Roborock timer command API is unavailable");
 }
