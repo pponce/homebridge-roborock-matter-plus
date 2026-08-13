@@ -131,7 +131,10 @@ export default class RoborockHapScheduleAccessory {
     for (let i = 0; i < schedules.length; i++) {
       const schedule = schedules[i];
       const subtype = `${SERVICE_PREFIX}${encodeURIComponent(schedule.id)}`;
-      const displayName = `${this.vacuumName} Schedule ${i + 1} (${schedule.id})`;
+      // Put the ordinal first so the Home app cannot make otherwise similar
+      // schedules look identical after truncating long names. The Roborock
+      // timer id remains in the visible name as a stable troubleshooting key.
+      const displayName = `Schedule ${i + 1} — ${this.vacuumName} — ${schedule.id}`;
 
       let service =
         this.services.get(schedule.id) ||
