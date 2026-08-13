@@ -1,82 +1,42 @@
 /**
- * Small HAP-only adapter around the shared Roborock transport.
+ * Small HAP-only adapter around the shared Roborock API.
  *
  * These calls intentionally live outside roborockAPI.js. Mathias's Matter
- * implementation owns that file; keeping the two legacy schedule RPCs here
+ * implementation owns that file; keeping the HAP schedule integration here
  * makes upstream updates much easier to consume.
+ *
+ * The adapter deliberately uses the public Roborock API methods rather than
+ * reaching directly into messageQueueHandler. This preserves the existing
+ * vacuum-level error handling and transport behavior.
  */
 
-interface RoborockTimerTransport {
-  messageQueueHandler: {
-    sendRequest: (
-      duid: string,
-      method: string,
-      params: unknown,
-      ...args: unknown[]
-    ) => Promise<any>;
-  };
-  log?: {
-    debug?: (message: string) => void;
-  };
+interface RoborockScheduleApi {
+  getServerTimers: (duid: string) => Promise<unknown>;
+  updateServerTimer: (
+    duid: string,
+    timerId: string | number,
+    enabled: boolean
+  ) => Promise<unknown>;
 }
 
 export async function getServerTimers(
-  api: RoborockTimerTransport,
+  api: RoborockScheduleApi,
   duid: string
 ): Promise<unknown> {
-  const result = await api.messageQueueHandler.sendRequest(
-    duid,
-    "get_server_timer",
-    [],
-    false,
-    false,
-    { preferCloud: true }
-  );
-
-  api.log?.debug?.(
-    `get_server_timer response for ${duid}: ${JSON.stringify(result)}`
-  );
-
-  return result;
+  return api.getServerTimers(duid);
 }
 
 export async function updateServerTimer(
-  api: RoborockTimerTransport,
-  duid: string,
-  timer: string | number | unknown[],
-  enabled: boolean
-): Promise<unknown> {
-  const timerId = Array.isArray(timer) ? timer[0] : timer;
-  const updatedTimer = [timerId, enabled ? "on" : "off"];
-
-  api.log?.debug?.(
-    `Sending upd_server_timer for ${duid}: ${JSON.stringify([updatedTimer])}`
-  );
-
-  return api.messageQueueHandler.sendRequest(
-    duid,
-    "upd_server_timer",
-    [updatedTimer],
-    false,
-    false,
-    { preferCloud: true }
-  );
-}
-
-export async function updateTimer(
-  api: RoborockTimerTransport,
+  api: RoborockScheduleApi,
   duid: string,
   timer: string | number | unknown[],
   enabled: boolean
 ): Promise<unknown> {
   const timerId = Array.isArray(timer) ? timer[0] : timer;
 
-  return api.messageQueueHandler.sendRequest(
-    duid,
-    "upd_timer",
-    [timerId, enabled ? "on" : "off"],
-    false,
-    false,
-    { preferCloud: true }
-  );
+  if (typeof timerId !== "string" && typeof timerId !== "number") {
+    throw new Error(`Invalid Roborock schedule ID: ${String(timerId)}`);
+  }
+
+  return api.updateServerTimer(duid, timerId, enabled);
 }

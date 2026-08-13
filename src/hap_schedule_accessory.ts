@@ -1,6 +1,6 @@
-import { CharacteristicValue, PlatformAccessory, Service } from "homebridge";
+import { PlatformAccessory } from "homebridge";
 import RoborockPlatform from "./platform";
-import { getServerTimers, updateServerTimer, updateTimer } from "./hap_schedule_api";
+import { getServerTimers, updateServerTimer } from "./hap_schedule_api";
 
 const VERIFY_DELAY_MS = 1500;
 const WRITE_SUPPRESSION_MS = 5000;
@@ -37,14 +37,14 @@ export function parseServerTimers(value: unknown): RoborockSchedule[] {
 }
 
 export function isHapScheduleAccessory(accessory: PlatformAccessory): boolean {
-  const context = accessory.context as Partial<HapScheduleContext>;
+  const context = (accessory.context ?? {}) as Partial<HapScheduleContext>;
   return context.kind === HAP_EXTENSION_KIND &&
     context.extension === HAP_SCHEDULE_EXTENSION &&
     typeof context.duid === "string" && context.duid.length > 0;
 }
 
 export default class RoborockHapScheduleAccessory {
-  private readonly services = new Map<string, Service>();
+  private readonly services = new Map<string, any>();
   private readonly writes = new Set<string>();
   private readonly suppression = new Map<string, { enabled: boolean; timestamp: number }>();
   private schedules = new Map<string, RoborockSchedule>();
@@ -63,8 +63,8 @@ export default class RoborockHapScheduleAccessory {
 
   async initialize(vacuumName: string): Promise<void> {
     this.accessory.displayName = `${vacuumName} Schedules`;
-    const info = this.accessory.getService(Service.AccessoryInformation) ||
-      this.accessory.addService(Service.AccessoryInformation);
+    const info = this.accessory.getService(this.platform.Service.AccessoryInformation) ||
+      this.accessory.addService(this.platform.Service.AccessoryInformation);
     info.setCharacteristic(this.platform.Characteristic.Manufacturer, "Roborock");
     info.setCharacteristic(this.platform.Characteristic.Model, "Roborock Schedules");
     info.setCharacteristic(this.platform.Characteristic.SerialNumber, this.duid);
@@ -74,7 +74,25 @@ export default class RoborockHapScheduleAccessory {
   async refresh(): Promise<void> {
     const api = this.platform.roborockAPI as any;
     const raw = await getServerTimers(api, this.duid);
-    this.sync(parseServerTimers(raw));
+
+    // An empty/non-array response is not enough evidence that the robot
+    // genuinely has no schedules. Roborock cloud failures can produce empty
+    // or unexpected responses. Preserve the existing HAP services instead of
+    // deleting every schedule switch.
+    if (!Array.isArray(raw)) {
+      this.platform.log.warn(
+        `Unable to reliably read Roborock schedules for ${this.duid}: ` +
+        `get_server_timer returned ${typeof raw}; preserving existing schedules.`
+      );
+      return;
+    }
+
+    const schedules = parseServerTimers(raw);
+
+    // A valid empty array means the robot currently reports no schedules.
+    // This is safe to synchronize because we know the transport returned an
+    // actual timer list rather than an error-shaped/unknown response.
+    this.sync(schedules);
   }
 
   dispose(): void {
@@ -88,8 +106,8 @@ export default class RoborockHapScheduleAccessory {
       const schedule = schedules[i];
       const subtype = `${SERVICE_PREFIX}${encodeURIComponent(schedule.id)}`;
       let service = this.services.get(schedule.id) ||
-        this.accessory.getServiceById(Service.Switch, subtype);
-      if (!service) service = this.accessory.addService(Service.Switch, `Roborock Schedule ${i + 1}`, subtype);
+        this.accessory.getServiceById(this.platform.Service.Switch, subtype);
+      if (!service) service = this.accessory.addService(this.platform.Service.Switch, `Roborock Schedule ${i + 1}`, subtype);
       service.setCharacteristic(this.platform.Characteristic.Name, `Roborock Schedule ${i + 1} (${schedule.id})`);
       service.getCharacteristic(this.platform.Characteristic.On)
         .onSet((value) => this.setSchedule(schedule.id, Boolean(value)))
@@ -119,19 +137,24 @@ export default class RoborockHapScheduleAccessory {
     try {
       const api = this.platform.roborockAPI as any;
       await updateServerTimer(api, this.duid, id, enabled);
-      let verified = await this.verify(api, id, enabled);
+      const verified = await this.verify(api, id, enabled);
       if (!verified) {
-        await updateTimer(api, this.duid, id, enabled);
-        verified = await this.verify(api, id, enabled);
+        throw new Error(
+          `Roborock did not confirm schedule ${id} as ${
+            enabled ? "enabled" : "disabled"
+          }`
+        );
       }
-      if (!verified) throw new Error(`Roborock did not confirm schedule ${id} as ${enabled ? "enabled" : "disabled"}`);
       const timer = this.schedules.get(id)?.timer ?? [id, enabled ? "on" : "off"];
       this.schedules.set(id, { id, enabled, timer });
       this.suppression.set(id, { enabled, timestamp: Date.now() });
       this.updateService(id, enabled);
     } catch (error) {
       this.updateService(id, previous);
-      this.platform.log.error(`Unable to ${enabled ? "enable" : "disable"} Roborock schedule ${id}: ${error?.message || error}`);
+      const message = error instanceof Error ? error.message : String(error);
+      this.platform.log.error(
+        `Unable to ${enabled ? "enable" : "disable"} Roborock schedule ${id}: ${message}`
+      );
     } finally {
       this.writes.delete(id);
     }
