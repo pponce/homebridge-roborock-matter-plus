@@ -58,7 +58,7 @@ describe("Roborock vacuum command options", () => {
     );
   });
 
-  test("reads and updates server timers using the Roborock schedule contract", async () => {
+  test("reads and updates server timers using the cloud-preferred timer contract", async () => {
     const timers = [["timer-1", "on", 123]];
     const sendRequest = jest
       .fn()
@@ -68,14 +68,14 @@ describe("Roborock vacuum command options", () => {
     const robot = new vacuum(adapter, "roborock.vacuum.ss07");
 
     await expect(
-      robot.getServerTimers("device-1", { requestTimeoutMs: 15000 })
+      robot.getServerTimers("device-1", { requestTimeoutMs: 15000, preferCloud: true })
     ).resolves.toEqual(timers);
 
     await robot.updateServerTimer(
       "device-1",
       "timer-1",
       false,
-      { requestTimeoutMs: 15000 }
+      { requestTimeoutMs: 15000, preferCloud: true }
     );
 
     expect(sendRequest).toHaveBeenNthCalledWith(
@@ -85,7 +85,7 @@ describe("Roborock vacuum command options", () => {
       [],
       false,
       false,
-      { requestTimeoutMs: 15000 }
+      { preferCloud: true, requestTimeoutMs: 15000 }
     );
 
     expect(sendRequest).toHaveBeenNthCalledWith(
@@ -95,7 +95,7 @@ describe("Roborock vacuum command options", () => {
       ["timer-1", "off"],
       false,
       false,
-      { requestTimeoutMs: 15000 }
+      { preferCloud: true, requestTimeoutMs: 15000 }
     );
   });
 
