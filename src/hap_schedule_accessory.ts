@@ -1,6 +1,10 @@
 import { PlatformAccessory } from "homebridge";
 import RoborockPlatform from "./platform";
-import { getServerTimers, updateServerTimer } from "./hap_schedule_api";
+import {
+  getServerTimers,
+  updateServerTimer,
+  updateTimer,
+} from "./hap_schedule_api";
 
 const VERIFY_DELAY_MS = 1500;
 const WRITE_SUPPRESSION_MS = 5000;
@@ -113,8 +117,7 @@ export default class RoborockHapScheduleAccessory {
       return;
     }
 
-    const schedules = parseServerTimers(raw);
-    this.sync(schedules);
+    this.sync(parseServerTimers(raw));
   }
 
   dispose(): void {
@@ -195,23 +198,33 @@ export default class RoborockHapScheduleAccessory {
     this.writes.add(id);
     try {
       const api = this.platform.roborockAPI as any;
-      const current = this.schedules.get(id)?.timer;
-      const timer = current ? [...current] : [id, enabled ? "on" : "off"];
-      timer[1] = enabled ? "on" : "off";
-
-      await updateServerTimer(api, this.duid, timer, enabled, {
+      await updateServerTimer(api, this.duid, id, enabled, {
         requestTimeoutMs: 10000,
       });
 
-      const verified = await this.verify(api, id, enabled);
-      if (!verified) {
-        throw new Error(
-          `Roborock did not confirm schedule ${id} as ${
-            enabled ? "enabled" : "disabled"
-          }`
+      if (!(await this.verify(api, id, enabled))) {
+        this.platform.log.warn(
+          `Roborock schedule ${id} did not reflect the server timer update for ${this.vacuumName}; retrying with the standard timer update command.`
         );
+
+        await updateTimer(api, this.duid, id, enabled, {
+          requestTimeoutMs: 10000,
+        });
+
+        if (!(await this.verify(api, id, enabled))) {
+          throw new Error(
+            `Roborock schedule ${id} still reports ${
+              enabled ? "disabled" : "enabled"
+            } after update.`
+          );
+        }
       }
 
+      const timer = this.schedules.get(id)?.timer ?? [
+        id,
+        enabled ? "on" : "off",
+      ];
+      timer[1] = enabled ? "on" : "off";
       this.schedules.set(id, { id, enabled, timer });
       this.suppression.set(id, { enabled, timestamp: Date.now() });
       this.updateService(id, enabled);
