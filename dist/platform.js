@@ -336,15 +336,21 @@ class RoborockPlatform {
         try {
             const self = this;
             let devices = [];
+            this.log.info(`Discovery state: roborockAPI.isInited()=${self.roborockAPI.isInited()}`);
             if (self.roborockAPI.isInited()) {
                 devices = self.roborockAPI.getVacuumList();
+                this.log.info(`Discovery retrieved ${Array.isArray(devices) ? devices.length : "non-array"} device(s) from getVacuumList().`);
                 // Every robot is published as a native Matter vacuum. The only HAP
                 // accessories this plugin registers are the opt-in action switches
                 // below; the robot itself never appears over HomeKit.
                 for (const device of devices) {
                     await self.discoverMatterVacuum(device);
                 }
+                this.log.info("Discovery calling syncHapSchedules().");
                 self.syncHapSchedules(Array.isArray(devices) ? devices : []);
+            }
+            else {
+                this.log.warn("Discovery skipped Matter/schedule setup because Roborock API is not initialized.");
             }
             // At this point, we set up all devices from Roborock App, but we did not unregister
             // cached devices that do not exist on the Roborock App account anymore.

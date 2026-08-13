@@ -10,27 +10,40 @@
  * vacuum-level error handling and transport behavior.
  */
 
+interface RoborockRequestOptions {
+  preferCloud?: boolean;
+  preferLocal?: boolean;
+  allowOfflineCloudSend?: boolean;
+  requestTimeoutMs?: number;
+}
+
 interface RoborockScheduleApi {
-  getServerTimers: (duid: string) => Promise<unknown>;
+  getServerTimers: (
+    duid: string,
+    options?: RoborockRequestOptions
+  ) => Promise<unknown>;
   updateServerTimer: (
     duid: string,
     timerId: string | number,
-    enabled: boolean
+    enabled: boolean,
+    options?: RoborockRequestOptions
   ) => Promise<unknown>;
 }
 
 export async function getServerTimers(
   api: RoborockScheduleApi,
-  duid: string
+  duid: string,
+  options: RoborockRequestOptions = {}
 ): Promise<unknown> {
-  return api.getServerTimers(duid);
+  return api.getServerTimers(duid, options);
 }
 
 export async function updateServerTimer(
   api: RoborockScheduleApi,
   duid: string,
   timer: string | number | unknown[],
-  enabled: boolean
+  enabled: boolean,
+  options: RoborockRequestOptions = {}
 ): Promise<unknown> {
   const timerId = Array.isArray(timer) ? timer[0] : timer;
 
@@ -38,5 +51,5 @@ export async function updateServerTimer(
     throw new Error(`Invalid Roborock schedule ID: ${String(timerId)}`);
   }
 
-  return api.updateServerTimer(duid, timerId, enabled);
+  return api.updateServerTimer(duid, timerId, enabled, options);
 }

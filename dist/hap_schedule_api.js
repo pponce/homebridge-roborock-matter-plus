@@ -13,14 +13,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getServerTimers = getServerTimers;
 exports.updateServerTimer = updateServerTimer;
-async function getServerTimers(api, duid) {
-    return api.getServerTimers(duid);
+async function getServerTimers(api, duid, options = {}) {
+    return api.getServerTimers(duid, options);
 }
-async function updateServerTimer(api, duid, timer, enabled) {
+async function updateServerTimer(api, duid, timer, enabled, options = {}) {
     const timerId = Array.isArray(timer) ? timer[0] : timer;
     if (typeof timerId !== "string" && typeof timerId !== "number") {
         throw new Error(`Invalid Roborock schedule ID: ${String(timerId)}`);
     }
-    return api.updateServerTimer(duid, timerId, enabled);
+    return api.updateServerTimer(duid, timerId, enabled, options);
 }
 //# sourceMappingURL=hap_schedule_api.js.map

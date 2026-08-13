@@ -67,20 +67,35 @@ describe("Roborock vacuum command options", () => {
     const adapter = createAdapter(sendRequest);
     const robot = new vacuum(adapter, "roborock.vacuum.ss07");
 
-    await expect(robot.getServerTimers("device-1")).resolves.toEqual(timers);
-    await robot.updateServerTimer("device-1", "timer-1", false);
+    await expect(
+      robot.getServerTimers("device-1", { requestTimeoutMs: 15000 })
+    ).resolves.toEqual(timers);
+
+    await robot.updateServerTimer(
+      "device-1",
+      "timer-1",
+      false,
+      { requestTimeoutMs: 15000 }
+    );
 
     expect(sendRequest).toHaveBeenNthCalledWith(
       1,
       "device-1",
       "get_server_timer",
-      []
+      [],
+      false,
+      false,
+      { requestTimeoutMs: 15000 }
     );
+
     expect(sendRequest).toHaveBeenNthCalledWith(
       2,
       "device-1",
       "upd_server_timer",
-      ["timer-1", "off"]
+      ["timer-1", "off"],
+      false,
+      false,
+      { requestTimeoutMs: 15000 }
     );
   });
 

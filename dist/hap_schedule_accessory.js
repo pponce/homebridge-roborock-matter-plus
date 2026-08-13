@@ -43,6 +43,7 @@ class RoborockHapScheduleAccessory {
         this.writes = new Set();
         this.suppression = new Map();
         this.schedules = new Map();
+        this.vacuumName = "";
         accessory.context = {
             kind: exports.HAP_EXTENSION_KIND,
             extension: exports.HAP_SCHEDULE_EXTENSION,
@@ -50,6 +51,7 @@ class RoborockHapScheduleAccessory {
         };
     }
     async initialize(vacuumName) {
+        this.vacuumName = vacuumName;
         this.accessory.displayName = `${vacuumName} Schedules`;
         const info = this.accessory.getService(this.platform.Service.AccessoryInformation) ||
             this.accessory.addService(this.platform.Service.AccessoryInformation);
@@ -60,7 +62,12 @@ class RoborockHapScheduleAccessory {
     }
     async refresh() {
         const api = this.platform.roborockAPI;
-        const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid);
+        const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
+            requestTimeoutMs: 10000,
+        });
+        this.platform.log.info(`Schedule discovery for ${this.duid}: ` +
+            `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
+            `value=${JSON.stringify(raw)}`);
         // An empty/non-array response is not enough evidence that the robot
         // genuinely has no schedules. Roborock cloud failures can produce empty
         // or unexpected responses. Preserve the existing HAP services instead of
@@ -70,7 +77,9 @@ class RoborockHapScheduleAccessory {
                 `get_server_timer returned ${typeof raw}; preserving existing schedules.`);
             return;
         }
+        this.platform.log.info(`Schedule parser: about to parse ${this.duid}.`);
         const schedules = parseServerTimers(raw);
+        this.platform.log.info(`Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`);
         // A valid empty array means the robot currently reports no schedules.
         // This is safe to synchronize because we know the transport returned an
         // actual timer list rather than an error-shaped/unknown response.
@@ -81,15 +90,21 @@ class RoborockHapScheduleAccessory {
         this.suppression.clear();
     }
     sync(schedules) {
+        this.platform.log.info(`Schedule sync: ${this.duid} received ${schedules.length} parsed schedule(s).`);
         const ids = new Set(schedules.map((s) => s.id));
         for (let i = 0; i < schedules.length; i++) {
             const schedule = schedules[i];
+            this.platform.log.info(`Schedule sync: processing ${schedule.id} enabled=${schedule.enabled}.`);
             const subtype = `${SERVICE_PREFIX}${encodeURIComponent(schedule.id)}`;
             let service = this.services.get(schedule.id) ||
                 this.accessory.getServiceById(this.platform.Service.Switch, subtype);
-            if (!service)
-                service = this.accessory.addService(this.platform.Service.Switch, `Roborock Schedule ${i + 1}`, subtype);
-            service.setCharacteristic(this.platform.Characteristic.Name, `Roborock Schedule ${i + 1} (${schedule.id})`);
+            this.platform.log.info(`Schedule sync: existing HAP service for ${schedule.id} = ${service ? "YES" : "NO"}.`);
+            if (!service) {
+                this.platform.log.info(`Schedule sync: adding HAP Switch service for ${schedule.id}.`);
+                service = this.accessory.addService(this.platform.Service.Switch, `${this.vacuumName} Schedule ${i + 1}`, subtype);
+                this.platform.log.info(`Schedule sync: HAP Switch service added for ${schedule.id}.`);
+            }
+            service.setCharacteristic(this.platform.Characteristic.Name, `${this.vacuumName} Schedule ${i + 1}`);
             service.getCharacteristic(this.platform.Characteristic.On)
                 .onSet((value) => this.setSchedule(schedule.id, Boolean(value)))
                 .onGet(() => { var _a, _b; return (_b = (_a = this.schedules.get(schedule.id)) === null || _a === void 0 ? void 0 : _a.enabled) !== null && _b !== void 0 ? _b : schedule.enabled; });
@@ -118,7 +133,9 @@ class RoborockHapScheduleAccessory {
         this.writes.add(id);
         try {
             const api = this.platform.roborockAPI;
-            await (0, hap_schedule_api_1.updateServerTimer)(api, this.duid, id, enabled);
+            await (0, hap_schedule_api_1.updateServerTimer)(api, this.duid, id, enabled, {
+                requestTimeoutMs: 10000,
+            });
             const verified = await this.verify(api, id, enabled);
             if (!verified) {
                 throw new Error(`Roborock did not confirm schedule ${id} as ${enabled ? "enabled" : "disabled"}`);
@@ -140,7 +157,9 @@ class RoborockHapScheduleAccessory {
     async verify(api, id, enabled) {
         var _a;
         await new Promise((resolve) => setTimeout(resolve, VERIFY_DELAY_MS));
-        const schedules = parseServerTimers(await (0, hap_schedule_api_1.getServerTimers)(api, this.duid));
+        const schedules = parseServerTimers(await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
+            requestTimeoutMs: 10000,
+        }));
         this.sync(schedules);
         return ((_a = this.schedules.get(id)) === null || _a === void 0 ? void 0 : _a.enabled) === enabled;
     }
