@@ -5,10 +5,9 @@
  * implementation owns that file; keeping the HAP schedule integration here
  * makes upstream updates much easier to consume.
  *
- * Schedule timers are server-side Roborock timers. They must use the cloud
- * path, and `upd_server_timer` must receive the full timer tuple with the
- * status field changed. The original vacuum2 schedule implementation proved
- * this contract; do not reduce it to [timerId, status].
+ * Server timers use the cloud-preferred Roborock contract. The underlying
+ * vacuum API expects the timer id plus the desired status; the full timer
+ * tuple is retained by the HAP accessory for verification/state tracking.
  */
 
 interface RoborockRequestOptions {
@@ -22,6 +21,12 @@ interface RoborockRequestOptions {
 interface RoborockScheduleApi {
   getServerTimers: (
     duid: string,
+    options?: RoborockRequestOptions
+  ) => Promise<unknown>;
+  updateServerTimer: (
+    duid: string,
+    timerId: string | number,
+    enabled: boolean,
     options?: RoborockRequestOptions
   ) => Promise<unknown>;
   startCommand: (
@@ -62,18 +67,35 @@ export async function updateServerTimer(
     throw new Error(`Invalid Roborock schedule ID: ${String(timerId)}`);
   }
 
-  const updatedTimer = Array.isArray(timer)
-    ? [...timer]
-    : [timerId, enabled ? "on" : "off"];
-  updatedTimer[1] = enabled ? "on" : "off";
+  return api.updateServerTimer(
+    duid,
+    timerId,
+    enabled,
+    scheduleRequestOptions(options)
+  );
+}
+
+/**
+ * Fallback for robots that expose the standard timer endpoint rather than
+ * applying upd_server_timer. This mirrors the proven vacuum2 schedule retry.
+ */
+export async function updateTimer(
+  api: RoborockScheduleApi,
+  duid: string,
+  timer: string | number | unknown[],
+  enabled: boolean,
+  options: RoborockRequestOptions = {}
+): Promise<unknown> {
+  const timerId = Array.isArray(timer) ? timer[0] : timer;
+
+  if (typeof timerId !== "string" && typeof timerId !== "number") {
+    throw new Error(`Invalid Roborock schedule ID: ${String(timerId)}`);
+  }
 
   return api.startCommand(
     duid,
-    "upd_server_timer",
-    updatedTimer,
-    scheduleRequestOptions({
-      ...options,
-      waitForResult: true,
-    })
+    "upd_timer",
+    [timerId, enabled ? "on" : "off"],
+    scheduleRequestOptions({ ...options, waitForResult: true })
   );
 }
