@@ -24,7 +24,7 @@ interface RoborockScheduleApi {
     duid: string,
     options?: RoborockRequestOptions
   ) => Promise<unknown>;
-  updateServerTimer: (
+  updateServerTimer?: (
     duid: string,
     timerId: string | number,
     enabled: boolean,
@@ -79,12 +79,47 @@ export async function updateServerTimer(
     throw new Error(`Invalid Roborock schedule ID: ${String(timerId)}`);
   }
 
-  return api.updateServerTimer(
-    duid,
-    timerId,
-    enabled,
-    scheduleRequestOptions(options)
-  );
+  const requestOptions = scheduleRequestOptions({
+    ...options,
+    waitForResult: true,
+    throwOnError: true,
+  });
+
+  // Roborock's `upd_server_timer` contract expects the timer tuple as the
+  // first (and only) command parameter: [[timerId, "on"|"off"]]. The shared
+  // vacuum API's historical updateServerTimer helper flattened that tuple to
+  // [timerId, status], which is accepted by some paths but does not update the
+  // schedule in the Roborock app. Keep the HAP schedule integration isolated
+  // from that upstream helper and send the exact cloud command shape here.
+  const vacuum = api.vacuums?.[duid];
+  if (typeof vacuum?.command === "function") {
+    return vacuum.command(
+      duid,
+      "upd_server_timer",
+      [[timerId, enabled ? "on" : "off"]],
+      requestOptions
+    );
+  }
+
+  if (typeof api.startCommand === "function") {
+    return api.startCommand(
+      duid,
+      "upd_server_timer",
+      [[timerId, enabled ? "on" : "off"]],
+      requestOptions
+    );
+  }
+
+  if (typeof api.updateServerTimer === "function") {
+    return api.updateServerTimer(
+      duid,
+      timerId,
+      enabled,
+      requestOptions
+    );
+  }
+
+  throw new Error("Roborock schedule command API is unavailable");
 }
 
 /**
