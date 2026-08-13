@@ -519,6 +519,9 @@ class RoborockPlatform {
         // decision comes from the config and not from the cloud.
         const accountIsTrustworthy = devices.length > 0;
         const obsolete = this.accessories.filter((accessory) => {
+            if (!(0, action_switch_accessory_1.isActionSwitchAccessory)(accessory)) {
+                return false;
+            }
             const context = accessory.context;
             const key = `${context === null || context === void 0 ? void 0 : context.duid}:${context === null || context === void 0 ? void 0 : context.action}`;
             if (wanted.has(key)) {
