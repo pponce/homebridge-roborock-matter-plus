@@ -137,7 +137,8 @@ export default class RoborockHapScheduleAccessory {
 
     for (let i = 0; i < schedules.length; i++) {
       const schedule = schedules[i];
-      const displayName = `${this.vacuumName} Schedule ${i + 1}`;
+      const displayName =
+        `${this.vacuumName} Schedule ${i + 1} (${schedule.id})`;
       const existing = this.scheduleAccessories.get(schedule.id);
 
       if (existing) {
@@ -146,7 +147,7 @@ export default class RoborockHapScheduleAccessory {
       }
 
       const uuid = this.platform.api.hap.uuid.generate(
-        `hap:roborock:schedule:${this.duid}:${schedule.id}`
+        `hap:roborock:schedule:v2:${this.duid}:${schedule.id}`
       );
 
       const cached = this.findCachedScheduleAccessory(uuid, schedule.id);
@@ -241,6 +242,16 @@ class RoborockHapScheduleSwitchAccessory {
     string,
     { enabled: boolean; timestamp: number }
   >();
+
+  // If Roborock rejects/doesn't reflect a command, don't allow HomeKit
+  // to immediately hammer the same command over and over.
+  private readonly failedCommands = new Map<
+    string,
+    { enabled: boolean; timestamp: number }
+  >();
+
+  private static readonly FAILED_COMMAND_COOLDOWN_MS = 30000;
+
   private schedule: RoborockSchedule;
 
   constructor(
@@ -274,6 +285,14 @@ class RoborockHapScheduleSwitchAccessory {
     info.setCharacteristic(
       this.platform.Characteristic.SerialNumber,
       `${this.duid}:${this.scheduleId}`
+    );
+
+    // HomeKit uses AccessoryInformation.Name for the accessory/tile identity.
+    // Setting only the Switch service Name is not sufficient and can leave
+    // every restored schedule displayed as "<vacuum> Schedules".
+    info.setCharacteristic(
+      this.platform.Characteristic.Name,
+      displayName
     );
 
     const subtype = `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`;
@@ -312,6 +331,18 @@ class RoborockHapScheduleSwitchAccessory {
   updateIdentity(displayName: string, schedule: RoborockSchedule): void {
     this.schedule = { ...schedule, timer: [...schedule.timer] };
     this.accessory.displayName = displayName;
+
+    const info =
+      this.accessory.getService(this.platform.Service.AccessoryInformation) ||
+      this.accessory.addService(this.platform.Service.AccessoryInformation);
+
+    info.setCharacteristic(
+      this.platform.Characteristic.Name,
+      displayName
+    );
+
+    // Persist the accessory identity/name for restored PlatformAccessories.
+    this.platform.api.updatePlatformAccessories([this.accessory]);
 
     const switchService = this.accessory.getServiceById(
       this.platform.Service.Switch,
@@ -354,6 +385,17 @@ class RoborockHapScheduleSwitchAccessory {
       return;
     }
 
+    const failed = this.failedCommands.get(this.scheduleId);
+    if (
+      failed &&
+      failed.enabled === enabled &&
+      now - failed.timestamp <
+        RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS
+    ) {
+      this.updateService(previous);
+      return;
+    }
+
     if (this.writes.has(this.scheduleId)) {
       this.updateService(previous);
       return;
@@ -390,6 +432,9 @@ class RoborockHapScheduleSwitchAccessory {
 
       this.schedule.enabled = enabled;
       this.schedule.timer[1] = enabled ? "on" : "off";
+
+      this.failedCommands.delete(this.scheduleId);
+
       this.suppression.set(this.scheduleId, {
         enabled,
         timestamp: Date.now(),
@@ -397,9 +442,18 @@ class RoborockHapScheduleSwitchAccessory {
       this.updateService(enabled);
     } catch (error) {
       this.updateService(previous);
+
+      this.failedCommands.set(this.scheduleId, {
+        enabled,
+        timestamp: Date.now(),
+      });
+
       const message = error instanceof Error ? error.message : String(error);
-      this.platform.log.error(
-        `Unable to ${enabled ? "enable" : "disable"} Roborock schedule ${this.scheduleId}: ${message}`
+
+      this.platform.log.warn(
+        `Unable to ${enabled ? "enable" : "disable"} Roborock schedule ${this.scheduleId}: ${message}. ` +
+        `Further attempts for this same state are suppressed for ` +
+        `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`
       );
     } finally {
       this.writes.delete(this.scheduleId);
