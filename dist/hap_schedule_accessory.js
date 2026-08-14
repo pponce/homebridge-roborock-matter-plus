@@ -4,7 +4,6 @@ exports.HAP_SCHEDULE_EXTENSION = exports.HAP_EXTENSION_KIND = void 0;
 exports.parseServerTimers = parseServerTimers;
 exports.isHapScheduleAccessory = isHapScheduleAccessory;
 const hap_schedule_api_1 = require("./hap_schedule_api");
-const settings_1 = require("./settings");
 const VERIFY_DELAY_MS = 3000;
 const WRITE_SUPPRESSION_MS = 5000;
 const SERVICE_PREFIX = "roborock-schedule-";
@@ -42,11 +41,19 @@ function isHapScheduleAccessory(accessory) {
         context.duid.length > 0);
 }
 /**
- * The platform still owns one lightweight schedule coordinator per vacuum.
- * The coordinator's old single accessory is deliberately not exposed to
- * HomeKit. Each Roborock timer is its own PlatformAccessory so Apple Home gets
- * one tile/name per schedule instead of collapsing all switches under
- * "<vacuum> Schedules".
+ * The platform owns one schedule coordinator per vacuum.
+ * Each Roborock timer is exposed as its own HAP switch accessory.
+ *
+ * Schedule accessories are intentionally named from the vacuum name so the
+ * Home app presents the schedules together under the vacuum's schedule
+ * grouping:
+ *
+ *   <vacuum> Schedule 1
+ *   <vacuum> Schedule 2
+ *   ...
+ *
+ * The schedule ID remains part of the accessory UUID/context and is therefore
+ * stable even if the displayed name changes.
  */
 class RoborockHapScheduleAccessory {
     constructor(platform, accessory, duid) {
@@ -64,7 +71,20 @@ class RoborockHapScheduleAccessory {
     }
     async initialize(vacuumName) {
         this.vacuumName = vacuumName;
-        this.removeCoordinatorAccessory();
+        const displayName = `${vacuumName} Schedules`;
+        this.managerAccessory.displayName = displayName;
+        this.managerAccessory.context = {
+            kind: exports.HAP_EXTENSION_KIND,
+            extension: exports.HAP_SCHEDULE_EXTENSION,
+            duid: this.duid,
+        };
+        const info = this.managerAccessory.getService(this.platform.Service.AccessoryInformation) ||
+            this.managerAccessory.addService(this.platform.Service.AccessoryInformation);
+        info.setCharacteristic(this.platform.Characteristic.Manufacturer, "Roborock");
+        info.setCharacteristic(this.platform.Characteristic.Model, "Roborock Schedules");
+        info.setCharacteristic(this.platform.Characteristic.SerialNumber, `${this.duid}:schedules`);
+        info.setCharacteristic(this.platform.Characteristic.Name, displayName);
+        this.platform.api.updatePlatformAccessories([this.managerAccessory]);
         await this.refresh();
     }
     async refresh() {
@@ -95,55 +115,29 @@ class RoborockHapScheduleAccessory {
         const ids = new Set(schedules.map((schedule) => schedule.id));
         for (let i = 0; i < schedules.length; i++) {
             const schedule = schedules[i];
-            const displayName = `${this.vacuumName} Schedule ${i + 1} (${schedule.id})`;
+            const displayName = `${this.vacuumName} Schedule ${i + 1}`;
             const existing = this.scheduleAccessories.get(schedule.id);
             if (existing) {
                 existing.updateIdentity(displayName, schedule);
                 continue;
             }
-            const uuid = this.platform.api.hap.uuid.generate(`hap:roborock:schedule:v2:${this.duid}:${schedule.id}`);
-            const cached = this.findCachedScheduleAccessory(uuid, schedule.id);
-            const accessory = cached ||
-                new this.platform.api.platformAccessory(displayName, uuid);
-            const isNew = !cached;
-            const child = new RoborockHapScheduleSwitchAccessory(this.platform, accessory, this.duid, schedule.id);
+            const child = new RoborockHapScheduleSwitchAccessory(this.platform, this.managerAccessory, this.duid, schedule.id);
             child.initialize(displayName, schedule);
             this.scheduleAccessories.set(schedule.id, child);
-            this.platform.log.info(`Schedule sync: ${isNew ? "adding" : "restoring"} HAP accessory '${displayName}' for ${schedule.id}.`);
-            if (isNew) {
-                this.platform.api.registerPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [accessory]);
-            }
+            this.platform.log.info(`Schedule sync: ${this.scheduleAccessories.has(schedule.id) ? "restored" : "added"} HAP switch '${displayName}' for ${schedule.id}.`);
         }
         for (const [id, child] of this.scheduleAccessories) {
             if (ids.has(id))
                 continue;
-            this.platform.log.info(`Schedule sync: removing stale HAP accessory for ${id}.`);
+            this.platform.log.info(`Schedule sync: removing stale HAP switch for ${id}.`);
             child.dispose();
-            this.platform.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [child.accessory]);
-            this.removeFromPlatformCache(child.accessory);
-            this.scheduleAccessories.delete(id);
-        }
-    }
-    findCachedScheduleAccessory(uuid, scheduleId) {
-        var _a, _b;
-        const cachedAccessories = ((_a = this.platform.accessories) !== null && _a !== void 0 ? _a : []);
-        return ((_b = cachedAccessories.find((accessory) => {
-            if (accessory.UUID !== uuid || !isHapScheduleAccessory(accessory)) {
-                return false;
+            const service = this.managerAccessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(id)}`);
+            if (service) {
+                this.managerAccessory.removeService(service);
             }
-            const context = accessory.context;
-            return context.duid === this.duid && context.scheduleId === scheduleId;
-        })) !== null && _b !== void 0 ? _b : null);
-    }
-    removeCoordinatorAccessory() {
-        if (this.managerRemoved)
-            return;
-        this.managerRemoved = true;
-        // This accessory was created by the existing platform.ts coordinator path.
-        // It is the legacy "<vacuum> Schedules" tile. Remove it before publishing
-        // the real per-schedule accessories.
-        this.platform.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [this.managerAccessory]);
-        this.removeFromPlatformCache(this.managerAccessory);
+            this.scheduleAccessories.delete(id);
+            this.platform.api.updatePlatformAccessories([this.managerAccessory]);
+        }
     }
     removeFromPlatformCache(accessory) {
         var _a;
@@ -180,15 +174,6 @@ class RoborockHapScheduleSwitchAccessory {
     }
     initialize(displayName, schedule) {
         this.updateIdentity(displayName, schedule);
-        const info = this.accessory.getService(this.platform.Service.AccessoryInformation) ||
-            this.accessory.addService(this.platform.Service.AccessoryInformation);
-        info.setCharacteristic(this.platform.Characteristic.Manufacturer, "Roborock");
-        info.setCharacteristic(this.platform.Characteristic.Model, "Roborock Schedule");
-        info.setCharacteristic(this.platform.Characteristic.SerialNumber, `${this.duid}:${this.scheduleId}`);
-        // HomeKit uses AccessoryInformation.Name for the accessory/tile identity.
-        // Setting only the Switch service Name is not sufficient and can leave
-        // every restored schedule displayed as "<vacuum> Schedules".
-        info.setCharacteristic(this.platform.Characteristic.Name, displayName);
         const subtype = `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`;
         let service = this.accessory.getServiceById(this.platform.Service.Switch, subtype);
         if (!service) {
@@ -206,11 +191,6 @@ class RoborockHapScheduleSwitchAccessory {
     updateIdentity(displayName, schedule) {
         this.schedule = { ...schedule, timer: [...schedule.timer] };
         this.accessory.displayName = displayName;
-        const info = this.accessory.getService(this.platform.Service.AccessoryInformation) ||
-            this.accessory.addService(this.platform.Service.AccessoryInformation);
-        info.setCharacteristic(this.platform.Characteristic.Name, displayName);
-        // Persist the accessory identity/name for restored PlatformAccessories.
-        this.platform.api.updatePlatformAccessories([this.accessory]);
         const switchService = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
         if (switchService) {
             switchService.setCharacteristic(this.platform.Characteristic.Name, displayName);

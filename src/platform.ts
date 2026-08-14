@@ -592,10 +592,10 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
     }
 
     for (const [duid, target] of wanted) {
-      const existing = this.hapScheduleAccessories.get(duid);
+      let schedule = this.hapScheduleAccessories.get(duid);
 
-      if (existing) {
-        void existing.refresh().catch((error: unknown) => {
+      if (schedule) {
+        void schedule.initialize(target.vacuumName).catch((error: unknown) => {
           this.log.debug(
             `Unable to refresh Roborock schedules for ${target.vacuumName}: ${
               error instanceof Error ? error.message : String(error)
@@ -618,13 +618,13 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
 
       if (!accessory) {
         accessory = new this.api.platformAccessory(
-          `${target.vacuumName} Schedules`,
+          `${target.vacuumName} schedules`,
           uuid
         );
         this.accessories.push(accessory);
       }
 
-      const schedule = new RoborockHapScheduleAccessory(
+      schedule = new RoborockHapScheduleAccessory(
         this,
         accessory,
         duid
@@ -642,7 +642,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
 
       if (isNew) {
         this.log.info(
-          `Adding HAP schedule accessory '${target.vacuumName} Schedules'.`
+          `Adding HAP schedule accessory '${target.vacuumName} schedules'.`
         );
 
         this.api.registerPlatformAccessories(

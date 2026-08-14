@@ -416,9 +416,9 @@ class RoborockPlatform {
             }
         }
         for (const [duid, target] of wanted) {
-            const existing = this.hapScheduleAccessories.get(duid);
-            if (existing) {
-                void existing.refresh().catch((error) => {
+            let schedule = this.hapScheduleAccessories.get(duid);
+            if (schedule) {
+                void schedule.initialize(target.vacuumName).catch((error) => {
                     this.log.debug(`Unable to refresh Roborock schedules for ${target.vacuumName}: ${error instanceof Error ? error.message : String(error)}`);
                 });
                 continue;
@@ -427,16 +427,16 @@ class RoborockPlatform {
             let accessory = this.accessories.find((cached) => cached.UUID === uuid && (0, hap_schedule_accessory_1.isHapScheduleAccessory)(cached));
             const isNew = !accessory;
             if (!accessory) {
-                accessory = new this.api.platformAccessory(`${target.vacuumName} Schedules`, uuid);
+                accessory = new this.api.platformAccessory(`${target.vacuumName} schedules`, uuid);
                 this.accessories.push(accessory);
             }
-            const schedule = new hap_schedule_accessory_1.default(this, accessory, duid);
+            schedule = new hap_schedule_accessory_1.default(this, accessory, duid);
             this.hapScheduleAccessories.set(duid, schedule);
             void schedule.initialize(target.vacuumName).catch((error) => {
                 this.log.error(`Unable to initialize Roborock schedules for ${target.vacuumName}: ${error instanceof Error ? error.message : String(error)}`);
             });
             if (isNew) {
-                this.log.info(`Adding HAP schedule accessory '${target.vacuumName} Schedules'.`);
+                this.log.info(`Adding HAP schedule accessory '${target.vacuumName} schedules'.`);
                 this.api.registerPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [accessory]);
             }
         }
