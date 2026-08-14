@@ -132,13 +132,13 @@
       },
       "homeKitActionSwitches": {
         "title": "Which Switches to Add",
-        "description": "Which actions get a switch. Return to Dock is the one Apple Home cannot do any other way; Start Cleaning, Pause and Find cost nothing extra once the first switch exists. Start Cleaning starts exactly the clean the Home tile's play button would, including any rooms selected on that tile. Only used when the setting above is on.",
+        "description": "Which Home app switches to add. Return to Dock is the one Apple Home cannot do any other way; Start Cleaning, Pause and Find expose their corresponding commands. Schedules adds one grouped schedule accessory per Roborock vacuum, containing one switch for each schedule on that vacuum. Only used when the setting above is on.",
         "type": "array",
         "uniqueItems": true,
         "default": ["dock"],
         "items": {
           "type": "string",
-          "enum": ["clean", "dock", "pause", "locate"],
+          "enum": ["clean", "dock", "pause", "locate", "schedules"],
           "oneOf": [
             {
               "title": "Start Cleaning",
@@ -155,6 +155,10 @@
             {
               "title": "Find (robot announces where it is)",
               "enum": ["locate"]
+            },
+            {
+              "title": "Schedules",
+              "enum": ["schedules"]
             }
           ]
         }

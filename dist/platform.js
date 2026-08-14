@@ -376,14 +376,51 @@ class RoborockPlatform {
      * from a temporary Roborock/cloud failure. Never remove schedule
      * accessories merely because discovery returned no devices.
      */
+    /**
+     * Schedule groups are controlled by the same Home app switch master as the
+     * other optional HAP switches. "schedules" is intentionally not part of
+     * HomeKitActionKey because it does not represent a Roborock command.
+     */
+    shouldExposeHapSchedules() {
+        return (this.platformConfig.enableHomeKitActionSwitches === true &&
+            Array.isArray(this.platformConfig.homeKitActionSwitches) &&
+            this.platformConfig.homeKitActionSwitches.includes("schedules"));
+    }
     syncHapSchedules(devices) {
-        var _a, _b;
+        var _a, _b, _c;
+        const exposeSchedules = this.shouldExposeHapSchedules();
+        // If the user disabled the HAP switch master or unchecked Schedules,
+        // remove any schedule groups previously published by this plugin.
+        if (!exposeSchedules) {
+            const existing = this.accessories.filter((accessory) => (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory));
+            if (existing.length > 0) {
+                for (const accessory of existing) {
+                    const duid = accessory.context.duid;
+                    if (duid) {
+                        (_a = this.hapScheduleAccessories.get(duid)) === null || _a === void 0 ? void 0 : _a.dispose();
+                        this.hapScheduleAccessories.delete(duid);
+                    }
+                }
+                this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, existing);
+                for (const accessory of existing) {
+                    const index = this.accessories.indexOf(accessory);
+                    if (index >= 0) {
+                        this.accessories.splice(index, 1);
+                    }
+                }
+                this.log.info(`Home app schedule switches disabled; removed ${existing.length} schedule group${existing.length === 1 ? "" : "s"}.`);
+            }
+            return;
+        }
+        // An empty device list is treated as untrustworthy because it can result
+        // from a temporary Roborock/cloud failure. Never remove schedule groups
+        // merely because discovery returned no devices.
         if (devices.length === 0) {
             return;
         }
         const wanted = new Map();
         for (const device of devices) {
-            const duid = String((_a = device === null || device === void 0 ? void 0 : device.duid) !== null && _a !== void 0 ? _a : "");
+            const duid = String((_b = device === null || device === void 0 ? void 0 : device.duid) !== null && _b !== void 0 ? _b : "");
             if (!duid) {
                 continue;
             }
@@ -403,7 +440,7 @@ class RoborockPlatform {
             for (const accessory of obsolete) {
                 const duid = accessory.context.duid;
                 if (duid) {
-                    (_b = this.hapScheduleAccessories.get(duid)) === null || _b === void 0 ? void 0 : _b.dispose();
+                    (_c = this.hapScheduleAccessories.get(duid)) === null || _c === void 0 ? void 0 : _c.dispose();
                     this.hapScheduleAccessories.delete(duid);
                 }
             }
