@@ -48,6 +48,9 @@ const elements = {
   homeKitStateWaterTankEmpty: document.getElementById(
     "homekit-state-water-tank-empty"
   ),
+  enableHomeKitScheduleSwitches: document.getElementById(
+    "enable-homekit-schedule-switches"
+  ),
   enableMatterFaultReporting: document.getElementById(
     "enable-matter-fault-reporting"
   ),
@@ -704,6 +707,9 @@ function getFormValues() {
       elements.enableHomeKitStateSensors?.checked
     ),
     homeKitStateSensors: getSavedStateSensorSelection(),
+    enableHomeKitScheduleSwitches: Boolean(
+      elements.enableHomeKitScheduleSwitches?.checked
+    ),
     matterChargedBatteryThreshold: getMatterChargedBatteryThreshold(),
     preferCloudForMatterCommands: getPreferCloudForMatterCommands(),
     cloudOnlyMode: getCloudOnlyMode(),
