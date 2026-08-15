@@ -28,6 +28,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const matter_vacuum_accessory_1 = __importDefault(require("./matter_vacuum_accessory"));
 const action_switch_accessory_1 = __importStar(require("./action_switch_accessory"));
+const state_sensor_accessory_1 = __importStar(require("./state_sensor_accessory"));
 const hap_schedule_accessory_1 = __importStar(require("./hap_schedule_accessory"));
 const logger_1 = __importDefault(require("./logger"));
 const types_1 = require("./types");
@@ -87,10 +88,12 @@ class RoborockPlatform {
         this.matterVacuums = new Map();
         /** Optional HAP action switches, keyed `<duid>:<action>`. */
         this.actionSwitches = new Map();
+        /** Optional read-only HAP state sensors, keyed `<duid>:<sensor>`. */
+        this.stateSensors = new Map();
         /** Optional HAP schedule accessories, keyed by vacuum duid. */
         this.hapScheduleAccessories = new Map();
         this.matterUnavailableLogged = false;
-        this.actionSwitchPairingHintLogged = false;
+        this.hapPairingHintLogged = false;
         this.platformConfig = config;
         // Initialise logging utility
         this.log = new logger_1.default(homebridgeLogger, this.platformConfig.debugMode);
@@ -140,6 +143,9 @@ class RoborockPlatform {
             }
             for (const actionSwitch of this.actionSwitches.values()) {
                 actionSwitch.dispose();
+            }
+            for (const stateSensor of this.stateSensors.values()) {
+                stateSensor.dispose();
             }
             for (const schedule of this.hapScheduleAccessories.values()) {
                 schedule.dispose();
@@ -356,8 +362,13 @@ class RoborockPlatform {
             // (the legacy fan + helper switches) so robots appear exactly once —
             // as Matter vacuums — in Apple Home.
             this.removeLegacyHomeKitAccessories();
-            this.syncHapSchedules(Array.isArray(devices) ? devices : []);
-            this.syncActionSwitches(Array.isArray(devices) ? devices : []);
+            const knownDevices = Array.isArray(devices) ? devices : [];
+            this.syncHapSchedules(knownDevices);
+            this.syncActionSwitches(knownDevices);
+            this.syncStateSensors(knownDevices);
+            // After both syncs, so the count is the total a user has to find in
+            // Apple Home rather than one kind's share of it.
+            this.logHapPairingHint();
             await this.unregisterStaleMatterAccessories();
         }
         catch (error) {
@@ -527,10 +538,15 @@ class RoborockPlatform {
      * and the log line would have gone on calling it a legacy accessory while it
      * did so. The partition is by the context marker, not by name, because a
      * name is user-editable in the Home app and the marker is not.
+     *
+     * It asks isOwnHapAccessory rather than naming one kind: the sweep predates
+     * every accessory this plugin registers and will predate the next one too, so
+     * "is it one of ours" is the question that stays right. Adding the state
+     * sensors against a check for action switches specifically would have
+     * reproduced the original bug exactly one release later.
      */
     removeLegacyHomeKitAccessories() {
-        const legacy = this.accessories.filter((accessory) => !(0, action_switch_accessory_1.isActionSwitchAccessory)(accessory) &&
-            !(0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory));
+        const legacy = this.accessories.filter((accessory) => !this.isOwnHapAccessory(accessory));
         if (legacy.length === 0) {
             return;
         }
@@ -542,6 +558,21 @@ class RoborockPlatform {
                 this.accessories.splice(index, 1);
             }
         }
+    }
+    /**
+     * Whether a cached HAP accessory is one this plugin registered.
+     *
+     * The single answer to that question, so every sweep and every sync asks it
+     * the same way. Each kind's own sync then narrows to its own kind — a state
+     * sensor must survive the action-switch sync and the other way round, and
+     * before this existed the switch sync would have unregistered every sensor on
+     * sight, because a sensor has no `action` in its context and therefore looked
+     * like a switch for an action nobody had enabled.
+     */
+    isOwnHapAccessory(accessory) {
+        return ((0, action_switch_accessory_1.isActionSwitchAccessory)(accessory) ||
+            (0, state_sensor_accessory_1.isStateSensorAccessory)(accessory) ||
+            (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory));
     }
     /**
      * Which action switches the user has asked for.
@@ -568,9 +599,12 @@ class RoborockPlatform {
     syncActionSwitches(devices) {
         var _a;
         const enabled = this.getEnabledActionSwitchKeys();
+        // Only this kind. The shared this.accessories list also carries the state
+        // sensors, and every rule below is about actions.
+        const mine = this.accessories.filter((accessory) => (0, action_switch_accessory_1.isActionSwitchAccessory)(accessory));
         // The disabled path costs one config read and one length check. Nothing
         // below runs, no accessory is built, and nothing is scheduled.
-        if (enabled.length === 0 && this.accessories.length === 0) {
+        if (enabled.length === 0 && mine.length === 0) {
             return;
         }
         const wanted = new Map();
@@ -599,10 +633,7 @@ class RoborockPlatform {
         // disabled setting no longer asks for is safe either way, because that
         // decision comes from the config and not from the cloud.
         const accountIsTrustworthy = devices.length > 0;
-        const obsolete = this.accessories.filter((accessory) => {
-            if (!(0, action_switch_accessory_1.isActionSwitchAccessory)(accessory)) {
-                return false;
-            }
+        const obsolete = mine.filter((accessory) => {
             const context = accessory.context;
             const key = `${context === null || context === void 0 ? void 0 : context.duid}:${context === null || context === void 0 ? void 0 : context.action}`;
             if (wanted.has(key)) {
@@ -615,9 +646,6 @@ class RoborockPlatform {
         if (obsolete.length > 0) {
             this.removeActionSwitches(obsolete);
         }
-        if (wanted.size > 0) {
-            this.logActionSwitchPairingHint(wanted.size);
-        }
         for (const [key, target] of wanted) {
             const existing = this.actionSwitches.get(key);
             if (existing) {
@@ -627,6 +655,160 @@ class RoborockPlatform {
                 continue;
             }
             this.addActionSwitch(key, target.duid, target.action, target.vacuumName);
+        }
+    }
+    /**
+     * Which read-only state sensors the user has asked for.
+     *
+     * Same opt-in shape as the switches, and off unless explicitly on for the
+     * same reason: this adds accessories to somebody's Home app. With the master
+     * on and no list saved, "docked" is the default — that is the one pponce
+     * ranked first in issue #3 when asked which state he would trigger on, and
+     * the one he said he would use on its own.
+     */
+    getEnabledStateSensorKeys() {
+        if (this.platformConfig.enableHomeKitStateSensors !== true) {
+            return [];
+        }
+        const configured = this.platformConfig.homeKitStateSensors;
+        if (!Array.isArray(configured)) {
+            return ["docked"];
+        }
+        return [...new Set(configured.filter(types_1.isHomeKitStateSensorKey))];
+    }
+    /**
+     * Bring the registered state sensors in line with the config and the account.
+     *
+     * A near-copy of syncActionSwitches, and deliberately not shared with it. The
+     * two differ in the parts that matter — no capability gate here, because
+     * every robot has a dock and a run mode, whereas `locate` is optional — and
+     * folding them into one generic sweep would put a partition rule on the same
+     * accessory list that both kinds depend on for their own survival. That
+     * partition is exactly what removeLegacyHomeKitAccessories got wrong once
+     * already, and the duplication is cheaper than getting it wrong for a third
+     * accessory kind.
+     */
+    syncStateSensors(devices) {
+        var _a;
+        const enabled = this.getEnabledStateSensorKeys();
+        const mine = this.accessories.filter((accessory) => (0, state_sensor_accessory_1.isStateSensorAccessory)(accessory));
+        if (enabled.length === 0 && mine.length === 0) {
+            return;
+        }
+        const wanted = new Map();
+        for (const device of devices) {
+            const duid = String((_a = device === null || device === void 0 ? void 0 : device.duid) !== null && _a !== void 0 ? _a : "");
+            if (!duid) {
+                continue;
+            }
+            const vacuumName = this.getVacuumDisplayName(duid, device);
+            for (const sensor of enabled) {
+                if (!(0, state_sensor_accessory_1.getStateSensorDefinition)(sensor)) {
+                    continue;
+                }
+                wanted.set(`${duid}:${sensor}`, { duid, sensor, vacuumName });
+            }
+        }
+        // Same trap as the switches: an empty device list is far more often a
+        // temporary cloud failure than an emptied account, so a sensor is only
+        // removed on the cloud's word when the cloud said something.
+        const accountIsTrustworthy = devices.length > 0;
+        const obsolete = mine.filter((accessory) => {
+            const context = accessory.context;
+            const key = `${context === null || context === void 0 ? void 0 : context.duid}:${context === null || context === void 0 ? void 0 : context.sensor}`;
+            if (wanted.has(key)) {
+                return false;
+            }
+            const stillEnabled = typeof (context === null || context === void 0 ? void 0 : context.sensor) === "string" &&
+                enabled.includes(context.sensor);
+            return !stillEnabled || accountIsTrustworthy;
+        });
+        if (obsolete.length > 0) {
+            this.removeStateSensors(obsolete);
+        }
+        for (const [key, target] of wanted) {
+            const existing = this.stateSensors.get(key);
+            if (existing) {
+                existing.updateIdentity(target.vacuumName);
+                continue;
+            }
+            this.addStateSensor(key, target.duid, target.sensor, target.vacuumName);
+        }
+        // A sensor registered from cache has no reading yet and answers from the
+        // value it persisted. Ask the robot once here so a robot that was already
+        // polled before discovery finished does not wait for the next poll.
+        for (const duid of new Set([...wanted.values()].map((target) => target.duid))) {
+            this.refreshStateSensorsForRobot(duid);
+        }
+    }
+    /**
+     * Push the robot's current state into its sensors.
+     *
+     * Called from the vacuum's publish path rather than on a timer of its own: a
+     * second poller would be a second source of truth for the same values, and
+     * the publish path is the one place every Roborock-driven change already
+     * passes through. Cheap enough to call unconditionally — refresh() returns
+     * immediately when the value has not moved, which is the common case.
+     */
+    refreshStateSensorsForRobot(duid) {
+        if (this.stateSensors.size === 0) {
+            return;
+        }
+        const vacuum = this.matterVacuums.get(duid);
+        if (!vacuum) {
+            return;
+        }
+        for (const [key, sensor] of this.stateSensors) {
+            if (!key.startsWith(`${duid}:`)) {
+                continue;
+            }
+            sensor.refresh(vacuum.getHomeKitStateSensorValue(sensor.sensor));
+        }
+    }
+    removeStateSensors(accessories) {
+        var _a;
+        for (const accessory of accessories) {
+            const context = accessory.context;
+            this.log.info(`Removing the '${accessory.displayName}' sensor; it is no longer enabled or its robot is gone.`);
+            const key = `${context === null || context === void 0 ? void 0 : context.duid}:${context === null || context === void 0 ? void 0 : context.sensor}`;
+            (_a = this.stateSensors.get(key)) === null || _a === void 0 ? void 0 : _a.dispose();
+            this.stateSensors.delete(key);
+            const index = this.accessories.indexOf(accessory);
+            if (index >= 0) {
+                this.accessories.splice(index, 1);
+            }
+        }
+        this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, accessories);
+    }
+    addStateSensor(key, duid, sensor, vacuumName) {
+        var _a;
+        const definition = (0, state_sensor_accessory_1.getStateSensorDefinition)(sensor);
+        if (!definition) {
+            return;
+        }
+        const name = `${vacuumName} ${definition.nameSuffix}`;
+        const uuid = this.api.hap.uuid.generate((0, state_sensor_accessory_1.stateSensorUuidSeed)(duid, sensor));
+        const context = {
+            duid,
+            kind: state_sensor_accessory_1.STATE_SENSOR_KIND,
+            sensor,
+        };
+        let accessory = this.accessories.find((cached) => cached.UUID === uuid);
+        const isNew = !accessory;
+        if (!accessory) {
+            accessory = new this.api.platformAccessory(name, uuid);
+            this.accessories.push(accessory);
+        }
+        accessory.displayName = name;
+        // Merge rather than replace: a cached sensor carries the last value it
+        // reported, and dropping that would make the sensor move on the first poll
+        // after every restart — the thing an automation triggers on.
+        accessory.context = { ...((_a = accessory.context) !== null && _a !== void 0 ? _a : {}), ...context };
+        const stateSensor = new state_sensor_accessory_1.default(this, accessory, definition, duid);
+        this.stateSensors.set(key, stateSensor);
+        if (isNew) {
+            this.log.info(`Adding the '${name}' sensor — it ${definition.summary}.`);
+            this.api.registerPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [accessory]);
         }
     }
     /**
@@ -668,24 +850,42 @@ class RoborockPlatform {
         }
     }
     /**
-     * Say, once per start, which QR code makes these switches appear.
+     * Say, once per start, which QR code makes this plugin's HAP accessories
+     * appear.
      *
      * This is the single most likely way the feature disappoints somebody, and
-     * it disappoints them silently: the switches register, the log says they
+     * it disappoints them silently: the accessories register, the log says they
      * were added, Homebridge is happy — and Apple Home never shows them, because
-     * the accessories go out over HAP while this plugin's users have only ever
-     * paired the robot over Matter. A Matter-only setup can also carry
+     * they go out over HAP while this plugin's users have only ever paired the
+     * robot over Matter. A Matter-only setup can also carry
      * `hap: { enabled: false }` on the plugin's child bridge, which was
      * reasonable while this plugin published nothing over HAP; in that state no
      * QR code anywhere helps until HAP is switched back on.
+     *
+     * It counts both kinds and is called once after both syncs, because the
+     * problem it warns about is a property of the bridge, not of the accessory:
+     * a user with the sensors on and the switches off is in exactly the same
+     * situation, and a hint tied to one feature would have left them without it.
      */
-    logActionSwitchPairingHint(count) {
+    logHapPairingHint() {
         var _a;
-        if (this.actionSwitchPairingHintLogged) {
+        const parts = [];
+        if (this.actionSwitches.size > 0) {
+            parts.push(`${this.actionSwitches.size} switch${this.actionSwitches.size === 1 ? "" : "es"}`);
+        }
+        if (this.stateSensors.size > 0) {
+            parts.push(`${this.stateSensors.size} sensor${this.stateSensors.size === 1 ? "" : "s"}`);
+        }
+        // A user who never turned either feature on must not be told how to pair
+        // accessories that do not exist.
+        if (parts.length === 0) {
             return;
         }
-        this.actionSwitchPairingHintLogged = true;
-        const switches = `${count} Home app switch${count === 1 ? "" : "es"}`;
+        if (this.hapPairingHintLogged) {
+            return;
+        }
+        this.hapPairingHintLogged = true;
+        const published = `${parts.join(" and ")} for the robots`;
         const where = "Homebridge UI -> Plugins -> homebridge-roborock-matter -> Child Bridge Config";
         const notThese = "not the main Homebridge QR code, and not the robot's Matter pairing code, which covers the vacuum only";
         const bridge = this.readOwnBridgeConfig();
@@ -693,15 +893,15 @@ class RoborockPlatform {
             // Either the plugin runs on the main bridge, or the config could not be
             // read. Both get the same line, because the alternative is asserting one
             // of them and being wrong half the time.
-            this.log.info(`${switches} published over HomeKit, which is a different pairing from the robot's Matter one. If they do not show up in Apple Home, the bridge carrying them is not paired yet: on a child bridge that is ${where} -> Connect to HomeKit, and otherwise it is the QR code on the Homebridge UI status page. Either way it is ${notThese}.`);
+            this.log.info(`${published} published over HomeKit, which is a different pairing from the robot's Matter one. If they do not show up in Apple Home, the bridge carrying them is not paired yet: on a child bridge that is ${where} -> Connect to HomeKit, and otherwise it is the QR code on the Homebridge UI status page. Either way it is ${notThese}.`);
             return;
         }
         const bridgeName = bridge.name || "this plugin's child bridge";
         if (((_a = bridge.hap) === null || _a === void 0 ? void 0 : _a.enabled) === false) {
-            this.log.warn(`${switches} published, but HAP is turned OFF for '${bridgeName}', so Apple Home cannot see them at all and no QR code will help until that changes. ${where} -> Enable HAP, then restart Homebridge. After the restart, pair the bridge from that same screen with Connect to HomeKit and scan THAT QR code — ${notThese}.`);
+            this.log.warn(`${published} published, but HAP is turned OFF for '${bridgeName}', so Apple Home cannot see them at all and no QR code will help until that changes. ${where} -> Enable HAP, then restart Homebridge. After the restart, pair the bridge from that same screen with Connect to HomeKit and scan THAT QR code — ${notThese}.`);
             return;
         }
-        this.log.info(`${switches} published on '${bridgeName}'. A child bridge is paired with Apple Home separately from the rest of Homebridge, so if the switches do not show up: ${where} -> Connect to HomeKit, and scan THAT QR code — ${notThese}.`);
+        this.log.info(`${published} published on '${bridgeName}'. A child bridge is paired with Apple Home separately from the rest of Homebridge, so if they do not show up: ${where} -> Connect to HomeKit, and scan THAT QR code — ${notThese}.`);
     }
     removeActionSwitches(accessories) {
         var _a;
@@ -794,6 +994,7 @@ class RoborockPlatform {
         const vacuum = this.createOrUpdateMatterVacuum(device, accessory, Boolean(existingAccessory));
         if (existingAccessory) {
             await matter.updatePlatformAccessories([accessory]);
+            await this.deliverKnownLiveStatus(String(device.duid), vacuum);
             vacuum.scheduleMatterStateRefresh("cached accessory update", 1000);
             return;
         }
@@ -803,7 +1004,58 @@ class RoborockPlatform {
         ]);
         this.matterAccessories.push(accessory);
         vacuum.markRegistered();
+        await this.deliverKnownLiveStatus(String(device.duid), vacuum);
         vacuum.scheduleMatterStateRefresh("accessory registration", 1000);
+    }
+    /**
+     * Hand an accessory that has just become usable the robot's real status, if
+     * one is already known.
+     *
+     * The robot's status can be known a full poll gap before anything is able to
+     * display it. Discovery runs in the startService callback, so a status that
+     * arrives first is dropped by whichever gate it reaches — no accessory for
+     * the duid yet, or an accessory whose `registered` is still false — and
+     * nothing redelivers it. The tile then fell back on the HomeData snapshot and
+     * stated a status the robot was not in until the next poll tick corrected it:
+     * measured at 28 seconds after every restart, on both Q7s on the
+     * maintainer's own account, publishing operationalState=0 runMode=0
+     * cleanMode=0 for a robot that had already reported itself charging in its
+     * dock one second earlier.
+     *
+     * Replayed on the live-message channel instead of being published from here,
+     * so this frame is interpreted by the same code that interprets every other
+     * frame. There is no second opinion about the same bytes to keep in step.
+     *
+     * Called AFTER markRegistered() for exactly the reason the bug exists: a seed
+     * delivered while `registered` is false is dropped without a trace, and the
+     * resulting test looks green because nothing happens.
+     *
+     * Both discovery paths get it, not just the one that was measured. A cached
+     * accessory is re-attached after the same callback and has the same hole,
+     * differing only in that the guard which drops the frame is the missing map
+     * entry rather than the registration flag.
+     */
+    async deliverKnownLiveStatus(duid, vacuum) {
+        const api = this.roborockAPI;
+        if (typeof api.getLastKnownLiveStatus !== "function") {
+            return;
+        }
+        const status = api.getLastKnownLiveStatus(duid);
+        if (!status) {
+            return;
+        }
+        try {
+            await vacuum.notifyDeviceUpdater("CloudMessage", {
+                duid,
+                payload: [status],
+            });
+        }
+        catch (error) {
+            // A seed is an optimisation over waiting for the next tick, never a
+            // precondition for discovery: a robot that fails to take it must still
+            // finish being discovered.
+            this.log.debug(`Unable to seed ${this.roborockAPI.describeDevice(duid)} from its last known status: ${error instanceof Error ? error.message : String(error)}`);
+        }
     }
     createMatterAccessory(device, deviceType) {
         const duid = String(device.duid);
@@ -847,6 +1099,10 @@ class RoborockPlatform {
         }
         const vacuum = new matter_vacuum_accessory_1.default(this, accessory, device, isRegistered);
         this.matterVacuums.set(duid, vacuum);
+        // Attached once, for the vacuum's whole life: this is the only place a
+        // vacuum is constructed and they are never replaced. Costs nothing when no
+        // state sensors are configured, because the refresh returns immediately.
+        vacuum.setStateListener(() => this.refreshStateSensorsForRobot(duid));
         return vacuum;
     }
     async unregisterStaleMatterAccessories() {

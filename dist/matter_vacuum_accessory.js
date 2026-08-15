@@ -127,6 +127,20 @@ const RVC_OPERATIONAL_STATE = {
     CLEANING_MOP: 68,
     UPDATING_MAPS: 70,
 };
+/**
+ * The dock's own code for "the clean-water tank is empty".
+ *
+ * Field-measured rather than inferred. Wazza151 emptied and refilled the tank
+ * on an S8 Pro Ultra (issue #5) and `dock_error_status` tracked it exactly;
+ * vp-debug12's Q Revo carried the same 38 while confirming in issue #9 that
+ * the tank was empty. Both are named here because the two robots disagree on
+ * everything else about this condition — see isWaterTankEmpty().
+ *
+ * Only 38 is claimed. `dock_error_status` carries the dock's whole family of
+ * housekeeping faults (full waste-water tank, missing dust bag, blocked duct),
+ * and "non-zero" would report a full waste-water tank as an empty clean one.
+ */
+const DOCK_ERROR_CLEAN_WATER_TANK_EMPTY = 38;
 const RVC_OPERATIONAL_STATE_LIST = [
     RVC_OPERATIONAL_STATE.STOPPED,
     RVC_OPERATIONAL_STATE.RUNNING,
@@ -151,6 +165,24 @@ const DOCK_ACTIVITY_STATES = new Set([
     RVC_OPERATIONAL_STATE.EMPTYING_DUST_BIN,
     RVC_OPERATIONAL_STATE.CLEANING_MOP,
     RVC_OPERATIONAL_STATE.UPDATING_MAPS,
+]);
+// The states that must not DECIDE a run mode, only inherit the one already
+// published: the dock chores plus every kind of transit (returning to dock,
+// docking, going to wash the mop, all of which derive to SEEKING_CHARGER).
+//
+// Driving somewhere is never the start of a cleaning, and it is not the end of
+// one either — a run ends when the robot docks. Inheriting delivers both: a
+// robot that was cleaning keeps saying Cleaning until it is home, and a robot
+// that never left its dock stays Idle through the one-second transit blip the
+// dock leaves behind after emptying the dust bin (issue #9, second report).
+//
+// This happens to hold the same members as EXTENDED_OPERATIONAL_STATES today.
+// That is a coincidence of Roborock's state table, not a shared meaning — one
+// says what a toggle may display, the other says what may claim a cleaning —
+// so do not merge them.
+const RUN_MODE_INHERITED_STATES = new Set([
+    ...DOCK_ACTIVITY_STATES,
+    RVC_OPERATIONAL_STATE.SEEKING_CHARGER,
 ]);
 // The states that the "Extended Operational States" toggle unlocks. Publishing
 // any of these requires them to be advertised, which is why this set and
@@ -280,6 +312,13 @@ class RoborockMatterVacuumAccessory {
         // resolveRunMode(). Idle is the honest starting point: a plugin that boots
         // while the dock is emptying knows of no run in progress.
         this.lastRunMode = RUN_MODE_IDLE;
+        // The run mode as it went out to Matter, optimistic overlay included. The
+        // read-only "Cleaning" state sensor answers from this so it and the Apple
+        // Home tile always say the same thing. Null until the first publish.
+        this.lastPublishedRunMode = null;
+        // Notified after every publish, by whoever wants to mirror this robot's state
+        // somewhere else. Null means nobody asked, which is the common case.
+        this.stateListener = null;
         // The suction-level clean mode last derived from a fan power the plugin
         // could actually read. Used only as the answer to "the fan power is
         // unreadable right now" while suction levels are announced; cleared by an
@@ -367,6 +406,104 @@ class RoborockMatterVacuumAccessory {
             return typeof this.api.find_me === "function";
         }
         return true;
+    }
+    /**
+     * The value a read-only HAP state sensor should show, or null for "not yet".
+     *
+     * Both arms read the ROBOT'S OWN state, never the controller-facing one that
+     * toControllerOperationalState() produces. That is not a stylistic choice: it
+     * is the fault form this file has now been bitten by seven times. CHARGING
+     * and DOCKED are rewritten to STOPPED unless the user enabled the
+     * charging/docked toggle, and the dock chores are rewritten to RUNNING unless
+     * they enabled the extended-states one — so a docked sensor built on the
+     * published operational state would have worked only for the users who had
+     * ticked an unrelated box, and reported "not docked" for everybody else.
+     *
+     * `cleaning` mirrors the run mode that was last PUBLISHED rather than
+     * recomputing one, for three reasons. It is the value Apple Home was actually
+     * told, so the sensor and the tile cannot disagree — including during the
+     * optimistic window after a command, where the tile moves before the robot
+     * confirms and a sensor computed from raw status would lag it by a poll. It
+     * carries 3.6.2's rule that a dock chore inherits the run mode it interrupted,
+     * so emptying the dust bin does not make the sensor announce a cleaning that
+     * is not happening — the exact bug issue #9 reported against the tile, which
+     * would otherwise have been reintroduced one surface over. And resolveRunMode()
+     * is deliberately NOT called here: it assigns lastRunMode, and a getter a HAP
+     * read can reach must not advance the state machine that decides what gets
+     * published.
+     */
+    /** Ask to be told after every publish. Null clears it. */
+    setStateListener(listener) {
+        this.stateListener = listener;
+    }
+    getHomeKitStateSensorValue(sensor) {
+        var _a;
+        if (!this.hasUsableRobotState()) {
+            return null;
+        }
+        switch (sensor) {
+            case "docked":
+                return this.isDockedOrChargingNow();
+            case "cleaning":
+                return (((_a = this.lastPublishedRunMode) !== null && _a !== void 0 ? _a : this.lastRunMode) === RUN_MODE_CLEANING);
+            case "waterTankEmpty":
+                return this.isWaterTankEmpty();
+            default:
+                return null;
+        }
+    }
+    /**
+     * Whether the robot says it has no water, or null if it has not said.
+     *
+     * Two robots have now been measured with a physically empty clean-water tank
+     * and they do NOT agree on how they say so:
+     *
+     *   a70  (S8 Pro Ultra, issue #5)  dock_error_status 38, water_shortage_status 0
+     *   a75  (Q Revo,       issue #9)  dock_error_status 38, water_shortage_status 1
+     *
+     * So neither field alone covers both, and the a70's zero is the reason this
+     * is an OR rather than a preference order: reading `water_shortage_status`
+     * first and trusting its 0 would report a full tank on the very robot the
+     * condition was field-measured on. Robots that carry their water onboard and
+     * have no dock tank at all are the mirror case — nothing sets
+     * `dock_error_status` for them, and the shortage flag is all there is.
+     *
+     * Null when neither field is present. That is not the same as "not empty":
+     * an absent field is the robot declining to answer, and a sensor that
+     * answered "full" on its behalf would be inventing the one reading a user
+     * would act on. Null leaves the sensor at rest instead, and rest is Open.
+     */
+    isWaterTankEmpty() {
+        const dockError = this.getNumberStatus("dock_error_status");
+        const shortage = this.getNumberStatus("water_shortage_status");
+        if (dockError === null && shortage === null) {
+            return null;
+        }
+        return (dockError === DOCK_ERROR_CLEAN_WATER_TANK_EMPTY ||
+            (shortage !== null && shortage !== 0));
+    }
+    /**
+     * Whether the robot has reported enough for a sensor to claim anything.
+     *
+     * State 0 is not a Roborock state — the enum starts at 1 and the mapping
+     * switch has no arm for it, so it falls to the default branch and comes out
+     * as STOPPED. That is indistinguishable from a robot that is genuinely idle
+     * off its dock, which is why this is checked here rather than left to the
+     * mapping: a Q7 on this account has been measured reporting state 0 for 27
+     * seconds after every restart, and a sensor that believed it would report
+     * "not docked" for a robot sitting in its dock, then flip — firing every
+     * automation triggered on the robot leaving, on every Homebridge restart.
+     *
+     * A non-zero charge_status is a complete answer on its own: the robot is on
+     * the dock drawing power whatever it says its state is.
+     */
+    hasUsableRobotState() {
+        const chargeStatus = this.getNumberStatus("charge_status");
+        if (chargeStatus !== null && chargeStatus !== 0) {
+            return true;
+        }
+        const state = this.getNumberStatus("state");
+        return state !== null && state !== 0;
     }
     /**
      * Perform an action requested by one of the optional HAP switches.
@@ -509,7 +646,7 @@ class RoborockMatterVacuumAccessory {
         const cleanMode = clusters.rvcCleanMode;
         // No fault field here on purpose. 3.4.0 published RVC OperationalError and
         // 3.4.1 withdrew it after three controlled field tests showed Apple Home
-        // draws no Matter vacuum fault from a bridged accessory at all. The line
+        // drew no Matter vacuum fault at all. The line
         // kept rendering `fault=…` from an attribute that is now never published,
         // so the branch was permanently dead — and worse, it read as evidence that
         // the feature still existed. If faults ever come back, this line gets the
@@ -742,6 +879,7 @@ class RoborockMatterVacuumAccessory {
         });
     }
     async returnToDock(surface = exports.MATTER_SURFACE) {
+        var _a;
         // Always forward an explicit Matter dock to the robot. As with pause, the
         // cached snapshot can lag or be overridden by a stale HomeData refresh while
         // the robot is really cleaning (issues #4 and #12); docking an already-docked
@@ -757,9 +895,12 @@ class RoborockMatterVacuumAccessory {
             : RVC_OPERATIONAL_STATE.STOPPED;
         const state = {
             rvcRunMode: {
-                currentMode: this.isInCleaningRunMode(returnOperationalState)
-                    ? RUN_MODE_CLEANING
-                    : RUN_MODE_IDLE,
+                // Docking inherits the run mode instead of deciding one, the same rule
+                // the live status follows. Deciding here published Cleaning for a dock
+                // command sent to an idle robot — and only for users with Extended
+                // Operational States on, because the decision read the displayed state
+                // — which the next live frame then silently withdrew.
+                currentMode: (_a = this.lastPublishedRunMode) !== null && _a !== void 0 ? _a : this.lastRunMode,
             },
             rvcOperationalState: {
                 operationalState: returnOperationalState,
@@ -900,6 +1041,14 @@ class RoborockMatterVacuumAccessory {
         // The full snapshot as built, kept across the diff below so the evidence
         // line always reports every value — not just the clusters that changed.
         const snapshot = clusters;
+        // Before the diff below, and before the early return it can take: this is
+        // the one place every Roborock-driven state change passes through, so it is
+        // the only hook that cannot miss one. The unchanged-payload path matters
+        // just as much as the changed one — a listener's first reading after a
+        // restart usually arrives on a poll whose clusters are byte-identical to
+        // what the previous process already published.
+        this.rememberPublishedRunMode(snapshot);
+        this.notifyStateListener();
         if (options.force !== true) {
             const changed = {};
             for (const [cluster, attributes] of Object.entries(clusters)) {
@@ -938,6 +1087,37 @@ class RoborockMatterVacuumAccessory {
             this.platform.log.debug(`Battery resync for ${this.getVacuumName()}: republished the battery attributes to bump their Matter data version (battery=${power.batPercentRemaining / 2}%).`);
         }
         return updated;
+    }
+    /**
+     * Tell whoever asked that this robot's published state may have moved.
+     *
+     * A listener rather than a call into the platform's sensor map, so this class
+     * stays unaware that read-only HAP sensors exist at all. The first draft did
+     * reach into the platform, and the cost showed up immediately: seventeen test
+     * suites build their own platform stand-in, and every one of them would have
+     * had to grow a method about a feature it was not testing — with the next
+     * stand-in forgetting it again. Nothing else in this file needs the platform
+     * to own that knowledge, so it does not.
+     */
+    notifyStateListener() {
+        if (!this.stateListener) {
+            return;
+        }
+        try {
+            this.stateListener();
+        }
+        catch (error) {
+            // A listener that throws must not take the Matter publish down with it.
+            this.platform.log.debug(`State listener for ${this.getVacuumName()} failed: ${this.getErrorMessage(error)}`);
+        }
+    }
+    /** Keep the run mode the state sensors answer from in step with Matter's. */
+    rememberPublishedRunMode(snapshot) {
+        const runMode = snapshot.rvcRunMode;
+        const currentMode = runMode === null || runMode === void 0 ? void 0 : runMode.currentMode;
+        if (typeof currentMode === "number") {
+            this.lastPublishedRunMode = currentMode;
+        }
     }
     async updateMatterStateFromMessage(data) {
         if (!this.registered) {
@@ -1105,16 +1285,24 @@ class RoborockMatterVacuumAccessory {
      * announce that the run finished and started again.
      *
      * So a dock chore inherits the run mode that was published before it began,
-     * instead of deciding one of its own.
+     * instead of deciding one of its own. Transit does the same, and for the same
+     * reason: after the dock empties the bin the robot reports "returning to
+     * dock" for about a second before it charges again, and publishing Cleaning
+     * for that blip announced a second cleaning that started and finished from a
+     * robot that never moved (issue #9, the reporter's follow-up). Driving home
+     * is how a real run ENDS, never how one begins.
      *
-     * The chore is recognised from the robot's own state, not from the
+     * Both are recognised from the robot's own state, not from the
      * controller-facing one: with "Extended Operational States" off, emptying
-     * the dust bin is rewritten to RUNNING one level below, and reading that
-     * would leave the rule working only for the users who enabled the toggle.
+     * the dust bin is rewritten to RUNNING one level below and seeking the
+     * charger to STOPPED, so reading that would leave the rule working only for
+     * the users who enabled the toggle — which is exactly how the transit blip
+     * survived 3.6.2 and reached the field. The toggle decides how a state is
+     * displayed; it never decides whether a cleaning happened.
      */
     resolveRunMode() {
         const roborockOperationalState = this.getRoborockOperationalState(this.getNumberStatus("state"), this.getNumberStatus("charge_status"));
-        if (DOCK_ACTIVITY_STATES.has(roborockOperationalState)) {
+        if (RUN_MODE_INHERITED_STATES.has(roborockOperationalState)) {
             return this.lastRunMode;
         }
         this.lastRunMode = this.isInCleaningRunMode(this.getOperationalState())
@@ -1535,10 +1723,15 @@ class RoborockMatterVacuumAccessory {
         // tank settled it. Apple Home drew no warning when the fault was sent
         // beside a Charging state, and drew no warning when the fault was sent
         // beside a forced Error state either — while the tile went to a stuck
-        // "Updating…" that needed a manual poke. Apple does not appear to render
-        // RVC OperationalError from a bridged accessory at all, so publishing it
-        // is pure risk for a benefit that has never once materialised. That is
-        // also why 1.4.61 removed the plugin's original write.
+        // "Updating…" that needed a manual poke. Apple rendered no RVC
+        // OperationalError in any of those tests, so publishing it is pure risk
+        // for a benefit that has never once materialised. That is also why
+        // 1.4.61 removed the plugin's original write. Do NOT explain this by
+        // "bridged accessory": every robot here gets its own Matter node, which
+        // is why each is scanned separately, so a bridge is never involved. #9
+        // has the same attribute rendering correctly elsewhere; the condition
+        // that separates the two cases is still unknown, and guessing at it has
+        // cost this plugin two round trips already.
         //
         // The Error operational STATE is a different matter and is still
         // reported below: Apple renders operational states perfectly well (the
@@ -2490,8 +2683,44 @@ class RoborockMatterVacuumAccessory {
             (actual === RVC_OPERATIONAL_STATE.CHARGING ||
                 actual === RVC_OPERATIONAL_STATE.DOCKED));
     }
+    /**
+     * Whether the robot is in its dock.
+     *
+     * charge_status is a TIEBREAKER for a state that does not answer the
+     * question, never an override of one that does. It used to be an independent
+     * sufficient condition (`|| !!chargeStatus`), which contradicted the rule
+     * this file already applies one function below: getRoborockOperationalState()
+     * consults charge_status only in its `default:` arm — a robot reporting
+     * state 5 is RUNNING no matter what charge_status says.
+     *
+     * The two fields are not read at the same instant. A sparse live frame
+     * carrying only dps 121 moves `state` while `charge_status` keeps whatever it
+     * held before the robot left its dock, and getNumberStatus() falls back to
+     * the slower HomeData snapshot for any field the live frame omits. So the
+     * pair "state = Room Clean, charge_status = 1" is not a contradiction in the
+     * robot; it is one fresh field beside one stale one, and letting the stale
+     * one win made the plugin call a robot mid-run docked.
+     *
+     * Measured in issue #8 on a Saros 10, twice out of two attempts on different
+     * versions: the plugin published operationalState=1 for eight minutes with a
+     * falling battery and live room tracking moving between rooms, and still
+     * logged "despite a docked snapshot" when the run was ended from Apple Home.
+     * The log line was the visible half. The costly half was shouldRetryReturnToDock(),
+     * which asks this first and gave up before it reached
+     * isRoborockActivelyCleaningAwayFromDock() — so the dock-retry never armed for
+     * exactly the robots whose charge_status lags.
+     *
+     * Reuses that predicate rather than listing the states again: a second
+     * hand-written copy of a list is the most repeated defect in this codebase.
+     */
     isRoborockDockedOrCharging(roborockState, chargeStatus) {
-        return roborockState === 8 || roborockState === 100 || !!chargeStatus;
+        if (roborockState === 8 || roborockState === 100) {
+            return true;
+        }
+        if (this.isRoborockActivelyCleaningAwayFromDock(roborockState)) {
+            return false;
+        }
+        return !!chargeStatus;
     }
     isDockedOrChargingNow() {
         return this.isRoborockDockedOrCharging(this.getNumberStatus("state"), this.getNumberStatus("charge_status"));
