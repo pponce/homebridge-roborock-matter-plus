@@ -544,10 +544,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
    * HomeKitActionKey because it does not represent a Roborock command.
    */
   private shouldExposeHapSchedules(): boolean {
-    return (
-      this.platformConfig.enableHomeKitActionSwitches === true &&
-      this.platformConfig.enableHomeKitScheduleSwitches === true
-    );
+    return this.platformConfig.enableHomeKitScheduleSwitches === true;
   }
 
   private syncHapSchedules(devices: any[]): void {

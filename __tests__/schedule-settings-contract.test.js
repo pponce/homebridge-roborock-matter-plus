@@ -79,9 +79,9 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
-  test("runtime schedule exposure requires both the master and schedule setting", () => {
+  test("runtime schedule exposure is controlled independently by the schedule setting", () => {
     expect(platformSource).toMatch(
-      /private shouldExposeHapSchedules\(\): boolean \{\s*return \(\s*this\.platformConfig\.enableHomeKitActionSwitches === true &&\s*this\.platformConfig\.enableHomeKitScheduleSwitches === true\s*\);\s*\}/
+      /private shouldExposeHapSchedules\(\): boolean \{\s*return this\.platformConfig\.enableHomeKitScheduleSwitches === true;\s*\}/
     );
   });
 

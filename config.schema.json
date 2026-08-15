@@ -137,7 +137,7 @@
       },
       "homeKitActionSwitches": {
         "title": "Which Switches to Add",
-        "description": "Which Home app switches to add. Return to Dock is the one Apple Home cannot do any other way; Start Cleaning, Pause and Find expose their corresponding commands. Schedules adds one grouped schedule accessory per Roborock vacuum, containing one switch for each schedule on that vacuum. Only used when the setting above is on.",
+        "description": "Which Home app action switches to add. Return to Dock is the one Apple Home cannot do any other way; Start Cleaning, Pause and Find expose their corresponding commands. Schedules are controlled separately by the \"Add Home app schedule switches\" setting above.",
         "type": "array",
         "uniqueItems": true,
         "default": [
