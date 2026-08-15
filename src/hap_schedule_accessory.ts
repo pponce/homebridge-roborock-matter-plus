@@ -102,6 +102,15 @@ export default class RoborockHapScheduleAccessory {
     const displayName = `${vacuumName} Schedules`;
     this.managerAccessory.displayName = displayName;
 
+    // initialize() may run repeatedly after the schedule setting is
+    // toggled off and on. Rebuild the dynamic switch services from the
+    // current Roborock schedule data while preserving the manager accessory.
+    for (const service of [...this.managerAccessory.services]) {
+      if (service.UUID === this.platform.Service.Switch.UUID) {
+        this.managerAccessory.removeService(service);
+      }
+    }
+
     this.managerAccessory.context = {
       kind: HAP_EXTENSION_KIND,
       extension: HAP_SCHEDULE_EXTENSION,
@@ -169,7 +178,18 @@ export default class RoborockHapScheduleAccessory {
     for (const schedule of this.scheduleAccessories.values()) {
       schedule.dispose();
     }
+
     this.scheduleAccessories.clear();
+
+    // Keep the manager accessory registered so it can be rebuilt
+    // when schedules are enabled again.
+    for (const service of [...this.managerAccessory.services]) {
+      if (service.UUID === this.platform.Service.Switch.UUID) {
+        this.managerAccessory.removeService(service);
+      }
+    }
+
+    this.platform.api.updatePlatformAccessories([this.managerAccessory]);
   }
 
   private sync(schedules: RoborockSchedule[]): void {

@@ -86,24 +86,60 @@ describe("HomeKit schedule settings contract", () => {
   });
 
   test("runtime schedule removal is tied to the same gate", () => {
-    const start = platformSource.indexOf(
-      "private syncHapSchedules(devices: any[]): void"
+    expect(platformSource).toMatch(
+      /if \(!exposeSchedules\) \{[\s\S]*?schedule\.dispose\(\)[\s\S]*?return;/
+    );
+  });
+
+  test("disabled schedules preserve the cached manager accessory", () => {
+    const disabledBlock = platformSource.match(
+      /if \(!exposeSchedules\) \{([\s\S]*?)\n\s*return;/
     );
 
-    expect(start).toBeGreaterThan(-1);
+    expect(disabledBlock).not.toBeNull();
+    expect(disabledBlock[1]).toContain("schedule.dispose()");
+    expect(disabledBlock[1]).not.toContain(
+      "hapScheduleAccessories.clear()"
+    );
+    expect(disabledBlock[1]).not.toContain(
+      "unregisterPlatformAccessories"
+    );
+  });
 
-    const body = platformSource.slice(start, start + 7000);
+  test("schedule initialization rebuilds dynamic switch services", () => {
+    const fs = require("fs");
+    const path = require("path");
 
-    expect(body).toContain(
-      "if (!exposeSchedules)"
+    const scheduleSource = fs.readFileSync(
+      path.join(__dirname, "..", "src", "hap_schedule_accessory.ts"),
+      "utf8"
     );
 
-    expect(body).toContain(
-      "isHapScheduleAccessory(accessory)"
+    expect(scheduleSource).toMatch(
+      /async initialize\(vacuumName: string\): Promise<void> \{[\s\S]*?removeService\(service\)/
+    );
+  });
+
+  test("schedule dispose removes dynamic services but preserves manager", () => {
+    const fs = require("fs");
+    const path = require("path");
+
+    const scheduleSource = fs.readFileSync(
+      path.join(__dirname, "..", "src", "hap_schedule_accessory.ts"),
+      "utf8"
     );
 
-    expect(body).toContain(
-      "this.api.unregisterPlatformAccessories"
+    expect(scheduleSource).toMatch(
+      /dispose\(\): void \{[\s\S]*?removeService\(service\)[\s\S]*?updatePlatformAccessories/
+    );
+
+    const disposeBlock = scheduleSource.match(
+      /dispose\(\): void \{([\s\S]*?)\n\s*\}/
+    );
+
+    expect(disposeBlock).not.toBeNull();
+    expect(disposeBlock[1]).not.toContain(
+      "unregisterPlatformAccessories"
     );
   });
 });

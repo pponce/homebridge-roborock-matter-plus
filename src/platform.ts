@@ -550,52 +550,32 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
   private syncHapSchedules(devices: any[]): void {
     const exposeSchedules = this.shouldExposeHapSchedules();
 
-    // If the user disabled the HAP switch master or unchecked Schedules,
-    // remove any schedule groups previously published by this plugin.
+    // Schedule accessories are persistent HAP extension accessories.
+    // Disabling the setting removes their dynamic switch services but
+    // deliberately keeps the manager accessory cached so the same
+    // accessory can be initialized again when schedules are re-enabled.
     if (!exposeSchedules) {
-      const existing = this.accessories.filter((accessory) =>
-        isHapScheduleAccessory(accessory)
-      );
-
-      if (existing.length > 0) {
-        for (const accessory of existing) {
-          const duid = (accessory.context as { duid?: string }).duid;
-
-          if (duid) {
-            this.hapScheduleAccessories.get(duid)?.dispose();
-            this.hapScheduleAccessories.delete(duid);
-          }
-        }
-
-        this.api.unregisterPlatformAccessories(
-          HAP_PLUGIN_IDENTIFIER,
-          PLATFORM_NAME,
-          existing
-        );
-
-        for (const accessory of existing) {
-          const index = this.accessories.indexOf(accessory);
-          if (index >= 0) {
-            this.accessories.splice(index, 1);
-          }
-        }
-
-        this.log.info(
-          `Home app schedule switches disabled; removed ${existing.length} schedule group${existing.length === 1 ? "" : "s"}.`
-        );
+      // Keep the coordinator cached. dispose() removes the dynamic
+      // schedule services from the manager accessory, while retaining
+      // the coordinator so the same manager can be rebuilt on re-enable.
+      for (const schedule of this.hapScheduleAccessories.values()) {
+        schedule.dispose();
       }
 
       return;
     }
 
-    // An empty device list is treated as untrustworthy because it can result
-    // from a temporary Roborock/cloud failure. Never remove schedule groups
-    // merely because discovery returned no devices.
+    // An empty device list is normally a temporary Roborock/cloud failure.
+    // Never remove schedule accessories because discovery temporarily
+    // returned no devices.
     if (devices.length === 0) {
       return;
     }
 
-    const wanted = new Map<string, { duid: string; vacuumName: string }>();
+    const wanted = new Map<
+      string,
+      { duid: string; vacuumName: string }
+    >();
 
     for (const device of devices) {
       const duid = String(device?.duid ?? "");
@@ -609,6 +589,8 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       });
     }
 
+    // Remove schedule groups only when we have a trustworthy non-empty
+    // account result and the robot genuinely disappeared.
     const obsolete = this.accessories.filter((accessory) => {
       if (!isHapScheduleAccessory(accessory)) {
         return false;
@@ -626,6 +608,11 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
           this.hapScheduleAccessories.get(duid)?.dispose();
           this.hapScheduleAccessories.delete(duid);
         }
+
+        const index = this.accessories.indexOf(accessory);
+        if (index >= 0) {
+          this.accessories.splice(index, 1);
+        }
       }
 
       this.api.unregisterPlatformAccessories(
@@ -633,26 +620,21 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         PLATFORM_NAME,
         obsolete
       );
-
-      for (const accessory of obsolete) {
-        const index = this.accessories.indexOf(accessory);
-        if (index >= 0) {
-          this.accessories.splice(index, 1);
-        }
-      }
     }
 
     for (const [duid, target] of wanted) {
       let schedule = this.hapScheduleAccessories.get(duid);
 
       if (schedule) {
-        void schedule.initialize(target.vacuumName).catch((error: unknown) => {
-          this.log.debug(
-            `Unable to refresh Roborock schedules for ${target.vacuumName}: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        });
+        void schedule.initialize(target.vacuumName).catch(
+          (error: unknown) => {
+            this.log.debug(
+              `Unable to refresh Roborock schedules for ${target.vacuumName}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        );
         continue;
       }
 
@@ -683,13 +665,15 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
 
       this.hapScheduleAccessories.set(duid, schedule);
 
-      void schedule.initialize(target.vacuumName).catch((error: unknown) => {
-        this.log.error(
-          `Unable to initialize Roborock schedules for ${target.vacuumName}: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
+      void schedule.initialize(target.vacuumName).catch(
+        (error: unknown) => {
+          this.log.error(
+            `Unable to initialize Roborock schedules for ${target.vacuumName}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
+      );
 
       if (isNew) {
         this.log.info(
