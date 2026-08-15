@@ -49,7 +49,9 @@ export function parseServerTimers(value: unknown): RoborockSchedule[] {
   return [...result.values()];
 }
 
-export function isHapScheduleAccessory(accessory: PlatformAccessory): boolean {
+export function isHapScheduleAccessory(
+  accessory: { context?: unknown }
+): boolean {
   const context = (accessory.context ?? {}) as Partial<HapScheduleContext>;
   return (
     context.kind === HAP_EXTENSION_KIND &&
