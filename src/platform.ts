@@ -498,8 +498,6 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
           await self.discoverMatterVacuum(device);
         }
 
-        this.log.info("Discovery calling syncHapSchedules().");
-        self.syncHapSchedules(Array.isArray(devices) ? devices : []);
       } else {
         this.log.warn(
           "Discovery skipped Matter/schedule setup because Roborock API is not initialized."
@@ -514,6 +512,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       this.removeLegacyHomeKitAccessories();
 
       const knownDevices = Array.isArray(devices) ? devices : [];
+      this.syncHapSchedules(knownDevices);
       this.syncActionSwitches(knownDevices);
       this.syncStateSensors(knownDevices);
       // After both syncs, so the count is the total a user has to find in
@@ -545,11 +544,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
    * HomeKitActionKey because it does not represent a Roborock command.
    */
   private shouldExposeHapSchedules(): boolean {
-    return (
-      this.platformConfig.enableHomeKitActionSwitches === true &&
-      Array.isArray(this.platformConfig.homeKitActionSwitches) &&
-      this.platformConfig.homeKitActionSwitches.includes("schedules")
-    );
+    return this.platformConfig.enableHomeKitScheduleSwitches === true;
   }
 
   private syncHapSchedules(devices: any[]): void {
