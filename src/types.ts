@@ -84,4 +84,5 @@ export interface RoborockPlatformConfig extends PlatformConfig {
   homeKitActionSwitches?: string[];
   enableHomeKitStateSensors?: boolean;
   homeKitStateSensors?: string[];
+  enableHomeKitScheduleSwitches?: boolean;
 }

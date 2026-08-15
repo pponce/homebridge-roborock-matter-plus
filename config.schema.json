@@ -126,44 +126,55 @@
       },
       "enableHomeKitActionSwitches": {
         "title": "Add Home App Switches for Start, Dock, Pause and Find",
-        "description": "Publishes one extra HomeKit switch per robot per action, so Apple Home automations and Shortcuts can send a command that Apple does not offer for a Matter vacuum. Measured in issue #3: Apple Home has no \"send the vacuum to its dock\" automation action for a Matter vacuum, and a plain switch is an automation action everywhere. Each switch is momentary: it turns itself off again about a second after it is pressed. Off by default, because turning it on adds accessories to your Home app. IMPORTANT — THESE NEED THEIR OWN PAIRING: the robot reaches Apple Home over Matter, but the switches are HomeKit accessories on this plugin's Homebridge child bridge, which is paired separately. Go to Plugins -> homebridge-roborock-matter -> the three-dot menu -> Child Bridge Config, make sure Enable HAP is ON (on a Matter-only setup it is often off, and until it is on no QR code will work), restart, then press Connect to HomeKit on that same screen and scan THAT QR code. It is not the main Homebridge QR code, and not the robot's Matter pairing code.",
+        "description": "Publishes one extra HomeKit switch per robot per action, so Apple Home automations and Shortcuts can send a command that Apple does not offer for a Matter vacuum. Measured in issue #3: Apple Home has no \"send the vacuum to its dock\" automation action for a Matter vacuum, and a plain switch is an automation action everywhere. Each switch is momentary: it turns itself off again about a second after it is pressed. Off by default, because turning it on adds accessories to your Home app. IMPORTANT \u2014 THESE NEED THEIR OWN PAIRING: the robot reaches Apple Home over Matter, but the switches are HomeKit accessories on this plugin's Homebridge child bridge, which is paired separately. Go to Plugins -> homebridge-roborock-matter -> the three-dot menu -> Child Bridge Config, make sure Enable HAP is ON (on a Matter-only setup it is often off, and until it is on no QR code will work), restart, then press Connect to HomeKit on that same screen and scan THAT QR code. It is not the main Homebridge QR code, and not the robot's Matter pairing code.",
         "type": "boolean",
         "default": false
       },
       "enableHomeKitScheduleSwitches": {
-      "title": "Add Home app schedule switches",
-      "type": "boolean",
-      "default": false
-    },
-    "homeKitActionSwitches": {
+        "title": "Add Home app schedule switches",
+        "type": "boolean",
+        "default": false
+      },
+      "homeKitActionSwitches": {
         "title": "Which Switches to Add",
         "description": "Which Home app switches to add. Return to Dock is the one Apple Home cannot do any other way; Start Cleaning, Pause and Find expose their corresponding commands. Schedules adds one grouped schedule accessory per Roborock vacuum, containing one switch for each schedule on that vacuum. Only used when the setting above is on.",
         "type": "array",
         "uniqueItems": true,
-        "default": ["dock"],
+        "default": [
+          "dock"
+        ],
         "items": {
           "type": "string",
-          "enum": ["clean", "dock", "pause", "locate"],
+          "enum": [
+            "clean",
+            "dock",
+            "pause",
+            "locate"
+          ],
           "oneOf": [
             {
               "title": "Start Cleaning",
-              "enum": ["clean"]
+              "enum": [
+                "clean"
+              ]
             },
             {
               "title": "Return to Dock",
-              "enum": ["dock"]
+              "enum": [
+                "dock"
+              ]
             },
             {
               "title": "Pause",
-              "enum": ["pause"]
+              "enum": [
+                "pause"
+              ]
             },
             {
               "title": "Find (robot announces where it is)",
-              "enum": ["locate"]
-            },
-            {
-              "title": "Schedules",
-              "enum": ["schedules"]
+              "enum": [
+                "locate"
+              ]
             }
           ]
         }
@@ -212,6 +223,8 @@
         "default": false
       }
     },
-    "required": ["email"]
+    "required": [
+      "email"
+    ]
   }
 }
