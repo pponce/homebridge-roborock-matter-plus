@@ -381,7 +381,8 @@ class RoborockPlatform {
      * HomeKitActionKey because it does not represent a Roborock command.
      */
     shouldExposeHapSchedules() {
-        return this.platformConfig.enableHomeKitScheduleSwitches === true;
+        return (this.platformConfig.enableHomeKitActionSwitches === true &&
+            this.platformConfig.enableHomeKitScheduleSwitches === true);
     }
     syncHapSchedules(devices) {
         var _a, _b, _c;
