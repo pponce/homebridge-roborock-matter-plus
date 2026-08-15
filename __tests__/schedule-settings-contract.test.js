@@ -106,7 +106,7 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
-  test("schedule initialization rebuilds dynamic switch services", () => {
+  test("schedule initialization preserves existing switches until discovery succeeds", () => {
     const fs = require("fs");
     const path = require("path");
 
@@ -116,6 +116,14 @@ describe("HomeKit schedule settings contract", () => {
     );
 
     expect(scheduleSource).toMatch(
+      /async initialize\(vacuumName: string\): Promise<boolean>/
+    );
+
+    expect(scheduleSource).toMatch(
+      /Do not remove existing schedule switches before discovery succeeds\.[\s\S]*?return this\.refresh\(\);/
+    );
+
+    expect(scheduleSource).not.toMatch(
       /async initialize\(vacuumName: string\): Promise<void> \{[\s\S]*?removeService\(service\)/
     );
   });

@@ -96,20 +96,11 @@ export default class RoborockHapScheduleAccessory {
     } satisfies HapScheduleContext;
   }
 
-  async initialize(vacuumName: string): Promise<void> {
+  async initialize(vacuumName: string): Promise<boolean> {
     this.vacuumName = vacuumName;
 
     const displayName = `${vacuumName} Schedules`;
     this.managerAccessory.displayName = displayName;
-
-    // initialize() may run repeatedly after the schedule setting is
-    // toggled off and on. Rebuild the dynamic switch services from the
-    // current Roborock schedule data while preserving the manager accessory.
-    for (const service of [...this.managerAccessory.services]) {
-      if (service.UUID === this.platform.Service.Switch.UUID) {
-        this.managerAccessory.removeService(service);
-      }
-    }
 
     this.managerAccessory.context = {
       kind: HAP_EXTENSION_KIND,
@@ -142,12 +133,13 @@ export default class RoborockHapScheduleAccessory {
       displayName
     );
 
-    this.platform.api.updatePlatformAccessories([this.managerAccessory]);
-
-    await this.refresh();
+    // Do not remove existing schedule switches before discovery succeeds.
+    // A transient offline/error response must preserve an already-valid
+    // schedule group.
+    return this.refresh();
   }
 
-  async refresh(): Promise<void> {
+  async refresh(): Promise<boolean> {
     const api = this.platform.roborockAPI as any;
     const raw = await getServerTimers(api, this.duid, {
       requestTimeoutMs: 10000,
@@ -164,14 +156,17 @@ export default class RoborockHapScheduleAccessory {
         `Unable to reliably read Roborock schedules for ${this.duid}: ` +
           `get_server_timer returned ${typeof raw}; preserving existing schedules.`
       );
-      return;
+      return this.scheduleAccessories.size > 0;
     }
 
     const schedules = parseServerTimers(raw);
     this.platform.log.info(
       `Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`
     );
+
     this.sync(schedules);
+
+    return schedules.length > 0;
   }
 
   dispose(): void {
