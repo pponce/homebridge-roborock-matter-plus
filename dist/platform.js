@@ -381,44 +381,33 @@ class RoborockPlatform {
      * HomeKitActionKey because it does not represent a Roborock command.
      */
     shouldExposeHapSchedules() {
-        return (this.platformConfig.enableHomeKitActionSwitches === true &&
-            this.platformConfig.enableHomeKitScheduleSwitches === true);
+        return this.platformConfig.enableHomeKitScheduleSwitches === true;
     }
     syncHapSchedules(devices) {
-        var _a, _b, _c;
+        var _a, _b;
         const exposeSchedules = this.shouldExposeHapSchedules();
-        // If the user disabled the HAP switch master or unchecked Schedules,
-        // remove any schedule groups previously published by this plugin.
+        // Schedule accessories are persistent HAP extension accessories.
+        // Disabling the setting removes their dynamic switch services but
+        // deliberately keeps the manager accessory cached so the same
+        // accessory can be initialized again when schedules are re-enabled.
         if (!exposeSchedules) {
-            const existing = this.accessories.filter((accessory) => (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory));
-            if (existing.length > 0) {
-                for (const accessory of existing) {
-                    const duid = accessory.context.duid;
-                    if (duid) {
-                        (_a = this.hapScheduleAccessories.get(duid)) === null || _a === void 0 ? void 0 : _a.dispose();
-                        this.hapScheduleAccessories.delete(duid);
-                    }
-                }
-                this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, existing);
-                for (const accessory of existing) {
-                    const index = this.accessories.indexOf(accessory);
-                    if (index >= 0) {
-                        this.accessories.splice(index, 1);
-                    }
-                }
-                this.log.info(`Home app schedule switches disabled; removed ${existing.length} schedule group${existing.length === 1 ? "" : "s"}.`);
+            // Keep the coordinator cached. dispose() removes the dynamic
+            // schedule services from the manager accessory, while retaining
+            // the coordinator so the same manager can be rebuilt on re-enable.
+            for (const schedule of this.hapScheduleAccessories.values()) {
+                schedule.dispose();
             }
             return;
         }
-        // An empty device list is treated as untrustworthy because it can result
-        // from a temporary Roborock/cloud failure. Never remove schedule groups
-        // merely because discovery returned no devices.
+        // An empty device list is normally a temporary Roborock/cloud failure.
+        // Never remove schedule accessories because discovery temporarily
+        // returned no devices.
         if (devices.length === 0) {
             return;
         }
         const wanted = new Map();
         for (const device of devices) {
-            const duid = String((_b = device === null || device === void 0 ? void 0 : device.duid) !== null && _b !== void 0 ? _b : "");
+            const duid = String((_a = device === null || device === void 0 ? void 0 : device.duid) !== null && _a !== void 0 ? _a : "");
             if (!duid) {
                 continue;
             }
@@ -427,6 +416,8 @@ class RoborockPlatform {
                 vacuumName: this.getVacuumDisplayName(duid, device),
             });
         }
+        // Remove schedule groups only when we have a trustworthy non-empty
+        // account result and the robot genuinely disappeared.
         const obsolete = this.accessories.filter((accessory) => {
             if (!(0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory)) {
                 return false;
@@ -438,17 +429,15 @@ class RoborockPlatform {
             for (const accessory of obsolete) {
                 const duid = accessory.context.duid;
                 if (duid) {
-                    (_c = this.hapScheduleAccessories.get(duid)) === null || _c === void 0 ? void 0 : _c.dispose();
+                    (_b = this.hapScheduleAccessories.get(duid)) === null || _b === void 0 ? void 0 : _b.dispose();
                     this.hapScheduleAccessories.delete(duid);
                 }
-            }
-            this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, obsolete);
-            for (const accessory of obsolete) {
                 const index = this.accessories.indexOf(accessory);
                 if (index >= 0) {
                     this.accessories.splice(index, 1);
                 }
             }
+            this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, obsolete);
         }
         for (const [duid, target] of wanted) {
             let schedule = this.hapScheduleAccessories.get(duid);
