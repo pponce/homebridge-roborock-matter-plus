@@ -301,7 +301,7 @@
     <label class="checkbox">
       <input id="enable-homekit-action-switches" type="checkbox" />
       <span>
-        Add Home app switches for Start, Dock, Pause and Find
+        Add Home app switches for Start, Dock, Pause, Find and Schedules
         <small
           >Apple Home does not offer &ldquo;send the vacuum to its dock&rdquo;
           as an automation action for a Matter vacuum &mdash; measured in issue
@@ -343,6 +343,16 @@
           <small
             >The robot announces where it is. Hidden for robots that do not
             support it.</small
+          ></span
+        >
+      </label>
+      <label class="checkbox">
+        <input id="homekit-action-schedules" type="checkbox" disabled />
+        <span
+          >Schedules
+          <small
+            >Adds one grouped schedule tile per vacuum, containing one switch
+            for each Roborock schedule.</small
           ></span
         >
       </label>
@@ -406,17 +416,6 @@
         >
       </label>
     </div>
-
-    <label class="checkbox">
-      <input id="enable-homekit-schedule-switches" type="checkbox" />
-      <span>
-        Schedules
-        <small
-          >Adds one grouped schedule tile per vacuum, containing one switch
-          for each Roborock schedule.</small
-        >
-      </span>
-    </label>
 
     <div id="homekit-switch-pairing" class="pairing-callout hidden">
       <h3>
