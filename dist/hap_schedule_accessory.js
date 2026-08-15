@@ -218,6 +218,7 @@ class RoborockHapScheduleSwitchAccessory {
     dispose() {
         this.writes.clear();
         this.suppression.clear();
+        this.failedCommands.clear();
     }
     async setSchedule(enabled) {
         const previous = this.schedule.enabled;

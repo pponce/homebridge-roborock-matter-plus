@@ -360,6 +360,7 @@ class RoborockHapScheduleSwitchAccessory {
   dispose(): void {
     this.writes.clear();
     this.suppression.clear();
+    this.failedCommands.clear();
   }
 
   private async setSchedule(enabled: boolean): Promise<void> {
