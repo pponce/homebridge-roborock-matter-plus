@@ -381,19 +381,38 @@ class RoborockPlatform {
      * HomeKitActionKey because it does not represent a Roborock command.
      */
     shouldExposeHapSchedules() {
-        return this.platformConfig.enableHomeKitScheduleSwitches === true;
+        return (this.platformConfig.enableHomeKitActionSwitches === true &&
+            this.platformConfig.enableHomeKitScheduleSwitches === true);
+    }
+    removeHapScheduleAccessories() {
+        const scheduleAccessories = this.accessories.filter((accessory) => (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory));
+        for (const schedule of this.hapScheduleAccessories.values()) {
+            schedule.dispose();
+        }
+        this.hapScheduleAccessories.clear();
+        for (const accessory of scheduleAccessories) {
+            const index = this.accessories.indexOf(accessory);
+            if (index >= 0) {
+                this.accessories.splice(index, 1);
+            }
+        }
+        if (scheduleAccessories.length > 0) {
+            this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, scheduleAccessories);
+        }
     }
     syncHapSchedules(devices) {
         var _a, _b;
         const exposeSchedules = this.shouldExposeHapSchedules();
-        // Schedule accessories are persistent HAP extension accessories.
-        // Disabling the setting removes their dynamic switch services but
-        // deliberately keeps the manager accessory cached so the same
-        // accessory can be initialized again when schedules are re-enabled.
+        // The master HAP-switch setting owns the entire HAP switch surface.
+        // If it is disabled, schedule accessories must be completely removed
+        // rather than merely having their dynamic services disposed.
+        if (!this.platformConfig.enableHomeKitActionSwitches) {
+            this.removeHapScheduleAccessories();
+            return;
+        }
+        // The schedules sub-setting only controls schedule exposure. Keep the
+        // coordinator cached so schedules can be rebuilt when re-enabled.
         if (!exposeSchedules) {
-            // Keep the coordinator cached. dispose() removes the dynamic
-            // schedule services from the manager accessory, while retaining
-            // the coordinator so the same manager can be rebuilt on re-enable.
             for (const schedule of this.hapScheduleAccessories.values()) {
                 schedule.dispose();
             }

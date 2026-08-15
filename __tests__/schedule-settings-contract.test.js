@@ -79,19 +79,23 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
-  test("runtime schedule exposure is controlled independently by the schedule setting", () => {
+  test("runtime schedule exposure requires both the master and schedule settings", () => {
     expect(platformSource).toMatch(
-      /private shouldExposeHapSchedules\(\): boolean \{\s*return this\.platformConfig\.enableHomeKitScheduleSwitches === true;\s*\}/
+      /private shouldExposeHapSchedules\(\): boolean \{[\s\S]*?enableHomeKitActionSwitches === true[\s\S]*?enableHomeKitScheduleSwitches === true[\s\S]*?\}/
     );
   });
 
-  test("runtime schedule removal is tied to the same gate", () => {
+  test("master-off schedule removal unregisters all schedule accessories", () => {
     expect(platformSource).toMatch(
-      /if \(!exposeSchedules\) \{[\s\S]*?schedule\.dispose\(\)[\s\S]*?return;/
+      /private removeHapScheduleAccessories\(\): void \{[\s\S]*?hapScheduleAccessories\.clear\(\)[\s\S]*?unregisterPlatformAccessories/
+    );
+
+    expect(platformSource).toMatch(
+      /if \(!this\.platformConfig\.enableHomeKitActionSwitches\) \{[\s\S]*?removeHapScheduleAccessories\(\)[\s\S]*?return;/
     );
   });
 
-  test("disabled schedules preserve the cached manager accessory", () => {
+  test("schedule-only disable preserves the cached coordinator", () => {
     const disabledBlock = platformSource.match(
       /if \(!exposeSchedules\) \{([\s\S]*?)\n\s*return;/
     );
@@ -100,9 +104,6 @@ describe("HomeKit schedule settings contract", () => {
     expect(disabledBlock[1]).toContain("schedule.dispose()");
     expect(disabledBlock[1]).not.toContain(
       "hapScheduleAccessories.clear()"
-    );
-    expect(disabledBlock[1]).not.toContain(
-      "unregisterPlatformAccessories"
     );
   });
 
