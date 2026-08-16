@@ -5,6 +5,7 @@ import { HAP_PLUGIN_IDENTIFIER, PLATFORM_NAME } from "./settings";
 
 const VERIFY_DELAY_MS = 3000;
 const WRITE_SUPPRESSION_MS = 5000;
+const SCHEDULE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 const SERVICE_PREFIX = "roborock-schedule-";
 
 export const HAP_EXTENSION_KIND = "hapExtension" as const;
@@ -84,6 +85,8 @@ export default class RoborockHapScheduleAccessory {
   private readonly managerAccessory: PlatformAccessory;
   private vacuumName = "";
   private managerRemoved = false;
+  private pollTimer: ReturnType<typeof setInterval> | undefined;
+  private refreshInProgress = false;
 
   constructor(
     private readonly platform: RoborockPlatform,
@@ -138,40 +141,79 @@ export default class RoborockHapScheduleAccessory {
     // Do not remove existing schedule switches before discovery succeeds.
     // A transient offline/error response must preserve an already-valid
     // schedule group.
-    return this.refresh();
+    const result = await this.refresh();
+    this.startPolling();
+    return result;
   }
 
   async refresh(): Promise<boolean> {
-    const api = this.platform.roborockAPI as any;
-    const raw = await getServerTimers(api, this.duid, {
-      requestTimeoutMs: 10000,
-    });
-
-    this.platform.log.info(
-      `Schedule discovery for ${this.duid}: ` +
-        `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
-        `value=${JSON.stringify(raw)}`
-    );
-
-    if (!Array.isArray(raw)) {
-      this.platform.log.warn(
-        `Unable to reliably read Roborock schedules for ${this.duid}: ` +
-          `get_server_timer returned ${typeof raw}; preserving existing schedules.`
-      );
+    if (this.refreshInProgress) {
       return this.scheduleAccessories.size > 0;
     }
 
-    const schedules = parseServerTimers(raw);
-    this.platform.log.info(
-      `Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`
-    );
+    this.refreshInProgress = true;
 
-    this.sync(schedules);
+    try {
+      const api = this.platform.roborockAPI as any;
+      const raw = await getServerTimers(api, this.duid, {
+        requestTimeoutMs: 10000,
+      });
 
-    return schedules.length > 0;
+      this.platform.log.info(
+        `Schedule discovery for ${this.duid}: ` +
+          `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
+          `value=${JSON.stringify(raw)}`
+      );
+
+      if (!Array.isArray(raw)) {
+        this.platform.log.warn(
+          `Unable to reliably read Roborock schedules for ${this.duid}: ` +
+            `get_server_timer returned ${typeof raw}; preserving existing schedules.`
+        );
+        return this.scheduleAccessories.size > 0;
+      }
+
+      const schedules = parseServerTimers(raw);
+      this.platform.log.info(
+        `Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`
+      );
+
+      this.sync(schedules);
+
+      return schedules.length > 0;
+    } finally {
+      this.refreshInProgress = false;
+    }
+  }
+
+  private startPolling(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+    }
+
+    this.pollTimer = setInterval(() => {
+      this.refresh().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.platform.log.warn(
+          `Roborock schedule polling failed for ${this.duid}: ${message}. Will retry in ${SCHEDULE_POLL_INTERVAL_MS / 60000} minutes.`
+        );
+      });
+    }, SCHEDULE_POLL_INTERVAL_MS);
+  }
+
+  private stopPolling(): void {
+    if (!this.pollTimer) {
+      return;
+    }
+
+    clearInterval(this.pollTimer);
+    this.pollTimer = undefined;
   }
 
   dispose(): void {
+    this.stopPolling();
+    this.refreshInProgress = false;
+
     for (const schedule of this.scheduleAccessories.values()) {
       schedule.dispose();
     }
