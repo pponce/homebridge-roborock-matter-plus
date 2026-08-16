@@ -6,6 +6,7 @@ exports.isHapScheduleAccessory = isHapScheduleAccessory;
 const hap_schedule_api_1 = require("./hap_schedule_api");
 const VERIFY_DELAY_MS = 3000;
 const WRITE_SUPPRESSION_MS = 5000;
+const SCHEDULE_POLL_INTERVAL_MS = 3 * 60 * 1000;
 const SERVICE_PREFIX = "roborock-schedule-";
 exports.HAP_EXTENSION_KIND = "hapExtension";
 exports.HAP_SCHEDULE_EXTENSION = "schedules";
@@ -62,6 +63,7 @@ class RoborockHapScheduleAccessory {
         this.scheduleAccessories = new Map();
         this.vacuumName = "";
         this.managerRemoved = false;
+        this.refreshInProgress = false;
         this.managerAccessory = accessory;
         accessory.context = {
             kind: exports.HAP_EXTENSION_KIND,
@@ -87,27 +89,63 @@ class RoborockHapScheduleAccessory {
         // Do not remove existing schedule switches before discovery succeeds.
         // A transient offline/error response must preserve an already-valid
         // schedule group.
-        return this.refresh();
+        const result = await this.refresh();
+        if (result) {
+            this.startPolling();
+        }
+        else {
+            this.stopPolling();
+        }
+        return result;
     }
     async refresh() {
-        const api = this.platform.roborockAPI;
-        const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
-            requestTimeoutMs: 10000,
-        });
-        this.platform.log.info(`Schedule discovery for ${this.duid}: ` +
-            `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
-            `value=${JSON.stringify(raw)}`);
-        if (!Array.isArray(raw)) {
-            this.platform.log.warn(`Unable to reliably read Roborock schedules for ${this.duid}: ` +
-                `get_server_timer returned ${typeof raw}; preserving existing schedules.`);
+        if (this.refreshInProgress) {
             return this.scheduleAccessories.size > 0;
         }
-        const schedules = parseServerTimers(raw);
-        this.platform.log.info(`Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`);
-        this.sync(schedules);
-        return schedules.length > 0;
+        this.refreshInProgress = true;
+        try {
+            const api = this.platform.roborockAPI;
+            const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
+                requestTimeoutMs: 10000,
+            });
+            this.platform.log.info(`Schedule discovery for ${this.duid}: ` +
+                `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
+                `value=${JSON.stringify(raw)}`);
+            if (!Array.isArray(raw)) {
+                this.platform.log.warn(`Unable to reliably read Roborock schedules for ${this.duid}: ` +
+                    `get_server_timer returned ${typeof raw}; preserving existing schedules.`);
+                return this.scheduleAccessories.size > 0;
+            }
+            const schedules = parseServerTimers(raw);
+            this.platform.log.info(`Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`);
+            this.sync(schedules);
+            return schedules.length > 0;
+        }
+        finally {
+            this.refreshInProgress = false;
+        }
+    }
+    startPolling() {
+        if (this.pollTimer) {
+            clearInterval(this.pollTimer);
+        }
+        this.pollTimer = setInterval(() => {
+            this.refresh().catch((error) => {
+                const message = error instanceof Error ? error.message : String(error);
+                this.platform.log.warn(`Roborock schedule polling failed for ${this.duid}: ${message}. Will retry in ${SCHEDULE_POLL_INTERVAL_MS / 60000} minutes.`);
+            });
+        }, SCHEDULE_POLL_INTERVAL_MS);
+    }
+    stopPolling() {
+        if (!this.pollTimer) {
+            return;
+        }
+        clearInterval(this.pollTimer);
+        this.pollTimer = undefined;
     }
     dispose() {
+        this.stopPolling();
+        this.refreshInProgress = false;
         for (const schedule of this.scheduleAccessories.values()) {
             schedule.dispose();
         }
