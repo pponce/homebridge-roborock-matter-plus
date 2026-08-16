@@ -142,7 +142,11 @@ export default class RoborockHapScheduleAccessory {
     // A transient offline/error response must preserve an already-valid
     // schedule group.
     const result = await this.refresh();
-    this.startPolling();
+    if (result) {
+      this.startPolling();
+    } else {
+      this.stopPolling();
+    }
     return result;
   }
 
