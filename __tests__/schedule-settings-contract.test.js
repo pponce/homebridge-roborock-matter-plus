@@ -13,6 +13,7 @@ const uiJs = read("homebridge-ui", "public", "index.js");
 const uiHtml = read("homebridge-ui", "public", "index.html");
 const platformSource = read("src", "platform.ts");
 const typesSource = read("src", "types.ts");
+const scheduleSource = read("src", "hap_schedule_accessory.ts");
 
 describe("HomeKit schedule settings contract", () => {
   test("schedules are a separate config setting, not an action key", () => {
@@ -108,20 +109,12 @@ describe("HomeKit schedule settings contract", () => {
   });
 
   test("schedule initialization preserves existing switches until discovery succeeds", () => {
-    const fs = require("fs");
-    const path = require("path");
-
-    const scheduleSource = fs.readFileSync(
-      path.join(__dirname, "..", "src", "hap_schedule_accessory.ts"),
-      "utf8"
-    );
-
     expect(scheduleSource).toMatch(
       /async initialize\(vacuumName: string\): Promise<boolean>/
     );
 
     expect(scheduleSource).toMatch(
-      /Do not remove existing schedule switches before discovery succeeds\.[\s\S]*?return this\.refresh\(\);/
+      /Do not remove existing schedule switches before discovery succeeds\.[\s\S]*?const result = await this\.refresh\(\);/
     );
 
     expect(scheduleSource).not.toMatch(
@@ -129,15 +122,21 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
-  test("schedule dispose removes dynamic services but preserves manager", () => {
-    const fs = require("fs");
-    const path = require("path");
-
-    const scheduleSource = fs.readFileSync(
-      path.join(__dirname, "..", "src", "hap_schedule_accessory.ts"),
-      "utf8"
+  test("schedule polling uses one refresh operation per vacuum at a three-minute interval", () => {
+    expect(scheduleSource).toMatch(
+      /const SCHEDULE_POLL_INTERVAL_MS = 3 \* 60 \* 1000;/
     );
 
+    expect(scheduleSource).toMatch(
+      /this\.pollTimer = setInterval\(\(\) => \{[\s\S]*?this\.refresh\(\)\.catch\(/
+    );
+
+    expect(scheduleSource).toMatch(
+      /const raw = await getServerTimers\(api, this\.duid, \{/
+    );
+  });
+
+  test("schedule dispose removes dynamic services but preserves manager", () => {
     expect(scheduleSource).toMatch(
       /dispose\(\): void \{[\s\S]*?removeService\(service\)[\s\S]*?updatePlatformAccessories/
     );
