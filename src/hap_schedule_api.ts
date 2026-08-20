@@ -111,12 +111,7 @@ export async function updateServerTimer(
   }
 
   if (typeof api.updateServerTimer === "function") {
-    return api.updateServerTimer(
-      duid,
-      timerId,
-      enabled,
-      requestOptions
-    );
+    return api.updateServerTimer(duid, timerId, enabled, requestOptions);
   }
 
   throw new Error("Roborock schedule command API is unavailable");

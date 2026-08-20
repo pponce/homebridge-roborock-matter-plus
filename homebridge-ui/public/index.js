@@ -48,9 +48,7 @@ const elements = {
   homeKitStateWaterTankEmpty: document.getElementById(
     "homekit-state-water-tank-empty"
   ),
-  homeKitActionSchedules: document.getElementById(
-    "homekit-action-schedules"
-  ),
+  homeKitActionSchedules: document.getElementById("homekit-action-schedules"),
   enableMatterFaultReporting: document.getElementById(
     "enable-matter-fault-reporting"
   ),

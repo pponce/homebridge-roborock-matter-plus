@@ -140,41 +140,26 @@
         "description": "Which Home app action switches to add. Return to Dock is the one Apple Home cannot do any other way; Start Cleaning, Pause and Find expose their corresponding commands. Schedules are controlled separately by the \"Add Home app schedule switches\" setting above.",
         "type": "array",
         "uniqueItems": true,
-        "default": [
-          "dock"
-        ],
+        "default": ["dock"],
         "items": {
           "type": "string",
-          "enum": [
-            "clean",
-            "dock",
-            "pause",
-            "locate"
-          ],
+          "enum": ["clean", "dock", "pause", "locate"],
           "oneOf": [
             {
               "title": "Start Cleaning",
-              "enum": [
-                "clean"
-              ]
+              "enum": ["clean"]
             },
             {
               "title": "Return to Dock",
-              "enum": [
-                "dock"
-              ]
+              "enum": ["dock"]
             },
             {
               "title": "Pause",
-              "enum": [
-                "pause"
-              ]
+              "enum": ["pause"]
             },
             {
               "title": "Find (robot announces where it is)",
-              "enum": [
-                "locate"
-              ]
+              "enum": ["locate"]
             }
           ]
         }
@@ -223,8 +208,6 @@
         "default": false
       }
     },
-    "required": [
-      "email"
-    ]
+    "required": ["email"]
   }
 }

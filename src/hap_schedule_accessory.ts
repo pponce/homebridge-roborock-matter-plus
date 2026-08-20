@@ -1,6 +1,10 @@
 import { PlatformAccessory } from "homebridge";
 import RoborockPlatform from "./platform";
-import { getServerTimers, updateServerTimer, updateTimer } from "./hap_schedule_api";
+import {
+  getServerTimers,
+  updateServerTimer,
+  updateTimer,
+} from "./hap_schedule_api";
 import { HAP_PLUGIN_IDENTIFIER, PLATFORM_NAME } from "./settings";
 
 const VERIFY_DELAY_MS = 3000;
@@ -50,9 +54,9 @@ export function parseServerTimers(value: unknown): RoborockSchedule[] {
   return [...result.values()];
 }
 
-export function isHapScheduleAccessory(
-  accessory: { context?: unknown }
-): boolean {
+export function isHapScheduleAccessory(accessory: {
+  context?: unknown;
+}): boolean {
   const context = (accessory.context ?? {}) as Partial<HapScheduleContext>;
   return (
     context.kind === HAP_EXTENSION_KIND &&
@@ -133,10 +137,7 @@ export default class RoborockHapScheduleAccessory {
       this.platform.Characteristic.SerialNumber,
       `${this.duid}:schedules`
     );
-    info.setCharacteristic(
-      this.platform.Characteristic.Name,
-      displayName
-    );
+    info.setCharacteristic(this.platform.Characteristic.Name, displayName);
 
     // Do not remove existing schedule switches before discovery succeeds.
     // A transient offline/error response must preserve an already-valid
@@ -244,8 +245,7 @@ export default class RoborockHapScheduleAccessory {
 
     for (let i = 0; i < schedules.length; i++) {
       const schedule = schedules[i];
-      const displayName =
-        `${this.vacuumName} Schedule ${i + 1}`;
+      const displayName = `${this.vacuumName} Schedule ${i + 1}`;
       const existing = this.scheduleAccessories.get(schedule.id);
 
       if (existing) {
@@ -291,7 +291,8 @@ export default class RoborockHapScheduleAccessory {
   }
 
   private removeFromPlatformCache(accessory: PlatformAccessory): void {
-    const cachedAccessories = ((this.platform as any).accessories ?? []) as PlatformAccessory[];
+    const cachedAccessories = ((this.platform as any).accessories ??
+      []) as PlatformAccessory[];
     const index = cachedAccessories.indexOf(accessory);
     if (index >= 0) {
       cachedAccessories.splice(index, 1);
@@ -486,8 +487,8 @@ class RoborockHapScheduleSwitchAccessory {
 
       this.platform.log.warn(
         `Unable to ${enabled ? "enable" : "disable"} Roborock schedule ${this.scheduleId}: ${message}. ` +
-        `Further attempts for this same state are suppressed for ` +
-        `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`
+          `Further attempts for this same state are suppressed for ` +
+          `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`
       );
     } finally {
       this.writes.delete(this.scheduleId);

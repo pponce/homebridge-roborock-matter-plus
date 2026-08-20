@@ -497,7 +497,6 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         for (const device of devices) {
           await self.discoverMatterVacuum(device);
         }
-
       } else {
         this.log.warn(
           "Discovery skipped Matter/schedule setup because Roborock API is not initialized."
@@ -551,8 +550,8 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
   }
 
   private removeHapScheduleAccessories(): void {
-    const scheduleAccessories = this.accessories.filter(
-      (accessory) => isHapScheduleAccessory(accessory)
+    const scheduleAccessories = this.accessories.filter((accessory) =>
+      isHapScheduleAccessory(accessory)
     );
 
     for (const schedule of this.hapScheduleAccessories.values()) {
@@ -605,10 +604,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       return;
     }
 
-    const wanted = new Map<
-      string,
-      { duid: string; vacuumName: string }
-    >();
+    const wanted = new Map<string, { duid: string; vacuumName: string }>();
 
     for (const device of devices) {
       const duid = String(device?.duid ?? "");
@@ -669,9 +665,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
             const accessory = this.accessories.find(
               (candidate) =>
                 candidate.UUID ===
-                this.api.hap.uuid.generate(
-                  `hap:roborock:schedules:${duid}`
-                )
+                this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`)
             );
 
             if (!accessory) {
@@ -700,13 +694,10 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         continue;
       }
 
-      const uuid = this.api.hap.uuid.generate(
-        `hap:roborock:schedules:${duid}`
-      );
+      const uuid = this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`);
 
       let accessory = this.accessories.find(
-        (cached) =>
-          cached.UUID === uuid && isHapScheduleAccessory(cached)
+        (cached) => cached.UUID === uuid && isHapScheduleAccessory(cached)
       );
 
       const isNew = !accessory;
@@ -718,11 +709,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         );
       }
 
-      schedule = new RoborockHapScheduleAccessory(
-        this,
-        accessory,
-        duid
-      );
+      schedule = new RoborockHapScheduleAccessory(this, accessory, duid);
 
       this.hapScheduleAccessories.set(duid, schedule);
 

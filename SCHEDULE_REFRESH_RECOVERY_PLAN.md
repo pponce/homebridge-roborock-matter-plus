@@ -173,22 +173,22 @@ Do not unnecessarily redesign or modify:
 
 - [x] Create `schedule-refresh-recovery-clean` from the exact `hap-schedules-scenes` commit.
 - [x] Record the starting commit in this plan.
-- [ ] Verify local checkout is clean and synchronized with the new branch.
-- [ ] Run the baseline release gate before functional changes.
+- [x] Verify local checkout is clean and synchronized with the new branch.
+- [x] Run the baseline release gate before functional changes.
 
 ### Phase 1 — Make the release gate clean
 
 Before or during the first implementation pass:
 
-- [ ] Run `npm run lint:fix`.
-- [ ] Verify typecheck:
-  `tsc --noEmit -p tsconfig.json && tsc -p tsconfig.roborockLib.json`
-- [ ] Verify build:
-  `rimraf ./dist && tsc`
-- [ ] Verify tests:
-  `jest`
-- [ ] Verify formatting:
-  `prettier --check .`
+- [x] Run `npm run lint:fix`.
+- [x] Verify typecheck:
+      `tsc --noEmit -p tsconfig.json && tsc -p tsconfig.roborockLib.json`
+- [x] Verify build:
+      `rimraf ./dist && tsc`
+- [x] Verify tests:
+      `jest`
+- [x] Verify formatting:
+      `prettier --check .`
 - [ ] Keep `dist/` committed and generated from source.
 
 Do not treat a green Jest run as sufficient. Mathias's release gate is the definition of done.
@@ -340,7 +340,16 @@ If a proposed change does not clearly map to this plan, stop and explain why it 
 
 ### Current implementation phase
 
-**Phase 0 — clean baseline established.** No functional changes have been made on this branch yet.
+**Phase 1 baseline complete.** The clean branch has passed the full baseline release gate before functional changes:
+
+- 75 test suites passed
+- 1,120 tests passed
+- typecheck passed
+- build passed
+- Prettier passed
+- `npm run lint:fix` completed successfully
+
+No functional schedule changes have been made yet.
 
 ### Next step
 
