@@ -91,31 +91,63 @@ describe("HomeKit schedule settings contract", () => {
     expect(disabledBlock[1]).not.toContain("hapScheduleAccessories.clear()");
   });
 
-  test("schedule initialization preserves existing switches until discovery succeeds", () => {
+  test("schedule initialization refreshes through the cached coordinator", () => {
     expect(scheduleSource).toMatch(
       /async initialize\(vacuumName: string\): Promise<boolean>/
     );
 
     expect(scheduleSource).toMatch(
-      /Do not remove existing schedule switches before discovery succeeds\.[\s\S]*?const result = await this\.refresh\(\);/
+      /Initial discovery always performs one cloud schedule request\.[\s\S]*?return this\.refresh\(\);/
     );
 
-    expect(scheduleSource).not.toMatch(
-      /async initialize\(vacuumName: string\): Promise<void> \{[\s\S]*?removeService\(service\)/
+    expect(scheduleSource).toMatch(
+      /async refreshIfNeeded\(\): Promise<boolean>[\s\S]*?return this\.cachedSchedules\.length > 0;/
     );
+
+    expect(scheduleSource).not.toContain("startPolling");
+    expect(scheduleSource).not.toContain("stopPolling");
   });
 
-  test("schedule polling uses one refresh operation per vacuum at a three-minute interval", () => {
+  test("schedule refresh uses a 60-second cache and no permanent polling", () => {
+    expect(scheduleSource).toMatch(/const SCHEDULE_CACHE_TTL_MS = 60 \* 1000;/);
+
     expect(scheduleSource).toMatch(
-      /const SCHEDULE_POLL_INTERVAL_MS = 3 \* 60 \* 1000;/
+      /private cachedSchedules: RoborockSchedule\[\] \| undefined;/
+    );
+
+    expect(scheduleSource).toMatch(/private lastScheduleRefreshAt = 0;/);
+
+    expect(scheduleSource).toMatch(
+      /private refreshInProgress: Promise<boolean> \| undefined;/
     );
 
     expect(scheduleSource).toMatch(
-      /this\.pollTimer = setInterval\(\(\) => \{[\s\S]*?this\.refresh\(\)\.catch\(/
+      /async refreshIfNeeded\(\): Promise<boolean>/
+    );
+
+    expect(scheduleSource).toMatch(
+      /this\.refreshInProgress = this\.performRefresh\(\);/
     );
 
     expect(scheduleSource).toMatch(
       /const raw = await getServerTimers\(api, this\.duid, \{/
+    );
+
+    expect(scheduleSource).not.toContain("SCHEDULE_POLL_INTERVAL_MS");
+    expect(scheduleSource).not.toContain("setInterval(");
+    expect(scheduleSource).not.toContain("startPolling");
+    expect(scheduleSource).not.toContain("stopPolling");
+  });
+
+  test("schedule switch GET refreshes the coordinator before returning cached state", () => {
+    expect(scheduleSource).toMatch(
+      /\.onGet\(async \(\) => \{[\s\S]*?await this\.coordinator\.refreshIfNeeded\(\);[\s\S]*?return this\.schedule\.enabled;/
+    );
+  });
+
+  test("verified schedule writes update the coordinator snapshot", () => {
+    expect(scheduleSource).toMatch(
+      /this\.coordinator\.recordScheduleUpdate\(current\);/
     );
   });
 

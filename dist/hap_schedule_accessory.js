@@ -6,7 +6,7 @@ exports.isHapScheduleAccessory = isHapScheduleAccessory;
 const hap_schedule_api_1 = require("./hap_schedule_api");
 const VERIFY_DELAY_MS = 3000;
 const WRITE_SUPPRESSION_MS = 5000;
-const SCHEDULE_POLL_INTERVAL_MS = 3 * 60 * 1000;
+const SCHEDULE_CACHE_TTL_MS = 60 * 1000;
 const SERVICE_PREFIX = "roborock-schedule-";
 exports.HAP_EXTENSION_KIND = "hapExtension";
 exports.HAP_SCHEDULE_EXTENSION = "schedules";
@@ -63,7 +63,7 @@ class RoborockHapScheduleAccessory {
         this.scheduleAccessories = new Map();
         this.vacuumName = "";
         this.managerRemoved = false;
-        this.refreshInProgress = false;
+        this.lastScheduleRefreshAt = 0;
         this.managerAccessory = accessory;
         accessory.context = {
             kind: exports.HAP_EXTENSION_KIND,
@@ -86,23 +86,31 @@ class RoborockHapScheduleAccessory {
         info.setCharacteristic(this.platform.Characteristic.Model, "Roborock Schedules");
         info.setCharacteristic(this.platform.Characteristic.SerialNumber, `${this.duid}:schedules`);
         info.setCharacteristic(this.platform.Characteristic.Name, displayName);
-        // Do not remove existing schedule switches before discovery succeeds.
-        // A transient offline/error response must preserve an already-valid
-        // schedule group.
-        const result = await this.refresh();
-        if (result) {
-            this.startPolling();
+        // Initial discovery always performs one cloud schedule request.
+        // Subsequent HomeKit reads use the cached snapshot until it expires.
+        return this.refresh();
+    }
+    async refreshIfNeeded() {
+        const now = Date.now();
+        if (this.cachedSchedules !== undefined &&
+            now - this.lastScheduleRefreshAt < SCHEDULE_CACHE_TTL_MS) {
+            return this.cachedSchedules.length > 0;
         }
-        else {
-            this.stopPolling();
-        }
-        return result;
+        return this.refresh();
     }
     async refresh() {
         if (this.refreshInProgress) {
-            return this.scheduleAccessories.size > 0;
+            return this.refreshInProgress;
         }
-        this.refreshInProgress = true;
+        this.refreshInProgress = this.performRefresh();
+        try {
+            return await this.refreshInProgress;
+        }
+        finally {
+            this.refreshInProgress = undefined;
+        }
+    }
+    async performRefresh() {
         try {
             const api = this.platform.roborockAPI;
             const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
@@ -114,38 +122,46 @@ class RoborockHapScheduleAccessory {
             if (!Array.isArray(raw)) {
                 this.platform.log.warn(`Unable to reliably read Roborock schedules for ${this.duid}: ` +
                     `get_server_timer returned ${typeof raw}; preserving existing schedules.`);
-                return this.scheduleAccessories.size > 0;
+                return false;
             }
             const schedules = parseServerTimers(raw);
+            this.cachedSchedules = schedules.map((schedule) => ({
+                ...schedule,
+                timer: [...schedule.timer],
+            }));
+            this.lastScheduleRefreshAt = Date.now();
             this.platform.log.info(`Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`);
             this.sync(schedules);
+            // A successful empty snapshot is still a successful refresh and is
+            // cached, but it does not mean that a schedule group should exist.
             return schedules.length > 0;
         }
-        finally {
-            this.refreshInProgress = false;
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.platform.log.warn(`Unable to refresh Roborock schedules for ${this.duid}: ${message}. Preserving existing schedules.`);
+            return false;
         }
     }
-    startPolling() {
-        if (this.pollTimer) {
-            clearInterval(this.pollTimer);
+    recordScheduleUpdate(schedule) {
+        const updated = {
+            ...schedule,
+            timer: [...schedule.timer],
+        };
+        const schedules = this.cachedSchedules
+            ? this.cachedSchedules.map((candidate) => candidate.id === updated.id
+                ? { ...updated }
+                : { ...candidate, timer: [...candidate.timer] })
+            : [updated];
+        if (!schedules.some((candidate) => candidate.id === updated.id)) {
+            schedules.push(updated);
         }
-        this.pollTimer = setInterval(() => {
-            this.refresh().catch((error) => {
-                const message = error instanceof Error ? error.message : String(error);
-                this.platform.log.warn(`Roborock schedule polling failed for ${this.duid}: ${message}. Will retry in ${SCHEDULE_POLL_INTERVAL_MS / 60000} minutes.`);
-            });
-        }, SCHEDULE_POLL_INTERVAL_MS);
-    }
-    stopPolling() {
-        if (!this.pollTimer) {
-            return;
-        }
-        clearInterval(this.pollTimer);
-        this.pollTimer = undefined;
+        this.cachedSchedules = schedules;
+        this.lastScheduleRefreshAt = Date.now();
     }
     dispose() {
-        this.stopPolling();
-        this.refreshInProgress = false;
+        this.refreshInProgress = undefined;
+        this.cachedSchedules = undefined;
+        this.lastScheduleRefreshAt = 0;
         for (const schedule of this.scheduleAccessories.values()) {
             schedule.dispose();
         }
@@ -170,7 +186,7 @@ class RoborockHapScheduleAccessory {
                 existing.updateIdentity(displayName, schedule);
                 continue;
             }
-            const child = new RoborockHapScheduleSwitchAccessory(this.platform, this.managerAccessory, this.duid, schedule.id);
+            const child = new RoborockHapScheduleSwitchAccessory(this.platform, this, this.managerAccessory, this.duid, schedule.id);
             child.initialize(displayName, schedule);
             this.scheduleAccessories.set(schedule.id, child);
             this.platform.log.info(`Schedule sync: ${this.scheduleAccessories.has(schedule.id) ? "restored" : "added"} HAP switch '${displayName}' for ${schedule.id}.`);
@@ -199,8 +215,9 @@ class RoborockHapScheduleAccessory {
 }
 exports.default = RoborockHapScheduleAccessory;
 class RoborockHapScheduleSwitchAccessory {
-    constructor(platform, accessory, duid, scheduleId) {
+    constructor(platform, coordinator, accessory, duid, scheduleId) {
         this.platform = platform;
+        this.coordinator = coordinator;
         this.accessory = accessory;
         this.duid = duid;
         this.scheduleId = scheduleId;
@@ -234,7 +251,10 @@ class RoborockHapScheduleSwitchAccessory {
         service
             .getCharacteristic(this.platform.Characteristic.On)
             .onSet((value) => this.setSchedule(Boolean(value)))
-            .onGet(() => this.schedule.enabled);
+            .onGet(async () => {
+            await this.coordinator.refreshIfNeeded();
+            return this.schedule.enabled;
+        });
         service.updateCharacteristic(this.platform.Characteristic.On, schedule.enabled);
     }
     updateIdentity(displayName, schedule) {
@@ -328,6 +348,7 @@ class RoborockHapScheduleSwitchAccessory {
             return false;
         }
         this.schedule = { ...current, timer: [...current.timer] };
+        this.coordinator.recordScheduleUpdate(current);
         this.updateService(current.enabled);
         return current.enabled === enabled;
     }

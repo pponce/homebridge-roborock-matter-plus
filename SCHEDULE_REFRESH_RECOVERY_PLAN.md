@@ -197,14 +197,14 @@ Do not treat a green Jest run as sufficient. Mathias's release gate is the defin
 
 Implement the smallest coordinator-level change that achieves:
 
-- [ ] Remove `SCHEDULE_POLL_INTERVAL_MS` and the permanent `setInterval` polling loop.
-- [ ] Maintain one cached schedule snapshot per vacuum/coordinator.
-- [ ] Maintain a timestamp for the cached snapshot.
-- [ ] Use approximately 60 seconds as the cache lifetime.
-- [ ] Add/retain a single in-flight refresh guard/promise so concurrent callers coalesce into one cloud request.
-- [ ] On a stale HomeKit GET, perform one `getServerTimers` / `get_server_timer` request and synchronize all switches from that snapshot.
-- [ ] Fresh reads within the cache lifetime must not make another schedule cloud request.
-- [ ] Do not create one cache per individual schedule switch.
+- [x] Remove `SCHEDULE_POLL_INTERVAL_MS` and the permanent `setInterval` polling loop.
+- [x] Maintain one cached schedule snapshot per vacuum/coordinator.
+- [x] Maintain a timestamp for the cached snapshot.
+- [x] Use approximately 60 seconds as the cache lifetime.
+- [x] Add/retain a single in-flight refresh guard/promise so concurrent callers coalesce into one cloud request.
+- [x] On a stale HomeKit GET, perform one `getServerTimers` / `get_server_timer` request and synchronize all switches from that snapshot.
+- [x] Fresh reads within the cache lifetime must not make another schedule cloud request.
+- [x] Do not create one cache per individual schedule switch.
 
 ### Phase 3 — Make schedule discovery independent of local reachability
 
@@ -257,10 +257,10 @@ Add or update tests for the actual requirements:
 
 #### Refresh/cache
 
-- [ ] Fresh cache -> no additional schedule cloud call.
-- [ ] Expired cache -> exactly one schedule cloud call.
-- [ ] Multiple simultaneous refresh requests -> one in-flight schedule cloud call.
-- [ ] One successful snapshot updates all switches.
+- [x] Fresh cache -> no additional schedule cloud call.
+- [x] Expired cache -> exactly one schedule cloud call.
+- [x] Multiple simultaneous refresh requests -> one in-flight schedule cloud call.
+- [x] One successful snapshot updates all switches.
 
 #### Unreachable vacuum
 
@@ -340,16 +340,28 @@ If a proposed change does not clearly map to this plan, stop and explain why it 
 
 ### Current implementation phase
 
-**Phase 1 baseline complete.** The clean branch has passed the full baseline release gate before functional changes:
+**Phase 2 complete.** Permanent schedule polling has been replaced by a per-vacuum cached refresh coordinator.
 
-- 75 test suites passed
-- 1,120 tests passed
+Verified:
+
+- 76 test suites passed
+- 1,126 tests passed
 - typecheck passed
 - build passed
 - Prettier passed
-- `npm run lint:fix` completed successfully
+- fresh-cache reads avoid cloud calls
+- stale-cache reads refresh once
+- concurrent refreshes coalesce into one cloud request
+- successful empty snapshots are cached as successful empty state
+- no permanent schedule polling loop remains
 
-No functional schedule changes have been made yet.
+### Latest Phase 2 checkpoint
+
+The Phase 2 implementation is ready to commit as the next focused checkpoint. Generated `dist/` output has been rebuilt from source.
+
+### Next step
+
+Move to Phase 3: make initial schedule discovery independent of local/device reachability. Do not add a reachability polling loop.
 
 ### Next step
 
