@@ -657,8 +657,8 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       if (schedule) {
         void schedule
           .initialize(target.vacuumName)
-          .then((hasSchedules) => {
-            if (hasSchedules) {
+          .then((result) => {
+            if (!result.success || result.hasSchedules) {
               return;
             }
 
@@ -715,8 +715,13 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
 
       void schedule
         .initialize(target.vacuumName)
-        .then((hasSchedules) => {
-          if (!hasSchedules) {
+        .then((result) => {
+          if (!result.success) {
+            this.hapScheduleAccessories.delete(duid);
+            return;
+          }
+
+          if (!result.hasSchedules) {
             this.hapScheduleAccessories.delete(duid);
             return;
           }

@@ -92,17 +92,20 @@ describe("HomeKit schedule settings contract", () => {
   });
 
   test("schedule initialization refreshes through the cached coordinator", () => {
-    expect(scheduleSource).toMatch(
-      /async initialize\(vacuumName: string\): Promise<boolean>/
+    expect(scheduleSource).toContain("async initialize(");
+    expect(scheduleSource).toContain(
+      "): Promise<RoborockScheduleRefreshResult>"
     );
 
     expect(scheduleSource).toMatch(
-      /Initial discovery always performs one cloud schedule request\.[\s\S]*?return this\.refresh\(\);/
+      /Initial discovery always performs one cloud schedule request\.[\s\S]*?return this\.refreshDetailed\(\);/
     );
 
     expect(scheduleSource).toMatch(
-      /async refreshIfNeeded\(\): Promise<boolean>[\s\S]*?return this\.cachedSchedules\.length > 0;/
+      /async refreshIfNeeded\(\): Promise<boolean>/
     );
+
+    expect(scheduleSource).toContain("return this.cachedSchedules.length > 0;");
 
     expect(scheduleSource).not.toContain("startPolling");
     expect(scheduleSource).not.toContain("stopPolling");
@@ -118,7 +121,7 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).toMatch(/private lastScheduleRefreshAt = 0;/);
 
     expect(scheduleSource).toMatch(
-      /private refreshInProgress: Promise<boolean> \| undefined;/
+      /private refreshInProgress: Promise<RoborockScheduleRefreshResult> \| undefined;/
     );
 
     expect(scheduleSource).toMatch(
@@ -137,6 +140,18 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).not.toContain("setInterval(");
     expect(scheduleSource).not.toContain("startPolling");
     expect(scheduleSource).not.toContain("stopPolling");
+  });
+
+  test("existing schedule groups survive failed refreshes", () => {
+    expect(platformSource).toMatch(
+      /\.initialize\(target\.vacuumName\)[\s\S]*?\.then\(\(result\) => \{[\s\S]*?if \(!result\.success \|\| result\.hasSchedules\) \{[\s\S]*?return;/
+    );
+  });
+
+  test("first-time schedule creation requires a successful non-empty snapshot", () => {
+    expect(platformSource).toMatch(
+      /\.initialize\(target\.vacuumName\)[\s\S]*?if \(!result\.success\) \{[\s\S]*?this\.hapScheduleAccessories\.delete\(duid\);[\s\S]*?if \(!result\.hasSchedules\) \{/
+    );
   });
 
   test("schedule switch GET refreshes the coordinator before returning cached state", () => {

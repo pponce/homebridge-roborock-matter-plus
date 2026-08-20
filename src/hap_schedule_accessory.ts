@@ -28,6 +28,11 @@ export interface RoborockSchedule {
   timer: unknown[];
 }
 
+export interface RoborockScheduleRefreshResult {
+  success: boolean;
+  hasSchedules: boolean;
+}
+
 export function parseServerTimers(value: unknown): RoborockSchedule[] {
   if (!Array.isArray(value)) return [];
 
@@ -91,7 +96,7 @@ export default class RoborockHapScheduleAccessory {
   private managerRemoved = false;
   private cachedSchedules: RoborockSchedule[] | undefined;
   private lastScheduleRefreshAt = 0;
-  private refreshInProgress: Promise<boolean> | undefined;
+  private refreshInProgress: Promise<RoborockScheduleRefreshResult> | undefined;
 
   constructor(
     private readonly platform: RoborockPlatform,
@@ -106,7 +111,7 @@ export default class RoborockHapScheduleAccessory {
     } satisfies HapScheduleContext;
   }
 
-  async initialize(vacuumName: string): Promise<boolean> {
+  async initialize(vacuumName: string): Promise<RoborockScheduleRefreshResult> {
     this.vacuumName = vacuumName;
 
     const displayName = `${vacuumName} Schedules`;
@@ -142,7 +147,7 @@ export default class RoborockHapScheduleAccessory {
 
     // Initial discovery always performs one cloud schedule request.
     // Subsequent HomeKit reads use the cached snapshot until it expires.
-    return this.refresh();
+    return this.refreshDetailed();
   }
 
   async refreshIfNeeded(): Promise<boolean> {
@@ -159,6 +164,11 @@ export default class RoborockHapScheduleAccessory {
   }
 
   async refresh(): Promise<boolean> {
+    const result = await this.refreshDetailed();
+    return result.hasSchedules;
+  }
+
+  private async refreshDetailed(): Promise<RoborockScheduleRefreshResult> {
     if (this.refreshInProgress) {
       return this.refreshInProgress;
     }
@@ -172,7 +182,7 @@ export default class RoborockHapScheduleAccessory {
     }
   }
 
-  private async performRefresh(): Promise<boolean> {
+  private async performRefresh(): Promise<RoborockScheduleRefreshResult> {
     try {
       const api = this.platform.roborockAPI as any;
       const raw = await getServerTimers(api, this.duid, {
@@ -190,7 +200,10 @@ export default class RoborockHapScheduleAccessory {
           `Unable to reliably read Roborock schedules for ${this.duid}: ` +
             `get_server_timer returned ${typeof raw}; preserving existing schedules.`
         );
-        return false;
+        return {
+          success: false,
+          hasSchedules: this.scheduleAccessories.size > 0,
+        };
       }
 
       const schedules = parseServerTimers(raw);
@@ -207,15 +220,21 @@ export default class RoborockHapScheduleAccessory {
 
       this.sync(schedules);
 
-      // A successful empty snapshot is still a successful refresh and is
-      // cached, but it does not mean that a schedule group should exist.
-      return schedules.length > 0;
+      // A successful empty snapshot is authoritative information. It is
+      // different from a failed/untrusted cloud response.
+      return {
+        success: true,
+        hasSchedules: schedules.length > 0,
+      };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.platform.log.warn(
         `Unable to refresh Roborock schedules for ${this.duid}: ${message}. Preserving existing schedules.`
       );
-      return false;
+      return {
+        success: false,
+        hasSchedules: this.scheduleAccessories.size > 0,
+      };
     }
   }
 

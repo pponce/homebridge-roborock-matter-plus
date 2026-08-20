@@ -88,7 +88,7 @@ class RoborockHapScheduleAccessory {
         info.setCharacteristic(this.platform.Characteristic.Name, displayName);
         // Initial discovery always performs one cloud schedule request.
         // Subsequent HomeKit reads use the cached snapshot until it expires.
-        return this.refresh();
+        return this.refreshDetailed();
     }
     async refreshIfNeeded() {
         const now = Date.now();
@@ -99,6 +99,10 @@ class RoborockHapScheduleAccessory {
         return this.refresh();
     }
     async refresh() {
+        const result = await this.refreshDetailed();
+        return result.hasSchedules;
+    }
+    async refreshDetailed() {
         if (this.refreshInProgress) {
             return this.refreshInProgress;
         }
@@ -122,7 +126,10 @@ class RoborockHapScheduleAccessory {
             if (!Array.isArray(raw)) {
                 this.platform.log.warn(`Unable to reliably read Roborock schedules for ${this.duid}: ` +
                     `get_server_timer returned ${typeof raw}; preserving existing schedules.`);
-                return false;
+                return {
+                    success: false,
+                    hasSchedules: this.scheduleAccessories.size > 0,
+                };
             }
             const schedules = parseServerTimers(raw);
             this.cachedSchedules = schedules.map((schedule) => ({
@@ -132,14 +139,20 @@ class RoborockHapScheduleAccessory {
             this.lastScheduleRefreshAt = Date.now();
             this.platform.log.info(`Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`);
             this.sync(schedules);
-            // A successful empty snapshot is still a successful refresh and is
-            // cached, but it does not mean that a schedule group should exist.
-            return schedules.length > 0;
+            // A successful empty snapshot is authoritative information. It is
+            // different from a failed/untrusted cloud response.
+            return {
+                success: true,
+                hasSchedules: schedules.length > 0,
+            };
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             this.platform.log.warn(`Unable to refresh Roborock schedules for ${this.duid}: ${message}. Preserving existing schedules.`);
-            return false;
+            return {
+                success: false,
+                hasSchedules: this.scheduleAccessories.size > 0,
+            };
         }
     }
     recordScheduleUpdate(schedule) {

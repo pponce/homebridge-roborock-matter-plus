@@ -136,6 +136,34 @@ describe("HAP schedule coordinator cache", () => {
     expect(coordinator.sync).toHaveBeenCalledTimes(1);
   });
 
+  test("failed refresh preserves existing schedule accessories", async () => {
+    const coordinator = makeCoordinator();
+
+    const existingSchedule = {
+      id: "timer-existing",
+      enabled: true,
+      timer: ["timer-existing", "on"],
+    };
+
+    const existingChild = {
+      updateIdentity: jest.fn(),
+      dispose: jest.fn(),
+    };
+
+    coordinator.scheduleAccessories.set(existingSchedule.id, existingChild);
+
+    getServerTimers.mockRejectedValue(new Error("cloud timeout"));
+
+    await expect(coordinator.refresh()).resolves.toBe(true);
+
+    expect(getServerTimers).toHaveBeenCalledTimes(1);
+    expect(coordinator.sync).not.toHaveBeenCalled();
+    expect(coordinator.scheduleAccessories.has("timer-existing")).toBe(true);
+    expect(coordinator.scheduleAccessories.get("timer-existing")).toBe(
+      existingChild
+    );
+  });
+
   test("successful empty snapshot is cached as empty", async () => {
     const coordinator = makeCoordinator();
 

@@ -474,8 +474,8 @@ class RoborockPlatform {
             if (schedule) {
                 void schedule
                     .initialize(target.vacuumName)
-                    .then((hasSchedules) => {
-                    if (hasSchedules) {
+                    .then((result) => {
+                    if (!result.success || result.hasSchedules) {
                         return;
                     }
                     const accessory = this.accessories.find((candidate) => candidate.UUID ===
@@ -505,8 +505,12 @@ class RoborockPlatform {
             this.hapScheduleAccessories.set(duid, schedule);
             void schedule
                 .initialize(target.vacuumName)
-                .then((hasSchedules) => {
-                if (!hasSchedules) {
+                .then((result) => {
+                if (!result.success) {
+                    this.hapScheduleAccessories.delete(duid);
+                    return;
+                }
+                if (!result.hasSchedules) {
                     this.hapScheduleAccessories.delete(duid);
                     return;
                 }
