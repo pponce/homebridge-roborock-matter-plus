@@ -142,15 +142,25 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).not.toContain("stopPolling");
   });
 
-  test("existing schedule groups survive failed refreshes", () => {
+  test("restored schedule groups are removed when initial refresh fails", () => {
     expect(platformSource).toMatch(
-      /\.initialize\(target\.vacuumName\)[\s\S]*?\.then\(\(result\) => \{[\s\S]*?if \(!result\.success \|\| result\.hasSchedules\) \{[\s\S]*?return;/
+      /if \(schedule\) \{[\s\S]*?\.initialize\(target\.vacuumName\)[\s\S]*?if \(result\.success && result\.hasSchedules\) \{[\s\S]*?return;[\s\S]*?this\.removeHapScheduleAccessory\(duid, accessory\);/
     );
   });
 
   test("first-time schedule creation requires a successful non-empty snapshot", () => {
     expect(platformSource).toMatch(
       /\.initialize\(target\.vacuumName\)[\s\S]*?if \(!result\.success\) \{[\s\S]*?this\.hapScheduleAccessories\.delete\(duid\);[\s\S]*?if \(!result\.hasSchedules\) \{/
+    );
+  });
+
+  test("failed restored schedule discovery unregisters the cached accessory", () => {
+    expect(platformSource).toMatch(
+      /if \(schedule\) \{[\s\S]*?if \(result\.success && result\.hasSchedules\) \{[\s\S]*?this\.removeHapScheduleAccessory\(duid, accessory\);/
+    );
+
+    expect(platformSource).toMatch(
+      /private removeHapScheduleAccessory\([\s\S]*?unregisterPlatformAccessories/
     );
   });
 

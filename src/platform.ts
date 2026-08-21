@@ -662,33 +662,31 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         void schedule
           .initialize(target.vacuumName)
           .then((result) => {
-            if (!result.success || result.hasSchedules) {
+            if (result.success && result.hasSchedules) {
               return;
             }
 
             const accessory = this.accessories.find(
               (candidate) =>
                 candidate.UUID ===
-                this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`)
+                  this.api.hap.uuid.generate(
+                    `hap:roborock:schedules:${duid}`
+                  ) && isHapScheduleAccessory(candidate)
             );
 
-            if (!accessory) {
-              return;
-            }
-
-            const index = this.accessories.indexOf(accessory);
-            if (index >= 0) {
-              this.accessories.splice(index, 1);
-            }
-
-            this.hapScheduleAccessories.delete(duid);
-            this.api.unregisterPlatformAccessories(
-              HAP_PLUGIN_IDENTIFIER,
-              PLATFORM_NAME,
-              [accessory]
-            );
+            this.removeHapScheduleAccessory(duid, accessory);
           })
           .catch((error: unknown) => {
+            const accessory = this.accessories.find(
+              (candidate) =>
+                candidate.UUID ===
+                  this.api.hap.uuid.generate(
+                    `hap:roborock:schedules:${duid}`
+                  ) && isHapScheduleAccessory(candidate)
+            );
+
+            this.removeHapScheduleAccessory(duid, accessory);
+
             this.log.debug(
               `Unable to refresh Roborock schedules for ${target.vacuumName}: ${
                 error instanceof Error ? error.message : String(error)
@@ -748,9 +746,8 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         })
         .catch((error: unknown) => {
           // A first-time offline/error response must not create a broken
-          // "Not Supported" schedule tile. Only an already-registered
-          // schedule group survives transient discovery errors.
-          this.hapScheduleAccessories.delete(duid);
+          // "Not Supported" schedule tile.
+          this.removeHapScheduleAccessory(duid, accessory);
 
           this.log.error(
             `Unable to initialize Roborock schedules for ${target.vacuumName}: ${
@@ -758,6 +755,28 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
             }`
           );
         });
+    }
+  }
+
+  private removeHapScheduleAccessory(
+    duid: string,
+    accessory?: PlatformAccessory
+  ): void {
+    this.hapScheduleAccessories.get(duid)?.dispose();
+    this.hapScheduleAccessories.delete(duid);
+
+    if (!accessory) {
+      return;
+    }
+
+    const index = this.accessories.indexOf(accessory);
+    if (index >= 0) {
+      this.accessories.splice(index, 1);
+      this.api.unregisterPlatformAccessories(
+        HAP_PLUGIN_IDENTIFIER,
+        PLATFORM_NAME,
+        [accessory]
+      );
     }
   }
 
