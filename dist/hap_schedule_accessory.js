@@ -122,11 +122,16 @@ class RoborockHapScheduleAccessory {
     }
     async refreshDetailed() {
         if (this.refreshInProgress) {
+            this.platform.log.info(`Schedule refreshDetailed: JOINING existing refresh`);
             return this.refreshInProgress;
         }
+        this.platform.log.info(`Schedule refreshDetailed: STARTING new refresh`);
         this.refreshInProgress = this.performRefresh();
         try {
-            return await this.refreshInProgress;
+            const result = await this.refreshInProgress;
+            this.platform.log.info(`Schedule refreshDetailed: REFRESH COMPLETE; ` +
+                `success=${result.success}; hasSchedules=${result.hasSchedules}`);
+            return result;
         }
         finally {
             this.refreshInProgress = undefined;
