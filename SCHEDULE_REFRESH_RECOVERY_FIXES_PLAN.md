@@ -1,5 +1,32 @@
 # Schedule Refresh & Recovery Fixes Plan
 
+## Progress update — 2026-08-21
+
+### Verified implementation and real-device results
+
+The first recovery phase is now implemented and validated locally and on the real Homebridge installation.
+
+- **HomeKit GET is non-blocking.** The schedule switch GET starts `refreshIfNeeded()` asynchronously and immediately returns the cached schedule state.
+- **One cached snapshot + one in-flight refresh per vacuum.** Real HomeKit testing produced many simultaneous schedule GETs, but the coordinator coalesced them into one refresh/cloud request per vacuum and synchronized all schedule switches from the resulting snapshot.
+- **Successful refreshes update the shared schedule snapshot and synchronize all HAP schedule switches.**
+- **Failed refreshes preserve the existing cached schedule/accessories.**
+- **Failure backoff / negative caching is active at 30 seconds.** During a real Roborock MQTT/cloud timeout, repeated HomeKit reads returned the preserved cached state and entered `FAILURE BACKOFF` rather than issuing additional cloud requests.
+- **Real-device failure test passed.** Both vacuums experienced `get_server_timer` cloud timeouts, preserved their existing schedule state, and suppressed repeated refreshes during the backoff window.
+- **Schedule-switch disable/restart validation passed.** With `enableHomeKitScheduleSwitches=false`, Homebridge restarted successfully without rediscovering/restoring schedule switches.
+- **Targeted schedule tests:** 21/21 passed.
+- **Full test suite:** 86/86 suites passed, 1,337/1,337 tests passed.
+- **Build/typecheck:** passed.
+
+### Remaining recovery items
+
+The following plan items remain intentionally open and have not yet been marked complete:
+
+- Failed first discovery must not leave dead/nonfunctional restored schedule accessories.
+- `upd_timer` fallback must actually send the command.
+- Non-empty but unparsable schedule responses must be treated as untrusted and must preserve the cached snapshot.
+- Final end-to-end validation of recovery after the failure/backoff window expires is still pending on real hardware.
+
+
 This is the **active handoff plan** for the follow-up work requested by Mathias after his review of `schedule-refresh-recovery-clean`.
 
 The historical first-phase record is `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. Do not use that file as the active follow-up plan.
@@ -238,10 +265,10 @@ After the local gate passes and the branch is pushed:
 
 ## Definition of done
 
-- [ ] HomeKit GET never waits for Roborock cloud.
-- [ ] Failed refreshes acquire negative-cache/backoff state.
+- [x] HomeKit GET never waits for Roborock cloud.
+- [x] Failed refreshes acquire negative-cache/backoff state.
 - [ ] Failed first discovery cannot leave silently nonfunctional restored accessories.
-- [ ] Disabling schedules reliably removes schedule accessories, including after restart.
+- [x] Disabling schedules reliably removes schedule accessories, including after restart.
 - [ ] `upd_timer` fallback actually sends the command.
 - [ ] Non-empty/unparsable responses never erase the cached schedule set.
 - [ ] Successful empty responses remain authoritative.
