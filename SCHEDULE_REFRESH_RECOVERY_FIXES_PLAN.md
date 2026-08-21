@@ -390,18 +390,18 @@ After the local gate passes and the branch is pushed:
 - [x] Successful empty responses remain authoritative.
 - [x] Concurrent reads coalesce to one in-flight refresh per vacuum.
 - [x] ConfiguredName is not repeatedly overwritten by unchanged schedule refreshes.
-- [ ] Schedule ordering is deterministic.
+- [x] Schedule ordering is deterministic.
 - [x] `verify()` participates correctly in the coordinator/coalescing model.
 - [ ] Disposed coordinators cannot sync after teardown.
-- [ ] Coordinator timers use the shared timer utility.
-- [ ] Routine schedule payload logging is debug-level rather than info-level.
-- [ ] Q7 neutral `get_server_timer` behavior is documented.
-- [ ] Targeted regression tests pass for the completed follow-up scope.
-- [ ] Full typecheck/build/test/lint gate passes.
-- [ ] Generated `dist/` matches the tested source.
-- [ ] Tested branch is pushed before real-device installation.
+- [x] Coordinator timers use the shared timer utility.
+- [x] Routine schedule payload logging is debug-level rather than info-level.
+- [x] Q7 neutral `get_server_timer` behavior is documented.
+- [x] Targeted regression tests pass for the completed follow-up scope.
+- [x] Full typecheck/build/test/lint gate passes.
+- [x] Generated `dist/` matches the tested source.
+- [x] Tested branch is pushed before real-device installation.
 - [ ] Real Homebridge/HomeKit validation passes for the completed follow-up scope.
-- [ ] No permanent schedule polling is introduced.
+- [x] No permanent schedule polling is introduced.
 
 ## Next-chat continuity
 
@@ -413,4 +413,4 @@ The three important branches remain:
 - `schedule-refresh-recovery-clean` = completed first-phase work.
 - `schedule-refresh-recovery-fixes` = current follow-up work.
 
-The next implementation work should proceed one focused item at a time, starting with **non-empty but unparsable schedule responses**. Keep changes local, tests local, pushes deliberate, and real-device testing only after the tested branch is on GitHub.
+The next implementation work should proceed one focused item at a time, starting with **disposed coordinator teardown safety**. Keep changes local, tests local, pushes deliberate, and real-device testing only after the tested branch is on GitHub.
