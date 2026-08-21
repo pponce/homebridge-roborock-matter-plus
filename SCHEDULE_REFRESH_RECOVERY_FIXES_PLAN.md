@@ -359,11 +359,6 @@ Focused schedule/Roborock log inspection:
 sudo tail -F /var/lib/homebridge/homebridge.log | grep --line-buffered -E "Schedule (discovery|parser|sync|command|refresh)|Roborock"
 ```
 
-Real validation setup includes two Roborock vacuums:
-
-- `66xmjtyk5YgGyXD9epni7Y`
-- `5QNhUVywYYnWc2pPBk3URp`
-
 Other active plugins produce substantial unrelated log traffic, so focused filtering is preferred.
 
 ## Tests
