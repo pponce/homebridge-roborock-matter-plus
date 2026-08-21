@@ -55,18 +55,25 @@ This recovery item is now implemented, regression-tested, and pushed.
 - Changed-file formatting: **passed**.
 - Tested commit pushed to `schedule-refresh-recovery-fixes`: `61ff89a`.
 
+### Progress update — Batch A smaller review fixes
+
+The following smaller Mathias review items are now implemented, regression-tested, and pushed as commit `0b0b660`:
+
+- **ConfiguredName preservation:** repeated successful schedule refreshes no longer overwrite a HomeKit-side rename when the configured name has changed.
+- **Deterministic schedule ordering:** parsed schedules are sorted by stable schedule ID before display numbering is assigned.
+- **Shared timer utility:** delayed schedule verification now uses `scheduleTimer()` and `unrefTimer()` from `src/timers.ts`.
+- **Routine logging cleanup:** schedule discovery/sync payload logging and routine platform discovery logging were moved from `info` to `debug`.
+- **Q7 documentation:** the neutral `get_server_timer` response is explicitly documented as a synthesized empty response for the Q7/B01 protocol.
+- **Regression coverage:** the focused schedule tests now cover the new contracts.
+- **Validation:** 29/29 targeted tests passed; full suite **86/86 suites, 1,344/1,344 tests** passed; typecheck, build, and changed-file formatting all passed.
+
 ### Remaining recovery items
 
 The following items remain intentionally open and have not yet been marked complete:
 
 - Final end-to-end validation of recovery after the failure/backoff window expires is still pending on real hardware.
-- Preserve HomeKit `ConfiguredName` across unchanged schedule refreshes.
-- Make schedule ordering deterministic.
 - Make `verify()` participate correctly in the coordinator refresh/coalescing model.
 - Prevent disposed coordinators from syncing after teardown.
-- Route coordinator timers through the shared timer utility.
-- Move routine schedule payload logging from `info` to `debug`.
-- Document the Q7 neutral `get_server_timer` response.
 
 This is the **active handoff plan** for the follow-up work requested by Mathias after his review of `schedule-refresh-recovery-clean`.
 
@@ -79,7 +86,7 @@ The historical first-phase record is `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. Do not
 - Completed first phase: `schedule-refresh-recovery-clean`
 - Active follow-up branch: `schedule-refresh-recovery-fixes`
 - Follow-up branch is based on `schedule-refresh-recovery-clean` with Mathias 3.15.3 merged on top.
-- Current branch tip: `61ff89a`
+- Current branch tip: `0b0b660`
 - Pre-fix functional baseline: merge `9a7cd13`, with 86 suites / 1336 tests passing.
 
 ## Mathias's required fixes
@@ -367,7 +374,7 @@ After the local gate passes and the branch is pushed:
 - [x] Non-empty/unparsable responses never erase the cached schedule set.
 - [x] Successful empty responses remain authoritative.
 - [x] Concurrent reads coalesce to one in-flight refresh per vacuum.
-- [ ] ConfiguredName is not repeatedly overwritten by unchanged schedule refreshes.
+- [x] ConfiguredName is not repeatedly overwritten by unchanged schedule refreshes.
 - [ ] Schedule ordering is deterministic.
 - [ ] `verify()` participates correctly in the coordinator/coalescing model.
 - [ ] Disposed coordinators cannot sync after teardown.
