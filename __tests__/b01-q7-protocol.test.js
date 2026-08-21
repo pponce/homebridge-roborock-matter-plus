@@ -1313,18 +1313,22 @@ describe("Service Area cleaning progress (the 'Forbereder' fix)", () => {
     ]);
   });
 
-  test("a full-home clean publishes the whole run scope as pending, then completed", () => {
+  test("a full-home clean publishes the whole run scope as operating, then completed", () => {
+    // Operating, not pending, and the reasoning is in the source: pending
+    // asserts the robot has not started any of these rooms, which Apple Home
+    // renders as "still heading there" for the entire run. Reported twice by
+    // 2 users (#8, #9) against the all-pending encoding 2.3.1 shipped.
     const vacuum = createRoomVacuum();
     vacuum.beginServiceAreaProgress([10]);
     vacuum.beginFullCleanServiceAreaProgress();
 
     let cluster = vacuum.buildServiceAreaCluster();
-    // No area is claimed as current (the robot does not report its room),
-    // but the run's scope is real progress data for the controller.
+    // Still no area claimed as CURRENT — that would name a room we are not
+    // sure of, and naming the wrong one is worse than naming none.
     expect(cluster.currentArea).toBeNull();
     expect(cluster.progress).toEqual([
-      { areaId: 10, status: 0 }, // pending
-      { areaId: 11, status: 0 },
+      { areaId: 10, status: 1 }, // operating
+      { areaId: 11, status: 1 },
     ]);
     expect(cluster.estimatedEndTime).toBeNull();
 
@@ -1336,6 +1340,10 @@ describe("Service Area cleaning progress (the 'Forbereder' fix)", () => {
       { areaId: 11, status: 3 },
     ]);
   });
+
+  // The collapse to a single room once live tracking resolves one is covered
+  // by "full clean: detected rooms become operating, left rooms completed" in
+  // __tests__/b01-live-room.test.js, which has the live-room stub wired up.
 
   test("a full-home clean without exposed rooms keeps the progress list empty", () => {
     const platform = createMatterPlatformB01();
@@ -1351,6 +1359,104 @@ describe("Service Area cleaning progress (the 'Forbereder' fix)", () => {
     );
     vacuum.beginFullCleanServiceAreaProgress();
     expect(vacuum.buildServiceAreaCluster().progress).toEqual([]);
+  });
+});
+
+// 3.15.1 marked the run scope operating so Apple Home would stop saying the
+// robot was still on its way. It only did so from the Matter/HAP start
+// handler, so it only ever fired for runs started in Apple Home — and most
+// runs are not. A Roborock-app clean, an app-side schedule, the button on the
+// lid and a voice assistant all reach the plugin as a *status change* and
+// nothing else, which left the progress list empty (or stale-completed from
+// the last Apple Home run) for the whole run: exactly the symptom #8 and #9
+// reported. Completion was already status-driven; only the start was not.
+describe("A run the plugin did not start is still a run", () => {
+  function createRoomVacuum() {
+    const platform = createMatterPlatformB01();
+    platform.platformConfig.enableMatterServiceArea = true;
+    platform.roborockAPI.getRoomMappingsForDevice = () => [
+      { segmentId: 10, mapId: 0, name: "Stue" },
+      { segmentId: 11, mapId: 0, name: "Gæsteværelse" },
+    ];
+    platform.getMatterApi = () => ({ updateAccessoryState: async () => {} });
+    const RoborockMatterVacuumAccessory =
+      require("../src/matter_vacuum_accessory").default;
+    // Registered: a status frame only reaches the publish path on a live
+    // accessory, which is the whole point of a run nobody commanded.
+    return new RoborockMatterVacuumAccessory(
+      platform,
+      { UUID: "uuid-q7", context: { duid: "duid-q7" } },
+      { duid: "duid-q7" },
+      true
+    );
+  }
+
+  async function reportStatus(vacuum, state) {
+    await vacuum.notifyDeviceUpdater("CloudMessage", {
+      duid: "duid-q7",
+      payload: [{ state, battery: 100, error_code: 0, charge_status: 0 }],
+    });
+  }
+
+  test("a clean started outside Apple Home publishes the run scope as operating", async () => {
+    const vacuum = createRoomVacuum();
+    expect(vacuum.buildServiceAreaCluster().progress).toEqual([]);
+
+    // State 5 = Cleaning. No Matter command, no HAP switch, no start line in
+    // the log: the robot simply reports that it is cleaning.
+    await reportStatus(vacuum, 5);
+
+    const cluster = vacuum.buildServiceAreaCluster();
+    expect(cluster.progress).toEqual([
+      { areaId: 10, status: 1 }, // operating
+      { areaId: 11, status: 1 },
+    ]);
+    // Still no room named that we are not sure of.
+    expect(cluster.currentArea).toBeNull();
+  });
+
+  test("a finished run does not keep a stale completed list through the next external run", async () => {
+    const vacuum = createRoomVacuum();
+    vacuum.beginServiceAreaProgress([10, 11]);
+    vacuum.completeServiceAreaProgressIfDone(65); // back on the charger
+    expect(vacuum.buildServiceAreaCluster().progress).toEqual([
+      { areaId: 10, status: 3 },
+      { areaId: 11, status: 3 },
+    ]);
+
+    await reportStatus(vacuum, 5);
+
+    expect(vacuum.buildServiceAreaCluster().progress).toEqual([
+      { areaId: 10, status: 1 },
+      { areaId: 11, status: 1 },
+    ]);
+  });
+
+  test("a dock chore is not a clean and must not claim the whole house", async () => {
+    const vacuum = createRoomVacuum();
+
+    // 23 = washing the mop, 22 = emptying the dust bin. Both are cleaning run
+    // modes as far as the run-mode cluster is concerned, and with extended
+    // states off they are even rewritten to RUNNING — so the guard has to read
+    // the robot's own state, not the gated one.
+    await reportStatus(vacuum, 23);
+    expect(vacuum.buildServiceAreaCluster().progress).toEqual([]);
+
+    await reportStatus(vacuum, 22);
+    expect(vacuum.buildServiceAreaCluster().progress).toEqual([]);
+  });
+
+  test("a room clean picked in Apple Home is not widened to the whole house", async () => {
+    const vacuum = createRoomVacuum();
+    vacuum.beginServiceAreaProgress([11]);
+
+    // The status poll that follows an Apple Home room clean must leave the
+    // narrower, better-known scope alone.
+    await reportStatus(vacuum, 18); // 18 = Room Clean
+
+    const cluster = vacuum.buildServiceAreaCluster();
+    expect(cluster.progress).toEqual([{ areaId: 11, status: 1 }]);
+    expect(cluster.currentArea).toBe(11);
   });
 });
 

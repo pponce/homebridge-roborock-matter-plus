@@ -37,7 +37,7 @@ This is the most feature-packed, most thoroughly engineered Roborock plugin for 
 - 📍 **See where it's cleaning — live.** Apple Home shows _"Cleaning — Kitchen"_ with the room the robot is actually inside, updating as it moves from room to room. Works even for cleans started from the robot's button or the Roborock app. No other Homebridge plugin does this.
 - 🧭 **One robot, one tile — and as many robots as you own.** Sign in once and your whole fleet comes along: every vacuum on your account appears as its own clean, native accessory in Apple Home. No clutter of fake fans and helper switches, and rooms appear with the names you gave them in the Roborock app.
 - ⚡ **Fast and reliable.** Commands go directly to the robot over your own network whenever possible, with the Roborock cloud as automatic backup — and built-in diagnostics in the settings if you ever want to look under the hood.
-- 🛡️ **Verified by Homebridge.** Reviewed and endorsed by the Homebridge team. 1288 automated tests, zero known vulnerabilities, no analytics, and a startup designed to never crash your Homebridge — even when your Wi-Fi or the Roborock cloud has a bad day.
+- 🛡️ **Verified by Homebridge.** Reviewed and endorsed by the Homebridge team. 1315 automated tests, zero known vulnerabilities, no analytics, and a startup designed to never crash your Homebridge — even when your Wi-Fi or the Roborock cloud has a bad day.
 
 ## Features
 
@@ -166,7 +166,9 @@ The list is either that fixed set of 4 or absent entirely, and never anything el
 
 Drying is detected on both protocols. A classic S- or Q-series robot with a drying dock reports it itself; a B01/Q7 reports its own air-drying status, which the plugin previously discarded when it mapped that state to "docked" so the tile would not claim the robot was busy. It still maps it that way — a drying dock must not look like a working robot, or Apple Home may refuse it a Start command — but the fact now survives the mapping as a phase.
 
-**Whether your controller draws a phase is unmeasured.** Nothing is lost if it does not: an attribute nobody reads costs nothing, and there is no other route to this information at all. If a tile misbehaves, `enableMatterDockPhases: false` in `config.json` puts both attributes back to null.
+**Measured, and the answer is no — on every controller checked so far.** Apple Home renders `OperationalState`, including its optional values, and ignores `CurrentPhase` entirely: an S8 Pro Ultra caught all 3 dock jobs in one cycle, and the 2 that appeared on the tile were exactly the 2 that have an operational state of their own, while drying — which travels only as a phase — appeared nowhere. Home Assistant's Matter vacuum integration asks for one attribute from this cluster, `OperationalState`, and never reads the phase either.
+
+The phases are published anyway. They are correct, they are mandatory in the cluster, and an attribute nobody reads costs nothing. But they are not currently a route to anything, so do not choose this plugin expecting to see drying on a tile. If one misbehaves, `enableMatterDockPhases: false` in `config.json` puts both attributes back to null.
 
 ## Automations in Apple Home
 
@@ -240,7 +242,7 @@ The complete path — robot → plugin → Homebridge → matter.js store — wa
 
 ## Contributing
 
-Model reports, diagnostics exports, and pull requests are very welcome. The codebase ships with 1288 tests (protocol fixtures verified against the [python-roborock](https://github.com/Python-roborock/python-roborock) reference), strict TypeScript checking, and CI across Node 22/24 × Homebridge 1.11/2.x — `npm test` before you push and you're set.
+Model reports, diagnostics exports, and pull requests are very welcome. The codebase ships with 1315 tests (protocol fixtures verified against the [python-roborock](https://github.com/Python-roborock/python-roborock) reference), strict TypeScript checking, and CI across Node 22/24 × Homebridge 1.11/2.x — `npm test` before you push and you're set.
 
 ## Support the project
 
