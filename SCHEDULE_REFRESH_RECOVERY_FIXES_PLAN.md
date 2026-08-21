@@ -98,11 +98,40 @@ The coordinator teardown race is now guarded and regression-tested.
 - Changed-file formatting: **passed**.
 - Tested commit pushed to `schedule-refresh-recovery-fixes`: `c8a3531`.
 
+### Progress update — Batch D logging cleanup
+
+The schedule coordinator's routine cache logging has been reduced so normal HomeKit reads no longer flood the Homebridge log.
+
+- Repeated `refreshIfNeeded()` entry, cache-hit, and refresh-dispatch messages now use `debug` rather than `info`.
+- The `FAILURE BACKOFF` message remains at `info` because it is an operational recovery signal.
+- Successful schedule parser results remain visible at `info`.
+- Added focused contract coverage proving routine cache decisions stay at debug level.
+- Targeted schedule tests: **35/35 passed**.
+- Full repository test suite: **86/86 suites, 1,350/1,350 tests passed**.
+- Typecheck: **passed**.
+- Build: **passed**.
+- Changed-file formatting: **passed**.
+- Tested commit pushed to `schedule-refresh-recovery-fixes`: `6712824`.
+
+### Real-device validation — transport outage and recovery evidence
+
+Controlled real-device testing was performed against the actual Roborock transport paths.
+
+- Downtown Rock LAN endpoint: `192.168.69.140:58867`.
+- Roborock MQTT broker: `3.220.78.185:8883`.
+- A controlled outage blocked the relevant transport paths during Homebridge restart/testing.
+- During the outage, schedule refreshes preserved the existing schedule state rather than erasing the HomeKit schedule switches.
+- After transport restoration, successful schedule parsing again reported **7 Downtown Rock schedules** and **8 Uptown Rock schedules**, demonstrating eventual schedule recovery.
+- The testing also confirmed that normal HomeKit access can generate many coordinator reads while cache hits avoid additional cloud refreshes.
+- The exact post-backoff refresh attributable solely to one isolated HomeKit read was not independently isolated from other Homebridge polling/startup activity, so that narrow causal claim remains unproven.
+
 ### Remaining recovery items
 
-The remaining work is validation only:
+The implementation work is complete.
 
-- Final end-to-end recovery validation after the failure/backoff window expires is still pending on real hardware.
+- Real-device failure preservation and eventual schedule recovery have been demonstrated.
+- The narrowly isolated case of a single HomeKit read being the sole trigger for a post-backoff refresh was not independently proven because other Homebridge activity was present during the recovery window.
+- No additional implementation work is currently planned unless further real-device testing exposes a defect.
 
 This is the **active handoff plan** for the follow-up work requested by Mathias after his review of `schedule-refresh-recovery-clean`.
 
@@ -115,7 +144,7 @@ The historical first-phase record is `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. Do not
 - Completed first phase: `schedule-refresh-recovery-clean`
 - Active follow-up branch: `schedule-refresh-recovery-fixes`
 - Follow-up branch is based on `schedule-refresh-recovery-clean` with Mathias 3.15.3 merged on top.
-- Current branch tip: `c8a3531`
+- Current branch tip: `6712824`
 - Pre-fix functional baseline: merge `9a7cd13`, with 86 suites / 1336 tests passing.
 
 ## Mathias's required fixes
@@ -427,4 +456,4 @@ The three important branches remain:
 - `schedule-refresh-recovery-clean` = completed first-phase work.
 - `schedule-refresh-recovery-fixes` = current follow-up work.
 
-The implementation work is complete. The next step is final real-device end-to-end validation of recovery after the failure/backoff window expires. Keep real-device testing focused and do not change unrelated Homebridge configuration.
+The implementation work is complete through Batch D. Real-device failure preservation and eventual schedule recovery have been demonstrated. No further implementation work is planned unless a new defect is observed. Keep any additional validation focused and do not change unrelated Homebridge configuration.
