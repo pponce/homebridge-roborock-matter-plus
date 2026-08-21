@@ -7,7 +7,7 @@
 The first recovery phase is now implemented and validated locally and on the real Homebridge installation.
 
 - **HomeKit GET is non-blocking.** The schedule switch GET starts `refreshIfNeeded()` asynchronously and immediately returns the cached schedule state.
-- **One cached snapshot + one in-flight refresh per vacuum.** Real HomeKit testing produced many simultaneous schedule GETs, but the coordinator coalesced them into one refresh/cloud request per vacuum and synchronized all schedule switches from the resulting snapshot.
+- **One cached snapshot + one in-flight refresh per vacuum.** Real Home testing produced many simultaneous schedule GETs, but the coordinator coalesced them into one refresh/cloud request per vacuum and synchronized all schedule switches from the resulting snapshot.
 - **Successful refreshes update the shared schedule snapshot and synchronize all HAP schedule switches.**
 - **Failed refreshes preserve the existing cached schedule/accessories.**
 - **Failure backoff / negative caching is active at 30 seconds.** During a real Roborock MQTT/cloud timeout, repeated HomeKit reads returned the preserved cached state and entered `FAILURE BACKOFF` rather than issuing additional cloud requests.
@@ -19,13 +19,13 @@ The first recovery phase is now implemented and validated locally and on the rea
 
 ### Remaining recovery items
 
-The following plan items remain intentionally open and have not yet been marked complete:
+The following items remain intentionally open and have not yet been marked complete:
 
 - Failed first discovery must not leave dead/nonfunctional restored schedule accessories.
 - `upd_timer` fallback must actually send the command.
 - Non-empty but unparsable schedule responses must be treated as untrusted and must preserve the cached snapshot.
 - Final end-to-end validation of recovery after the failure/backoff window expires is still pending on real hardware.
-
+- The seven smaller review items below are now **in scope** and will be implemented/fixed before considering the follow-up complete.
 
 This is the **active handoff plan** for the follow-up work requested by Mathias after his review of `schedule-refresh-recovery-clean`.
 
@@ -38,7 +38,7 @@ The historical first-phase record is `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. Do not
 - Completed first phase: `schedule-refresh-recovery-clean`
 - Active follow-up branch: `schedule-refresh-recovery-fixes`
 - Follow-up branch is based on `schedule-refresh-recovery-clean` with Mathias 3.15.3 merged on top.
-- Current branch tip after plan cleanup: `cbf6ff3`
+- Current branch tip after plan update: `c1d3fba`
 - Pre-fix functional baseline: merge `9a7cd13`, with 86 suites / 1336 tests passing.
 
 ## Mathias's required fixes
@@ -99,17 +99,59 @@ A non-empty raw array whose parser produces zero schedules must not be treated a
 
 Add regression coverage for a plausible alternate response shape.
 
-## Smaller review items
+## Additional fixes from Mathias's review — now in scope
 
-Mathias listed these as take-or-leave rather than blockers. Do not expand scope unless needed:
+Mathias originally described these as “smaller, take or leave” items. They are now deliberately **in scope for this follow-up** and should be implemented and regression-tested where behavior changes.
 
-- Avoid resetting HomeKit `ConfiguredName` on every refresh.
-- Consider deterministic schedule ordering.
-- Ensure `verify()` uses the coalescer correctly.
-- Prevent disposed coordinators from syncing after teardown.
-- Route the coordinator timer through the shared timer utility.
-- Keep routine schedule payload logging at debug rather than info.
-- Comment the Q7 adapter's neutral `get_server_timer` response.
+### 6. Do not reset HomeKit `ConfiguredName` on every refresh
+
+`updateIdentity()` should avoid rewriting an unchanged `ConfiguredName` on every successful schedule refresh. Preserve a HomeKit-side rename when the displayed schedule identity has not actually changed, following the early-return pattern used by the action-switch implementation.
+
+Add focused regression coverage proving repeated refreshes do not continually overwrite an unchanged HomeKit name.
+
+### 7. Make schedule ordering deterministic
+
+Displayed names currently use `Schedule ${i + 1}` based on the raw cloud array order. Make the ordering deterministic so deleting or reordering schedules in Roborock does not unpredictably renumber the remaining HomeKit switches.
+
+Choose a stable ordering based on the schedule data already available to the coordinator, document the choice, and add regression coverage.
+
+### 8. Ensure `verify()` participates in the schedule refresh/coalescing model
+
+The delayed write verification currently performs its own `getServerTimers()` call. Review the interaction with the coordinator's in-flight refresh and cache so verification does not create an unnecessary parallel cloud request or incorrectly extend the whole-vacuum cache TTL from a single schedule result.
+
+Add focused regression coverage for verification/coalescing and snapshot freshness.
+
+### 9. Prevent disposed coordinators from syncing after teardown
+
+`dispose()` currently clears `refreshInProgress` without necessarily stopping an already-running refresh. Guard the completion path so an in-flight refresh cannot call `sync()` into a coordinator/accessory set that has already been disposed or is being torn down.
+
+Add a regression test that simulates disposal while a refresh is in flight.
+
+### 10. Use the shared timer utility for coordinator timers
+
+The coordinator's `setTimeout` usage should be routed through `src/timers.ts`, which exists so pending timers are tracked and cannot be the reason Homebridge fails to shut down cleanly.
+
+Add or update regression coverage as appropriate for timer disposal/shutdown behavior.
+
+### 11. Reduce routine schedule payload logging to debug
+
+Routine schedule discovery currently logs the full schedule payload at `info` level. Match the logging convention used by comparable paths: normal payload diagnostics belong at debug level, while warnings/errors remain visible at info/warn as appropriate.
+
+Preserve focused operational logs needed to diagnose schedule recovery without logging the full schedule payload every refresh at normal info level.
+
+Add/update a focused logging contract test if needed.
+
+### 12. Document the Q7 neutral `get_server_timer` response
+
+`b01Q7Adapter.js` intentionally maps `get_server_timer` to a neutral `[]` response for Q7/B01 handling. Add a concise comment in the relevant schedule-refresh path so future maintainers understand that this empty response is synthesized by the adapter rather than proof that the robot's cloud schedule set was queried and found empty.
+
+No behavior change is required unless testing reveals one is needed.
+
+## Optional architectural follow-up
+
+Mathias also pointed out an existing non-schedule-specific polling path that could keep the schedule snapshot warm without introducing a new schedule timer: `roborockAPI.updateDataMinimumData` already runs per robot at the existing `updateInterval` and calls `pollParameter(duid, vacuum, "get_server_timer", isB01)`.
+
+This is **not a required blocker for the current follow-up**. If pursued later, feed the existing result into the schedule coordinator/cache rather than adding a permanent schedule-specific polling loop.
 
 ## Architectural constraints
 
@@ -235,6 +277,13 @@ Other active plugins produce substantial unrelated log traffic, so focused filte
 - Failed first discovery cannot leave dead restored accessories.
 - Disabling schedules removes persisted schedule accessories.
 - `upd_timer` fallback actually sends the command.
+- Repeated refreshes do not overwrite an unchanged HomeKit `ConfiguredName`.
+- Schedule ordering remains deterministic.
+- `verify()` coalesces correctly and does not incorrectly age the full snapshot from a single entry.
+- Disposed coordinators cannot sync after teardown.
+- Shared timer utility is used for coordinator timers and is safely disposed.
+- Routine schedule payload logging is not emitted at info level.
+- Q7 neutral `get_server_timer` behavior is documented by a regression/contract check where appropriate.
 
 ### Full gate
 
@@ -262,6 +311,10 @@ After the local gate passes and the branch is pushed:
 6. Confirm a later successful refresh recovers the cached schedule state.
 7. Test schedule writes and the existing delayed verification.
 8. Test disabling the schedule feature and restarting Homebridge.
+9. Verify a HomeKit rename persists across repeated successful schedule refreshes.
+10. Verify schedule switch numbering/order remains stable when the cloud schedule list changes.
+11. Verify a write/verification does not create an unnecessary parallel schedule refresh.
+12. Exercise teardown/restart while a schedule refresh is in flight and confirm no post-dispose sync occurs.
 
 ## Definition of done
 
@@ -271,12 +324,20 @@ After the local gate passes and the branch is pushed:
 - [x] Disabling schedules reliably removes schedule accessories, including after restart.
 - [ ] `upd_timer` fallback actually sends the command.
 - [ ] Non-empty/unparsable responses never erase the cached schedule set.
-- [ ] Successful empty responses remain authoritative.
-- [ ] Targeted regression tests pass.
+- [x] Successful empty responses remain authoritative.
+- [x] Concurrent reads coalesce to one in-flight refresh per vacuum.
+- [ ] ConfiguredName is not repeatedly overwritten by unchanged schedule refreshes.
+- [ ] Schedule ordering is deterministic.
+- [ ] `verify()` participates correctly in the coordinator/coalescing model.
+- [ ] Disposed coordinators cannot sync after teardown.
+- [ ] Coordinator timers use the shared timer utility.
+- [ ] Routine schedule payload logging is debug-level rather than info-level.
+- [ ] Q7 neutral `get_server_timer` behavior is documented.
+- [ ] Targeted regression tests pass for the completed follow-up scope.
 - [ ] Full typecheck/build/test/lint gate passes.
 - [ ] Generated `dist/` matches the tested source.
 - [ ] Tested branch is pushed before real-device installation.
-- [ ] Real Homebridge/HomeKit validation passes.
+- [ ] Real Homebridge/HomeKit validation passes for the completed follow-up scope.
 - [ ] No permanent schedule polling is introduced.
 
 ## Next-chat continuity
@@ -289,4 +350,4 @@ The three important branches remain:
 - `schedule-refresh-recovery-clean` = completed first-phase work.
 - `schedule-refresh-recovery-fixes` = current follow-up work.
 
-Begin implementation with Mathias's blocker: fire-and-forget HomeKit GET plus failure backoff. Keep changes local, tests local, pushes deliberate, and real-device testing only after the tested branch is on GitHub.
+The next implementation work should proceed one focused item at a time, starting with failed first discovery. Keep changes local, tests local, pushes deliberate, and real-device testing only after the tested branch is on GitHub.
