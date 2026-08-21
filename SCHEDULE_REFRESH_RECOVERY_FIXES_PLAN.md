@@ -40,13 +40,33 @@ The `upd_timer` fallback is now fixed and regression-tested.
 - The exact pushed branch was installed on the real Homebridge host at `c7212cb`.
 - A normal real-device schedule write was not relied upon as proof of fallback execution because the fallback only runs after `upd_server_timer` verification fails. The regression test directly covers the faulty path Mathias identified.
 
+### Progress update — non-empty/unparsable schedule responses
+
+This recovery item is now implemented, regression-tested, and pushed.
+
+- A successful `[]` response remains authoritative and can remove schedule switches when the cloud explicitly reports no schedules.
+- A **non-empty raw response that parses to zero schedules is now treated as untrusted**.
+- The coordinator records a failed refresh/backoff timestamp and preserves the existing cached schedule snapshot and HomeKit switches.
+- Added focused regression coverage for the untrusted-response contract.
+- Targeted schedule tests after the change: **23/23 passed**.
+- Full repository test suite after the change: **86/86 suites, 1,340/1,340 tests passed**.
+- Typecheck: **passed**.
+- Build: **passed**.
+- Changed-file formatting: **passed**.
+- Tested commit pushed to `schedule-refresh-recovery-fixes`: `61ff89a`.
+
 ### Remaining recovery items
 
 The following items remain intentionally open and have not yet been marked complete:
 
-- Non-empty but unparsable schedule responses must be treated as untrusted and must preserve the cached snapshot.
 - Final end-to-end validation of recovery after the failure/backoff window expires is still pending on real hardware.
-- The seven smaller review items below are now **in scope** and will be implemented/fixed before considering the follow-up complete.
+- Preserve HomeKit `ConfiguredName` across unchanged schedule refreshes.
+- Make schedule ordering deterministic.
+- Make `verify()` participate correctly in the coordinator refresh/coalescing model.
+- Prevent disposed coordinators from syncing after teardown.
+- Route coordinator timers through the shared timer utility.
+- Move routine schedule payload logging from `info` to `debug`.
+- Document the Q7 neutral `get_server_timer` response.
 
 This is the **active handoff plan** for the follow-up work requested by Mathias after his review of `schedule-refresh-recovery-clean`.
 
@@ -59,7 +79,7 @@ The historical first-phase record is `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. Do not
 - Completed first phase: `schedule-refresh-recovery-clean`
 - Active follow-up branch: `schedule-refresh-recovery-fixes`
 - Follow-up branch is based on `schedule-refresh-recovery-clean` with Mathias 3.15.3 merged on top.
-- Current branch tip: `c7212cb`
+- Current branch tip: `61ff89a`
 - Pre-fix functional baseline: merge `9a7cd13`, with 86 suites / 1336 tests passing.
 
 ## Mathias's required fixes
@@ -344,7 +364,7 @@ After the local gate passes and the branch is pushed:
 - [x] Failed first discovery cannot leave silently nonfunctional restored accessories.
 - [x] Disabling schedules reliably removes schedule accessories, including after restart.
 - [x] `upd_timer` fallback actually sends the command.
-- [ ] Non-empty/unparsable responses never erase the cached schedule set.
+- [x] Non-empty/unparsable responses never erase the cached schedule set.
 - [x] Successful empty responses remain authoritative.
 - [x] Concurrent reads coalesce to one in-flight refresh per vacuum.
 - [ ] ConfiguredName is not repeatedly overwritten by unchanged schedule refreshes.
