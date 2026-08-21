@@ -122,16 +122,11 @@ class RoborockHapScheduleAccessory {
     }
     async refreshDetailed() {
         if (this.refreshInProgress) {
-            this.platform.log.info(`Schedule refreshDetailed: JOINING existing refresh`);
             return this.refreshInProgress;
         }
-        this.platform.log.info(`Schedule refreshDetailed: STARTING new refresh`);
         this.refreshInProgress = this.performRefresh();
         try {
-            const result = await this.refreshInProgress;
-            this.platform.log.info(`Schedule refreshDetailed: REFRESH COMPLETE; ` +
-                `success=${result.success}; hasSchedules=${result.hasSchedules}`);
-            return result;
+            return await this.refreshInProgress;
         }
         finally {
             this.refreshInProgress = undefined;
@@ -290,9 +285,8 @@ class RoborockHapScheduleSwitchAccessory {
         service
             .getCharacteristic(this.platform.Characteristic.On)
             .onSet((value) => this.setSchedule(Boolean(value)))
-            .onGet(async () => {
-            this.platform.log.info(`Schedule GET: ${this.scheduleId}; cached=${this.schedule.enabled}`);
-            await this.coordinator.refreshIfNeeded();
+            .onGet(() => {
+            void this.coordinator.refreshIfNeeded();
             return this.schedule.enabled;
         });
         service.updateCharacteristic(this.platform.Characteristic.On, schedule.enabled);
