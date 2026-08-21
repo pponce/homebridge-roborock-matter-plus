@@ -164,6 +164,12 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
+  test("non-empty unparsable schedule responses are treated as untrusted", () => {
+    expect(scheduleSource).toMatch(
+      /if \(raw\.length > 0 && schedules\.length === 0\) \{[\s\S]*?lastFailedRefreshAt = Date\.now\(\);[\s\S]*?preserving existing schedules/
+    );
+  });
+
   test("schedule switch GET returns cached state without waiting for refresh", () => {
     expect(scheduleSource).toMatch(
       /\.onGet\(\(\) => \{[\s\S]*?void this\.coordinator\.refreshIfNeeded\(\);[\s\S]*?return this\.schedule\.enabled;/

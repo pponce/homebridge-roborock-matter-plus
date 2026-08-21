@@ -151,6 +151,18 @@ class RoborockHapScheduleAccessory {
                 };
             }
             const schedules = parseServerTimers(raw);
+            // A non-empty response that parses to zero schedules is not a
+            // trustworthy empty snapshot. Preserve the previous state instead
+            // of deleting every HomeKit schedule switch.
+            if (raw.length > 0 && schedules.length === 0) {
+                this.lastFailedRefreshAt = Date.now();
+                this.platform.log.warn(`Unable to reliably read Roborock schedules for ${this.duid}: ` +
+                    `get_server_timer returned a non-empty response that parsed to zero schedules; preserving existing schedules.`);
+                return {
+                    success: false,
+                    hasSchedules: this.scheduleAccessories.size > 0,
+                };
+            }
             this.cachedSchedules = schedules.map((schedule) => ({
                 ...schedule,
                 timer: [...schedule.timer],

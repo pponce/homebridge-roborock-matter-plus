@@ -157,9 +157,9 @@ export default class RoborockHapScheduleAccessory {
 
     this.platform.log.info(
       `Schedule refreshIfNeeded: entered; ` +
-      `cached=${this.cachedSchedules?.length ?? "undefined"}; ` +
-      `lastRefreshAgeMs=${this.lastScheduleRefreshAt > 0 ? now - this.lastScheduleRefreshAt : "never"}; ` +
-      `lastFailureAgeMs=${this.lastFailedRefreshAt > 0 ? now - this.lastFailedRefreshAt : "never"}`
+        `cached=${this.cachedSchedules?.length ?? "undefined"}; ` +
+        `lastRefreshAgeMs=${this.lastScheduleRefreshAt > 0 ? now - this.lastScheduleRefreshAt : "never"}; ` +
+        `lastFailureAgeMs=${this.lastFailedRefreshAt > 0 ? now - this.lastFailedRefreshAt : "never"}`
     );
 
     if (
@@ -168,8 +168,8 @@ export default class RoborockHapScheduleAccessory {
     ) {
       this.platform.log.info(
         `Schedule refreshIfNeeded: CACHE HIT; ` +
-        `ageMs=${now - this.lastScheduleRefreshAt}; ` +
-        `returning=${this.cachedSchedules.length > 0}`
+          `ageMs=${now - this.lastScheduleRefreshAt}; ` +
+          `returning=${this.cachedSchedules.length > 0}`
       );
       return this.cachedSchedules.length > 0;
     }
@@ -180,15 +180,13 @@ export default class RoborockHapScheduleAccessory {
     ) {
       this.platform.log.info(
         `Schedule refreshIfNeeded: FAILURE BACKOFF; ` +
-        `ageMs=${now - this.lastFailedRefreshAt}; ` +
-        `returning=${(this.cachedSchedules?.length ?? 0) > 0}`
+          `ageMs=${now - this.lastFailedRefreshAt}; ` +
+          `returning=${(this.cachedSchedules?.length ?? 0) > 0}`
       );
       return (this.cachedSchedules?.length ?? 0) > 0;
     }
 
-    this.platform.log.info(
-      `Schedule refreshIfNeeded: CALLING refresh()`
-    );
+    this.platform.log.info(`Schedule refreshIfNeeded: CALLING refresh()`);
 
     return this.refresh();
   }
@@ -237,6 +235,21 @@ export default class RoborockHapScheduleAccessory {
       }
 
       const schedules = parseServerTimers(raw);
+
+      // A non-empty response that parses to zero schedules is not a
+      // trustworthy empty snapshot. Preserve the previous state instead
+      // of deleting every HomeKit schedule switch.
+      if (raw.length > 0 && schedules.length === 0) {
+        this.lastFailedRefreshAt = Date.now();
+        this.platform.log.warn(
+          `Unable to reliably read Roborock schedules for ${this.duid}: ` +
+            `get_server_timer returned a non-empty response that parsed to zero schedules; preserving existing schedules.`
+        );
+        return {
+          success: false,
+          hasSchedules: this.scheduleAccessories.size > 0,
+        };
+      }
 
       this.cachedSchedules = schedules.map((schedule) => ({
         ...schedule,
