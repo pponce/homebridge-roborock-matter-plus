@@ -17,11 +17,18 @@ The first recovery phase is now implemented and validated locally and on the rea
 - **Full test suite:** 86/86 suites passed, 1,337/1,337 tests passed.
 - **Build/typecheck:** passed.
 
+### Real-device validation — failed first discovery
+
+On the real Homebridge installation, Roborock MQTT was deliberately unavailable during a Homebridge restart. Both restored schedule coordinators failed their initial `get_server_timer` refresh with:
+
+`No local connection ... so the get_server_timer request was not sent.`
+
+The resulting restored schedule groups for **Downtown Rock** and **Uptown Rock** disappeared from Apple Home, confirming that failed initial discovery no longer leaves restored schedule accessories registered without working handlers.
+
 ### Remaining recovery items
 
 The following items remain intentionally open and have not yet been marked complete:
 
-- Failed first discovery must not leave dead/nonfunctional restored schedule accessories.
 - `upd_timer` fallback must actually send the command.
 - Non-empty but unparsable schedule responses must be treated as untrusted and must preserve the cached snapshot.
 - Final end-to-end validation of recovery after the failure/backoff window expires is still pending on real hardware.
@@ -320,7 +327,7 @@ After the local gate passes and the branch is pushed:
 
 - [x] HomeKit GET never waits for Roborock cloud.
 - [x] Failed refreshes acquire negative-cache/backoff state.
-- [ ] Failed first discovery cannot leave silently nonfunctional restored accessories.
+- [x] Failed first discovery cannot leave silently nonfunctional restored accessories.
 - [x] Disabling schedules reliably removes schedule accessories, including after restart.
 - [ ] `upd_timer` fallback actually sends the command.
 - [ ] Non-empty/unparsable responses never erase the cached schedule set.
