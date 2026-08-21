@@ -199,6 +199,54 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).toContain("unrefTimer(timer);");
   });
 
+  test("routine schedule cache decisions are debug-level", () => {
+    const start = scheduleSource.indexOf(
+      "async refreshIfNeeded(): Promise<boolean>"
+    );
+    const end = scheduleSource.indexOf(
+      "  async refresh(): Promise<boolean>",
+      start
+    );
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const refreshBlock = scheduleSource.slice(start, end);
+
+    expect(refreshBlock).toContain("this.platform.log.debug(");
+    expect(refreshBlock).toContain("`Schedule refreshIfNeeded: entered; `");
+    expect(refreshBlock).toContain("`Schedule refreshIfNeeded: CACHE HIT; `");
+    expect(refreshBlock).toContain(
+      "this.platform.log.debug(`Schedule refreshIfNeeded: CALLING refresh()`);"
+    );
+
+    const enteredIndex = refreshBlock.indexOf(
+      "`Schedule refreshIfNeeded: entered; `"
+    );
+    const cacheHitIndex = refreshBlock.indexOf(
+      "`Schedule refreshIfNeeded: CACHE HIT; `"
+    );
+    const callRefreshIndex = refreshBlock.indexOf(
+      "this.platform.log.debug(`Schedule refreshIfNeeded: CALLING refresh()`);"
+    );
+
+    expect(
+      refreshBlock.lastIndexOf("this.platform.log.debug(", enteredIndex)
+    ).toBeGreaterThanOrEqual(0);
+
+    expect(
+      refreshBlock.lastIndexOf("this.platform.log.debug(", cacheHitIndex)
+    ).toBeGreaterThanOrEqual(0);
+
+    expect(callRefreshIndex).toBeGreaterThan(0);
+
+    // Failure backoff is intentionally an info-level operational signal.
+    expect(refreshBlock).toContain("this.platform.log.info(");
+    expect(refreshBlock).toContain(
+      "`Schedule refreshIfNeeded: FAILURE BACKOFF; `"
+    );
+  });
+
   test("routine schedule payload logging is debug-level", () => {
     expect(scheduleSource).toContain("this.platform.log.debug(");
     expect(scheduleSource).toContain("`Schedule discovery for ${this.duid}: `");

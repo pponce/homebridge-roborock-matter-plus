@@ -97,13 +97,13 @@ class RoborockHapScheduleAccessory {
     async refreshIfNeeded() {
         var _a, _b, _c, _d, _e, _f;
         const now = Date.now();
-        this.platform.log.info(`Schedule refreshIfNeeded: entered; ` +
+        this.platform.log.debug(`Schedule refreshIfNeeded: entered; ` +
             `cached=${(_b = (_a = this.cachedSchedules) === null || _a === void 0 ? void 0 : _a.length) !== null && _b !== void 0 ? _b : "undefined"}; ` +
             `lastRefreshAgeMs=${this.lastScheduleRefreshAt > 0 ? now - this.lastScheduleRefreshAt : "never"}; ` +
             `lastFailureAgeMs=${this.lastFailedRefreshAt > 0 ? now - this.lastFailedRefreshAt : "never"}`);
         if (this.cachedSchedules !== undefined &&
             now - this.lastScheduleRefreshAt < SCHEDULE_CACHE_TTL_MS) {
-            this.platform.log.info(`Schedule refreshIfNeeded: CACHE HIT; ` +
+            this.platform.log.debug(`Schedule refreshIfNeeded: CACHE HIT; ` +
                 `ageMs=${now - this.lastScheduleRefreshAt}; ` +
                 `returning=${this.cachedSchedules.length > 0}`);
             return this.cachedSchedules.length > 0;
@@ -115,7 +115,7 @@ class RoborockHapScheduleAccessory {
                 `returning=${((_d = (_c = this.cachedSchedules) === null || _c === void 0 ? void 0 : _c.length) !== null && _d !== void 0 ? _d : 0) > 0}`);
             return ((_f = (_e = this.cachedSchedules) === null || _e === void 0 ? void 0 : _e.length) !== null && _f !== void 0 ? _f : 0) > 0;
         }
-        this.platform.log.info(`Schedule refreshIfNeeded: CALLING refresh()`);
+        this.platform.log.debug(`Schedule refreshIfNeeded: CALLING refresh()`);
         return this.refresh();
     }
     async refresh() {
