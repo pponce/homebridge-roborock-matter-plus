@@ -7,6 +7,7 @@ const hap_schedule_api_1 = require("./hap_schedule_api");
 const VERIFY_DELAY_MS = 3000;
 const WRITE_SUPPRESSION_MS = 5000;
 const SCHEDULE_CACHE_TTL_MS = 60 * 1000;
+const SCHEDULE_FAILURE_BACKOFF_MS = 30 * 1000;
 const SERVICE_PREFIX = "roborock-schedule-";
 exports.HAP_EXTENSION_KIND = "hapExtension";
 exports.HAP_SCHEDULE_EXTENSION = "schedules";
@@ -64,6 +65,7 @@ class RoborockHapScheduleAccessory {
         this.vacuumName = "";
         this.managerRemoved = false;
         this.lastScheduleRefreshAt = 0;
+        this.lastFailedRefreshAt = 0;
         this.managerAccessory = accessory;
         accessory.context = {
             kind: exports.HAP_EXTENSION_KIND,
@@ -91,10 +93,15 @@ class RoborockHapScheduleAccessory {
         return this.refreshDetailed();
     }
     async refreshIfNeeded() {
+        var _a, _b;
         const now = Date.now();
         if (this.cachedSchedules !== undefined &&
             now - this.lastScheduleRefreshAt < SCHEDULE_CACHE_TTL_MS) {
             return this.cachedSchedules.length > 0;
+        }
+        if (this.lastFailedRefreshAt > 0 &&
+            now - this.lastFailedRefreshAt < SCHEDULE_FAILURE_BACKOFF_MS) {
+            return ((_b = (_a = this.cachedSchedules) === null || _a === void 0 ? void 0 : _a.length) !== null && _b !== void 0 ? _b : 0) > 0;
         }
         return this.refresh();
     }
@@ -124,6 +131,7 @@ class RoborockHapScheduleAccessory {
                 `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
                 `value=${JSON.stringify(raw)}`);
             if (!Array.isArray(raw)) {
+                this.lastFailedRefreshAt = Date.now();
                 this.platform.log.warn(`Unable to reliably read Roborock schedules for ${this.duid}: ` +
                     `get_server_timer returned ${typeof raw}; preserving existing schedules.`);
                 return {
@@ -137,6 +145,7 @@ class RoborockHapScheduleAccessory {
                 timer: [...schedule.timer],
             }));
             this.lastScheduleRefreshAt = Date.now();
+            this.lastFailedRefreshAt = 0;
             this.platform.log.info(`Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`);
             this.sync(schedules);
             // A successful empty snapshot is authoritative information. It is
@@ -147,6 +156,7 @@ class RoborockHapScheduleAccessory {
             };
         }
         catch (error) {
+            this.lastFailedRefreshAt = Date.now();
             const message = error instanceof Error ? error.message : String(error);
             this.platform.log.warn(`Unable to refresh Roborock schedules for ${this.duid}: ${message}. Preserving existing schedules.`);
             return {
@@ -264,8 +274,9 @@ class RoborockHapScheduleSwitchAccessory {
         service
             .getCharacteristic(this.platform.Characteristic.On)
             .onSet((value) => this.setSchedule(Boolean(value)))
-            .onGet(async () => {
-            await this.coordinator.refreshIfNeeded();
+            .onGet(() => {
+            this.platform.log.info(`Schedule GET: ${this.scheduleId}; cached=${this.schedule.enabled}`);
+            void this.coordinator.refreshIfNeeded();
             return this.schedule.enabled;
         });
         service.updateCharacteristic(this.platform.Characteristic.On, schedule.enabled);

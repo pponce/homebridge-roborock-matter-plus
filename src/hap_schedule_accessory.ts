@@ -428,6 +428,9 @@ class RoborockHapScheduleSwitchAccessory {
       .getCharacteristic(this.platform.Characteristic.On)
       .onSet((value) => this.setSchedule(Boolean(value)))
       .onGet(() => {
+        this.platform.log.info(
+          `Schedule GET: ${this.scheduleId}; cached=${this.schedule.enabled}`
+        );
         void this.coordinator.refreshIfNeeded();
         return this.schedule.enabled;
       });
