@@ -1,206 +1,194 @@
 # Schedule Refresh & Recovery Plan
 
-## Purpose
-
-This is the working plan and continuity record for the clean implementation of schedule-switch refresh/recovery work on `homebridge-roborock-matter-plus`.
-
-The implementation started fresh from `hap-schedules-scenes` and was then updated to Mathias's upstream 3.15.0 state. The older `schedule-coordinator-refresh-recovery` branch remains reference material only.
-
-## Repository / Branch Context
+## Current repository strategy — 2026-08-21
 
 - Repository: `pponce/homebridge-roborock-matter-plus`
-- Starting point: `hap-schedules-scenes`
-- Current working branch: `schedule-refresh-recovery-clean`
-- Current upstream base incorporated: `v3.15.0` / `b850c17`
-- GitHub branch: `https://github.com/pponce/homebridge-roborock-matter-plus/tree/schedule-refresh-recovery-clean`
+- `main` must remain a clean copy of Mathias's upstream release, with no fork-specific changes.
+- Mathias upstream is currently **3.15.3**, commit `02cdd263aa55b703dd45da1ed4967d43b927b896`.
+- `main` has been reset to that exact upstream commit.
+- `schedule-refresh-recovery-clean` remains the reviewed/validated first-phase branch based on Mathias 3.15.0 and contains the completed schedule cache/coalescing/recovery work.
+- `schedule-refresh-recovery-fixes` is the next working branch. It is based on `schedule-refresh-recovery-clean` and is where Mathias's requested follow-up fixes will be implemented.
 
-## Scope
+## First-phase work already completed
 
-### Required from Mathias's comment
+Mathias reviewed `schedule-refresh-recovery-clean` and said the caching design, coalescer, and scoped `roborockLib` change were the right shape. The branch has:
 
-1. Make the release gate clean, including Prettier.
-2. Remove the permanent three-minute schedule polling timer.
-3. Use a per-vacuum cached schedule snapshot with an approximately 60-second lifetime.
-4. Refresh schedules on HomeKit reads when the cache is stale.
-5. Coalesce concurrent refreshes so simultaneous triggers result in one schedule cloud request.
-6. One successful schedule snapshot synchronizes all schedule switches for that vacuum.
-7. Preserve existing schedule write and approximately 3-second verification behavior.
-8. Preserve stable schedule-ID identity and reconciliation behavior.
+- No permanent three-minute schedule polling timer.
+- One cached schedule snapshot per vacuum with approximately 60-second freshness.
+- One in-flight refresh promise per vacuum to coalesce concurrent requests.
+- HomeKit reads refresh stale snapshots from Roborock cloud.
+- One successful snapshot synchronizes all schedule switches for that vacuum.
+- Failed/untrusted schedule retrieval preserves existing schedules rather than treating failure as zero schedules.
+- Schedule discovery is independent of local vacuum reachability.
+- Existing schedule writes and delayed verification remain intact.
+- Stable schedule-ID reconciliation is preserved.
+- Real Homebridge/HomeKit testing confirmed that opening Home causes a stale snapshot to refresh from Roborock, while leaving Home closed does not create continuous schedule polling.
 
-### Additional user requirement
+## Mathias follow-up — required fixes
 
-Schedule switches are not gated on local/device reachability. If a known vacuum is unreachable but the Roborock cloud successfully returns valid schedules, those schedules can create/update the HAP switches. Failed/untrusted retrieval must not be treated as an empty schedule list, and must not remove existing schedule accessories.
+Mathias's 2026-08-21 review identified one blocker and four additional fixes, in priority order.
 
-## North Star Architecture
+### Blocker
 
-```text
-Roborock cloud -> per-vacuum schedule coordinator -> cached snapshot (~60s)
-                                             |
-                              +--------------+--------------+
-                              |              |              |
-                         Schedule 1     Schedule 2     Schedule 3
-                          HAP switch     HAP switch     HAP switch
+**HomeKit GET must not wait for the Roborock cloud.**
+
+Current pattern:
+
+```js
+.onGet(async () => {
+  await this.coordinator.refreshIfNeeded();
+  return this.schedule.enabled;
+});
 ```
 
-Refresh triggers are:
+Required direction:
 
-1. Initial schedule discovery for a known/configured vacuum.
-2. HomeKit GET when the cached snapshot is stale.
-3. A user schedule write followed by the existing verification flow.
-4. Other narrowly justified refresh requests that use the same coalescing coordinator.
-
-There is **no permanent background three-minute schedule timer** and no independent reachability polling loop.
-
-## Implementation Status
-
-### Phase 0 — Clean baseline
-
-- [x] Created `schedule-refresh-recovery-clean` from the HAP schedule-switch work.
-- [x] Established GitHub branch as the source of truth.
-- [x] Ran the baseline release gate.
-
-### Phase 1 — Release gate
-
-- [x] Lint/format cleanup.
-- [x] Typecheck passes.
-- [x] Build passes.
-- [x] Full Jest suite passes.
-- [x] Prettier check passes.
-- [x] Generated `dist/` rebuilt and committed.
-
-### Phase 2 — Cached refresh
-
-- [x] Removed `SCHEDULE_POLL_INTERVAL_MS` and the permanent `setInterval` schedule poll.
-- [x] One cached schedule snapshot per vacuum.
-- [x] Approximately 60-second cache lifetime.
-- [x] One in-flight refresh guard/promise per vacuum.
-- [x] Stale HomeKit reads perform one `getServerTimers` / `get_server_timer` request.
-- [x] One successful snapshot synchronizes all switches for that vacuum.
-- [x] Fresh reads within the cache lifetime avoid another cloud request.
-
-### Phase 3 — Reachability independence
-
-- [x] Schedule discovery is not gated on local/device reachability.
-- [x] Cloud schedule discovery remains usable for an unreachable known vacuum.
-- [x] Successful cloud snapshots create/update schedule switches regardless of local reachability.
-- [x] Failed initial discovery does not create a broken/empty schedule group.
-- [x] No reachability polling loop was added.
-
-### Phase 4 — Recovery/preservation
-
-- [x] Existing schedule groups survive temporary vacuum unreachability.
-- [x] Existing child switches survive failed schedule retrieval.
-- [x] Failed retrieval never means “zero schedules.”
-- [x] Successful empty snapshots may reconcile stale switches away.
-- [x] Successful non-empty snapshots reconcile additions, updates, and deletions by stable schedule ID.
-
-### Phase 5 — Command verification
-
-- [x] Existing schedule write behavior preserved.
-- [x] Existing delayed verification read preserved.
-- [x] Verification cloud traffic is intentionally retained and is not background polling.
-
-### Phase 6 — Tests
-
-- [x] Fresh cache -> no additional cloud call.
-- [x] Expired cache -> one cloud call.
-- [x] Concurrent refreshes -> one in-flight cloud call.
-- [x] One snapshot updates all switches.
-- [x] Failed refreshes preserve existing schedule state.
-- [x] Successful empty snapshots are distinguished from failed snapshots.
-- [x] Stable schedule IDs preserve accessory identity.
-- [x] Existing schedule write/verification tests pass.
-- [x] Existing settings/UI contract tests pass.
-
-### Phase 7 — Final release gate
-
-- [x] Full typecheck.
-- [x] Full build.
-- [x] Full Jest suite.
-- [x] Prettier.
-- [x] No permanent schedule polling loop.
-- [x] No independent reachability polling loop.
-- [x] Failed schedule queries preserve existing accessories.
-- [x] Generated `dist/` matches tested source.
-- [x] Real Homebridge/HomeKit validation completed.
-
-## Real-World Validation — 2026-08-20
-
-The branch was installed on the real Homebridge instance and tested against the Roborock cloud and Apple Home.
-
-Observed:
-
-- Roborock schedule discovery returned authoritative arrays for both configured vacuums.
-- Each successful snapshot was parsed and synchronized as one operation for that vacuum.
-- A schedule switch was successfully disabled and re-enabled through HomeKit, producing the expected `upd_server_timer` commands.
-- A later authoritative snapshot showed the changed state: schedule `1652749234966` was reported `off` after the disable test.
-- Opening the Home app caused the stale schedule snapshot to refresh from Roborock and the updated schedule state to appear in HomeKit.
-- Leaving the Home app closed did not produce continuous schedule refreshes. This confirms the removed permanent poll was not replaced by another periodic schedule poll.
-- The observed refresh therefore matches the intended architecture: HomeKit reads trigger a refresh when the cache is stale; Roborock is authoritative; the returned snapshot synchronizes all switches.
-
-Representative log sequence:
-
-```text
-22:17:29 Schedule command: disabling .../1652749234966
-22:17:41 Schedule command: enabling .../1652749234966
-...
-22:35:29 Schedule discovery ... 1652749234966 ... "off"
-22:35:29 Schedule sync ... received 7 parsed schedule(s)
+```js
+.onGet(() => {
+  void this.coordinator.refreshIfNeeded();
+  return this.schedule.enabled;
+});
 ```
 
-## Upstream 3.15.0 Integration
+The read should return the cached value immediately; the asynchronous refresh should update the characteristic when the fresh snapshot arrives. This prevents HAP's approximately 3-second warning / approximately 9-second hard read timeout from being exceeded by the existing 10-second cloud request timeout.
 
-The branch was updated to Mathias's latest 3.15.0 state and rebuilt.
+Also add failure timestamp/backoff behavior so repeated HomeKit reads during a cloud outage do not each initiate another 10-second request.
 
-Relevant commits:
+### Additional fixes
 
-- `b850c17` — Mathias upstream `v3.15.0`
-- `c8c4d32` — merge upstream/main into `schedule-refresh-recovery-clean`
-- `f072332` — rebuild committed `dist/` after the upstream merge
+1. **Failed first refresh:** avoid restoring apparently-live schedule accessories that have no working handlers when initial discovery fails. Mathias prefers a visibly dead accessory over one that appears functional but silently does nothing.
+2. **Disable setting:** turning HAP schedules off must actually dispose/remove previously created schedule accessories, including after restart. Do not rely only on the in-memory `hapScheduleAccessories` map populated later by sync.
+3. **`upd_timer` fallback:** the fallback currently reaches `startCommand` but `upd_timer` is not in `SIMPLE_VACUUM_COMMANDS`, so it warns and resolves without sending. Use the existing `updateServerTimer` command path/order instead.
+4. **Parser safety:** a non-empty Roborock response that the parser cannot understand must not be interpreted as an authoritative empty schedule list. `raw.length > 0 && parsed.length === 0` is an untrusted response and should preserve the current schedule state.
 
-GitHub was verified at:
+### Smaller follow-ups (only if appropriate after the above)
 
-```text
-f072332 (schedule-refresh-recovery-clean, origin/schedule-refresh-recovery-clean)
+- Avoid resetting HomeKit ConfiguredName on every successful refresh.
+- Consider deterministic schedule ordering rather than relying on cloud-array order.
+- Ensure `verify()` uses the coalescer correctly.
+- Ensure disposed coordinators cannot sync into a tearing-down bridge after an in-flight refresh completes.
+- Route the coordinator timer through the shared timer utility.
+- Keep routine schedule payload logging at debug rather than info.
+- Add a comment explaining the Q7 `get_server_timer` adapter behavior that returns a neutral empty list.
+
+## Upstream integration plan
+
+Mathias has released **3.15.1, 3.15.2, and 3.15.3** since the previous 3.15.0 baseline. The latest upstream `main` is 3.15.3 (`02cdd263`).
+
+Before implementing the follow-up fixes:
+
+1. Update local `main` from `origin/main` so it exactly matches upstream 3.15.3.
+2. Fetch Mathias's upstream remote.
+3. On `schedule-refresh-recovery-fixes`, merge Mathias upstream `main` into the branch.
+4. Resolve any conflicts while preserving the schedule-refresh-recovery-clean behavior.
+5. Run the full local gate before pushing.
+6. Push the fixes branch to GitHub.
+7. Install the pushed branch on the real Homebridge instance for validation.
+
+The branch must retain `schedule-refresh-recovery-clean` as its functional base; upstream changes are integrated on top before the new fixes are made.
+
+## Development / validation workflow
+
+Work locally first. Do not use GitHub as the development environment.
+
+Typical sequence:
+
+```bash
+cd ~/devProjects/homebridge-roborock-matter-plus
+
+git status --short
+git branch --show-current
+npm test -- --runInBand
+npm run build
+npx prettier --check .
 ```
 
-The fork's `main` branch is separately synchronized to Mathias 3.15.0:
+Keep command output short when collecting diagnostics. Prefer targeted `grep`, `tail`, `git log -n`, and individual test commands rather than dumping large logs or full files.
 
-```text
-b850c17 (main, tag: v3.15.0, upstream/main, origin/main)
+After local changes pass:
+
+```bash
+git push origin schedule-refresh-recovery-fixes
 ```
 
-Thus:
+Then install the pushed branch on the real Homebridge host:
 
-- `main` = Mathias's latest 3.15.0 upstream state.
-- `schedule-refresh-recovery-clean` = Mathias 3.15.0 + the HAP schedule-switch additions + our schedule refresh/recovery changes.
+```bash
+sudo hb-service stop
+sudo hb-service add https://github.com/pponce/homebridge-roborock-matter-plus.git#schedule-refresh-recovery-fixes
+sudo hb-service start
+```
 
-## What We Explicitly Did Not Do
+Use the real Apple Home app and Roborock app for end-to-end validation. Do not treat a local test run as proof of HomeKit/HAP timing behavior.
 
-- No permanent three-minute schedule polling.
-- No substitute backoff timer.
-- No independent reachability polling.
-- No requirement for local reachability before cloud schedule discovery.
-- No removal of schedule accessories solely because a vacuum is unreachable.
-- No interpretation of failed cloud retrieval as an authoritative empty list.
-- No unrelated Matter or shared-library redesign.
-- No redesign of schedule command verification.
+## Real Homebridge environment
 
-## Definition of Done
+Homebridge is running as an `hb-service` installation. The primary Homebridge log is:
 
-**Complete — 2026-08-20.**
+```text
+/var/lib/homebridge/homebridge.log
+```
 
-The branch satisfies the intended Mathias schedule-refresh requirements and the explicit unreachable-vacuum requirement. The behavior was validated in the real Homebridge/HomeKit environment, and the branch contains Mathias's 3.15.0 changes on top of the HAP schedule-switch work.
+Useful live log command:
 
-No pull request is being created as part of this work. The branch is intentionally maintained as a directly installable/testable fork branch.
+```bash
+sudo tail -F /var/lib/homebridge/homebridge.log | grep --line-buffered -E "Schedule (discovery|parser|sync|command|refresh)|Roborock"
+```
 
-## Continuity Rule
+The user's real setup includes two Roborock vacuums, with DUIDs observed during validation:
 
-Before making further functional changes, re-read this file and verify that the proposed change addresses a requirement above. If the requested behavior is already covered, prefer validation or a focused bug fix over adding another refresh mechanism.
+- `66xmjtyk5YgGyXD9epni7Y`
+- `5QNhUVywYYnWc2pPBk3URp`
 
-### Final status
+Other Homebridge plugins are active, including deCONZ, homebridge-http-webhooks, UniFi Protect, and Virtual Accessories. Their unrelated log traffic can be very noisy, so targeted Roborock/Schedule filtering is preferred.
 
-- Branch: `schedule-refresh-recovery-clean`
-- Upstream baseline: `v3.15.0` (`b850c17`)
-- Current branch tip: `f072332`
-- Status: **Complete / ready for continued real-world testing**
+## Cloud-request observations
+
+Overnight testing on 2026-08-21 showed repeated `get_server_timer` 10-second timeouts:
+
+```text
+Unable to refresh Roborock schedules ... Cloud request ... get_server_timer timed out after 10 seconds. MQTT connection state: true. Preserving existing schedules.
+```
+
+These occurred for both vacuums and sometimes repeated within seconds. A separate `get_prop` request also timed out. This strongly suggests the schedule refresh path can encounter Roborock cloud/MQTT request pressure or transient cloud failure; it is **not evidence by itself of a HomeKit bug or proof of a formal Roborock rate cap**. The failure-backoff work above is therefore important to avoid amplifying a cloud problem.
+
+## Important architectural constraint
+
+Do **not** reintroduce a permanent schedule-specific polling loop merely to work around HomeKit reads. Mathias explicitly preferred the cached/coalesced design and did not want a dedicated periodic schedule poll. The desired model is:
+
+```text
+Roborock cloud
+      |
+      v
+per-vacuum coordinator/cache
+      |
+      +--> HomeKit reads return cached state immediately
+      |
+      +--> stale read triggers one async refresh
+      |
+      +--> fresh snapshot synchronizes every schedule switch
+```
+
+The existing broader Roborock polling infrastructure may be reused only where it already exists and where doing so does not create a new schedule-specific polling loop.
+
+## Definition of done for this phase
+
+- [ ] Local `main` exactly matches Mathias 3.15.3.
+- [ ] `schedule-refresh-recovery-fixes` contains clean + upstream 3.15.3 integration.
+- [ ] HomeKit GET no longer waits on the cloud.
+- [ ] Failed refreshes receive negative-cache/backoff treatment.
+- [ ] Failed initial discovery cannot leave silently nonfunctional restored accessories.
+- [ ] Disabling HAP schedules removes/disposes existing schedule accessories, including after restart.
+- [ ] `upd_timer` fallback actually sends the intended command.
+- [ ] Parser rejects non-empty-but-unparseable responses as authoritative empties.
+- [ ] Mathias's existing clean gate passes, apart from the known sandbox-only `ui-server-local-probe` failure if reproduced there.
+- [ ] Real Homebridge/HomeKit validation passes.
+- [ ] No permanent schedule polling timer is introduced.
+
+## Continuity
+
+This file is the handoff document for the next development chat. Before changing code, re-read it and inspect the current GitHub branch/commit state. Preserve the distinction between:
+
+- `main` = clean Mathias upstream.
+- `schedule-refresh-recovery-clean` = completed first-phase schedule refresh/recovery work.
+- `schedule-refresh-recovery-fixes` = follow-up work requested by Mathias.
