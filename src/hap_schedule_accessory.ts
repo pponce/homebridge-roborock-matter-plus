@@ -448,11 +448,11 @@ class RoborockHapScheduleSwitchAccessory {
     service
       .getCharacteristic(this.platform.Characteristic.On)
       .onSet((value) => this.setSchedule(Boolean(value)))
-      .onGet(() => {
+      .onGet(async () => {
         this.platform.log.info(
           `Schedule GET: ${this.scheduleId}; cached=${this.schedule.enabled}`
         );
-        void this.coordinator.refreshIfNeeded();
+        await this.coordinator.refreshIfNeeded();
         return this.schedule.enabled;
       });
     service.updateCharacteristic(
