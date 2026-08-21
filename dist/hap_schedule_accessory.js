@@ -65,6 +65,7 @@ class RoborockHapScheduleAccessory {
         this.scheduleAccessories = new Map();
         this.vacuumName = "";
         this.managerRemoved = false;
+        this.disposed = false;
         this.lastScheduleRefreshAt = 0;
         this.lastFailedRefreshAt = 0;
         this.managerAccessory = accessory;
@@ -133,6 +134,12 @@ class RoborockHapScheduleAccessory {
             : undefined;
     }
     async refreshDetailed() {
+        if (this.disposed) {
+            return {
+                success: false,
+                hasSchedules: false,
+            };
+        }
         if (this.refreshInProgress) {
             return this.refreshInProgress;
         }
@@ -163,6 +170,12 @@ class RoborockHapScheduleAccessory {
                 };
             }
             const schedules = parseServerTimers(raw);
+            if (this.disposed) {
+                return {
+                    success: false,
+                    hasSchedules: false,
+                };
+            }
             // Keep display numbering stable even if Roborock returns schedules
             // in a different order between refreshes.
             schedules.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
@@ -220,6 +233,7 @@ class RoborockHapScheduleAccessory {
         this.lastScheduleRefreshAt = Date.now();
     }
     dispose() {
+        this.disposed = true;
         this.refreshInProgress = undefined;
         this.cachedSchedules = undefined;
         this.lastScheduleRefreshAt = 0;

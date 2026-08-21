@@ -265,6 +265,41 @@ describe("HAP schedule coordinator cache", () => {
     expect(getServerTimers).toHaveBeenCalledTimes(1);
   });
 
+  test("disposed coordinator does not sync when an in-flight refresh completes", async () => {
+    const coordinator = makeCoordinator();
+
+    let resolveRequest;
+    getServerTimers.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRequest = resolve;
+      })
+    );
+
+    const refresh = coordinator.refresh();
+
+    expect(getServerTimers).toHaveBeenCalledTimes(1);
+
+    coordinator.dispose =
+      RoborockHapScheduleAccessory.prototype.dispose.bind(coordinator);
+
+    coordinator.platform.api = {
+      updatePlatformAccessories: jest.fn(),
+    };
+    coordinator.managerAccessory = {
+      services: [],
+    };
+
+    coordinator.dispose();
+
+    resolveRequest([["timer-1", "on"]]);
+
+    await expect(refresh).resolves.toBe(false);
+
+    expect(coordinator.sync).not.toHaveBeenCalled();
+    expect(coordinator.cachedSchedules).toBeUndefined();
+    expect(coordinator.lastScheduleRefreshAt).toBe(0);
+  });
+
   test("successful empty snapshot is cached as empty", async () => {
     const coordinator = makeCoordinator();
 

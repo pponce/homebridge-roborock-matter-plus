@@ -234,6 +234,12 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).toContain("this.updateService(current.enabled);");
   });
 
+  test("disposed schedule coordinators cannot sync an in-flight refresh", () => {
+    expect(scheduleSource).toContain("private disposed = false;");
+    expect(scheduleSource).toContain("if (this.disposed) {");
+    expect(scheduleSource).toContain("this.disposed = true;");
+  });
+
   test("schedule dispose removes dynamic services but preserves manager", () => {
     expect(scheduleSource).toMatch(
       /dispose\(\): void \{[\s\S]*?removeService\(service\)[\s\S]*?updatePlatformAccessories/

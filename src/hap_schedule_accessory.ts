@@ -96,6 +96,7 @@ export default class RoborockHapScheduleAccessory {
   private readonly managerAccessory: PlatformAccessory;
   private vacuumName = "";
   private managerRemoved = false;
+  private disposed = false;
   private cachedSchedules: RoborockSchedule[] | undefined;
   private lastScheduleRefreshAt = 0;
   private lastFailedRefreshAt = 0;
@@ -215,6 +216,13 @@ export default class RoborockHapScheduleAccessory {
   }
 
   private async refreshDetailed(): Promise<RoborockScheduleRefreshResult> {
+    if (this.disposed) {
+      return {
+        success: false,
+        hasSchedules: false,
+      };
+    }
+
     if (this.refreshInProgress) {
       return this.refreshInProgress;
     }
@@ -253,6 +261,13 @@ export default class RoborockHapScheduleAccessory {
       }
 
       const schedules = parseServerTimers(raw);
+
+      if (this.disposed) {
+        return {
+          success: false,
+          hasSchedules: false,
+        };
+      }
 
       // Keep display numbering stable even if Roborock returns schedules
       // in a different order between refreshes.
@@ -330,6 +345,7 @@ export default class RoborockHapScheduleAccessory {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.refreshInProgress = undefined;
     this.cachedSchedules = undefined;
     this.lastScheduleRefreshAt = 0;
