@@ -13,8 +13,8 @@ The first recovery phase is now implemented and validated locally and on the rea
 - **Failure backoff / negative caching is active at 30 seconds.** During a real Roborock MQTT/cloud timeout, repeated HomeKit reads returned the preserved cached state and entered `FAILURE BACKOFF` rather than issuing additional cloud requests.
 - **Real-device failure test passed.** Both vacuums experienced `get_server_timer` cloud timeouts, preserved their existing schedule state, and suppressed repeated refreshes during the backoff window.
 - **Schedule-switch disable/restart validation passed.** With `enableHomeKitScheduleSwitches=false`, Homebridge restarted successfully without rediscovering/restoring schedule switches.
-- **Targeted schedule tests:** 21/21 passed.
-- **Full test suite:** 86/86 suites passed, 1,337/1,337 tests passed.
+- **Targeted schedule tests:** 21/21 passed for the first recovery phase.
+- **Full test suite:** 86/86 suites passed, 1,337/1,337 tests passed for the first recovery phase.
 - **Build/typecheck:** passed.
 
 ### Real-device validation — failed first discovery
@@ -25,11 +25,25 @@ On the real Homebridge installation, Roborock MQTT was deliberately unavailable 
 
 The resulting restored schedule groups for **Downtown Rock** and **Uptown Rock** disappeared from Apple Home, confirming that failed initial discovery no longer leaves restored schedule accessories registered without working handlers.
 
+### Progress update — `upd_timer` fallback
+
+The `upd_timer` fallback is now fixed and regression-tested.
+
+- `updateTimer()` now prefers the underlying `vacuum.command()` path before `startCommand()`. This avoids the `SIMPLE_VACUUM_COMMANDS` allow-list behavior that could previously let `startCommand()` resolve without sending `upd_timer`.
+- Added focused regression coverage that provides both `vacuum.command()` and `startCommand()` and verifies that `upd_timer` is sent through `vacuum.command()` with the expected parameters and request options.
+- Targeted schedule/API tests after the change: **24/24 passed**.
+- Full repository test suite after the change: **86/86 suites, 1,339/1,339 tests passed**.
+- Typecheck: **passed**.
+- Build: **passed**.
+- Changed-file formatting: **passed**. The repository still has the previously established baseline Prettier failures in `__tests__/hap-schedule-cache.test.js` and `src/hap_schedule_accessory.ts`; neither file was changed for this fix.
+- Tested commit pushed to `schedule-refresh-recovery-fixes`: `c7212cb`.
+- The exact pushed branch was installed on the real Homebridge host at `c7212cb`.
+- A normal real-device schedule write was not relied upon as proof of fallback execution because the fallback only runs after `upd_server_timer` verification fails. The regression test directly covers the faulty path Mathias identified.
+
 ### Remaining recovery items
 
 The following items remain intentionally open and have not yet been marked complete:
 
-- `upd_timer` fallback must actually send the command.
 - Non-empty but unparsable schedule responses must be treated as untrusted and must preserve the cached snapshot.
 - Final end-to-end validation of recovery after the failure/backoff window expires is still pending on real hardware.
 - The seven smaller review items below are now **in scope** and will be implemented/fixed before considering the follow-up complete.
@@ -45,7 +59,7 @@ The historical first-phase record is `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. Do not
 - Completed first phase: `schedule-refresh-recovery-clean`
 - Active follow-up branch: `schedule-refresh-recovery-fixes`
 - Follow-up branch is based on `schedule-refresh-recovery-clean` with Mathias 3.15.3 merged on top.
-- Current branch tip after plan update: `c1d3fba`
+- Current branch tip: `c7212cb`
 - Pre-fix functional baseline: merge `9a7cd13`, with 86 suites / 1336 tests passing.
 
 ## Mathias's required fixes
@@ -329,7 +343,7 @@ After the local gate passes and the branch is pushed:
 - [x] Failed refreshes acquire negative-cache/backoff state.
 - [x] Failed first discovery cannot leave silently nonfunctional restored accessories.
 - [x] Disabling schedules reliably removes schedule accessories, including after restart.
-- [ ] `upd_timer` fallback actually sends the command.
+- [x] `upd_timer` fallback actually sends the command.
 - [ ] Non-empty/unparsable responses never erase the cached schedule set.
 - [x] Successful empty responses remain authoritative.
 - [x] Concurrent reads coalesce to one in-flight refresh per vacuum.
@@ -357,4 +371,4 @@ The three important branches remain:
 - `schedule-refresh-recovery-clean` = completed first-phase work.
 - `schedule-refresh-recovery-fixes` = current follow-up work.
 
-The next implementation work should proceed one focused item at a time, starting with failed first discovery. Keep changes local, tests local, pushes deliberate, and real-device testing only after the tested branch is on GitHub.
+The next implementation work should proceed one focused item at a time, starting with **non-empty but unparsable schedule responses**. Keep changes local, tests local, pushes deliberate, and real-device testing only after the tested branch is on GitHub.
