@@ -1,5 +1,265 @@
 # Changelog
 
+## 3.15.0
+
+**A Q Revo S owner asked for the accessory details to read like a native device. Half of that is fixed here; the other half is Homebridge's and is now filed.**
+
+`accessory.model` has always been the raw string the robot reports itself as, so every surface that shows a model showed `roborock.vacuum.a104`. The HAP contact sensors carried it visibly today — their Model characteristic read "roborock.vacuum.a70 Docked" — and it is what the Matter node would show the moment Homebridge stops discarding it.
+
+There is now a marketing-name table: `roborock.vacuum.a104` reads "Roborock Qrevo S", `a70` reads "Roborock S8 Pro Ultra", and 34 models are covered. Every entry is upstream `copystring/ioBroker.roborock`'s own `VacuumProfile.name`, cross-checked against this repository's model comments — the test that does the cross-check found a real disagreement on the a97 while it was being written. Models with no upstream profile are deliberately absent and keep showing the code, including the maintainer's own sc05: a wrong marketing name is worse than a code, because a code is at least unambiguous.
+
+**The table is display-only, and that is the part worth guarding.** Every poll profile, feature lookup, capability branch and `isSupportedDevice` call keys on the raw code. A name resolved where a model is _compared_ would break model detection silently — a robot whose name we happen to know would stop matching its own profile, and the stale-accessory sweep would unregister it, which costs its owner a re-pair. So `__tests__/the-model-row-is-a-name-not-a-code.test.js` enumerates the rule instead of asserting the cases: it reads the source and fails if a model comparison is ever fed the display helper.
+
+**What this does not fix, measured end to end before shipping so nobody re-measures it:** for an external Matter accessory, Homebridge hardcodes `vendorName: 'Homebridge'` and derives `productName` from the display name, discarding the manufacturer and model the plugin hands it. `ServerConfig.ts` validates and truncates both to the Matter 32-character limit and returns them; `ServerLifecycle.ts:319-326` then never reads either. So Apple Home shows Manufacturer "Homebridge" and a Model row containing the robot's _name_, and no plugin change can alter that. Filed as homebridge/homebridge#3996 with the three-line fix. The values are correct on this side so they are right the moment it lands.
+
+## 3.14.3
+
+**The wind-down fix from 3.12.3 was too narrow by exactly one dock.**
+
+3.12.3 stopped a mop run from reporting "Vacuum + Mop" while the robot drove home. Three hours later the same robot did the same thing one step further along, and the log is as plain as the first one:
+
+```
+21:04:33  publish … operationalState=1,  cleanMode=1   mopping the hall
+21:07:43  publish … operationalState=64, cleanMode=1   driving home, correctly held
+21:09:31  publish … operationalState=68, cleanMode=2   washing its mop
+```
+
+The freeze covered the drive home and nothing else. A dock washing a mop runs water with the fan off and on again, which is the same signature that made the robot look like it was vacuuming in the first place — so the moment it arrived and started washing, the derivation woke up and changed the user's mode under them.
+
+Everything the plugin already counts as part of a run except actually running or paused is now the wind-down: driving home, emptying the bin, washing the mop, updating the map. During those the fan power and the water box belong to the dock's business, not to what the user asked for. A mode genuinely changed in the Roborock app while the robot is still cleaning reaches Apple Home exactly as before, and that case keeps the test it has had since 3.12.3.
+
+Two new tests replay the 21:04 to 21:09 window frame by frame. Both fail against 3.12.3.
+
+## 3.14.2
+
+**3.14.0 froze the operational state on the tile, and it did it to every robot that was not actively doing a dock job. Fix immediately.**
+
+Measured on a real mop run, 20 minutes after the release went out. The robot was asked to mop the hall from Apple Home. It went to the dock, wetted its mop, drove out and mopped — and the tile went on saying "Cleaning Mop" for 5 minutes while it worked, and would have gone on saying it until the next time the dock did something.
+
+The cause is a rule in Matter's own server implementation, and this project should have read it before shipping. From matter.js's `OperationalStateServer`:
+
+```
+if (currentPhase === null || currentPhase < 0 || currentPhase >= this.state.phaseList.length) {
+  throw new ImplementationError(`Current phase ${currentPhase} is out of bounds ...`);
+}
+```
+
+A null `CurrentPhase` beside a non-empty `PhaseList` throws. Homebridge swallows the throw, so the **entire cluster write** is discarded without a word in the log — not just the phase, but the operational state, the battery and the fault attribute with it. The controller keeps whatever it last accepted.
+
+3.14.0 published a constant 4-entry list with a null phase whenever the dock was idle, which is nearly all the time. So the last write any controller accepted was the last one where the dock genuinely was emptying, washing or updating, and everything after it was thrown on the floor.
+
+The list is now present only while there is a phase to point into, and absent otherwise. That is the specification's own encoding for "the current mode has no phases", so it is also the more faithful reading; the anti-flap argument that made the list a constant is untouched, because the list is still either that exact constant or nothing at all.
+
+**The tests did not catch it because they publish into a mock that accepts anything.** That is the same shape of gap as 3.12.1, one layer further out: the logic was right and the contract was not. There is now a test that encodes matter.js's rule directly, quoting it, and walks every state a robot can be in plus a whole run frame by frame, asserting the pair is one the real server would take. It fails 16 times against 3.14.0.
+
+## 3.14.1
+
+**The publish line now names the phase, so 3.14.0 can actually be measured.**
+
+3.14.0 shipped a feature whose status is "unmeasured": nobody knows whether Apple Home draws a Matter phase. That is a fine thing to ship — an attribute no controller reads costs nothing, and drying the mop has no other route to the tile — but it is only worth shipping if the answer can be found afterwards.
+
+It could not have been. A tile showing nothing during a dry would have been ambiguous between "the controller ignored it" and "the plugin never sent it", and that exact ambiguity is what cost the empty-tank warning 2 withdrawn releases and 3 field tests before 3.12.1 found the plugin had never sent anything at all.
+
+So the evidence line says it: `phase=Drying mop` while the dock dries, `phase=Washing mop` while it washes, and nothing at all when the dock is idle. One look at the log and one look at the tile now answer different halves of the same question.
+
+## 3.14.0
+
+**Your dock spends 2 to 4 hours drying the mop after every mop clean, and until now there was no way for Apple Home to know.**
+
+Matter gives a robot vacuum an operational state for emptying the dust bin, one for washing the mop and one for updating the map. This plugin has published all 3 since 3.12.0. There is no state for drying — not in Matter 1.2, not in 1.6, not anywhere — so for the whole of that time the tile has said "Docked" while the dock worked.
+
+The one place it can be said is `PhaseList` and `CurrentPhase` on the same cluster, and this release says it there. The dock's 4 jobs are announced as a fixed list of phases, and `CurrentPhase` steps through them: washing, then drying for as long as the dock takes, then nothing.
+
+**The list never changes, and that is the entire safety argument.** Both attributes were null from 1.4.58 until today, and the reason was real even though the explanation written down for it was not: 1.4.58 removed a version that changed phases as a refresh trick and flapped them at every Apple Home hub in the house. The answer to flapping is a list that cannot move, not an empty one. The list is a module constant, only `CurrentPhase` moves, and a test fails if any future edit builds the list from anything else. A second test walks a full mop run frame by frame and asserts the list is byte-for-byte identical at every step.
+
+Drying is detected on both protocols. A classic S- or Q-series robot with a drying dock reports `dry_status` itself. A B01/Q7 reports raw status 10, air-drying, which the adapter maps to "docked" so the tile does not claim a working robot — that mapping is correct and it stays, because Apple Home may refuse a Start command to a robot it thinks is busy, but it was also where the information disappeared. The adapter now writes the fact out under the same field name the v1 robots use, so both roads arrive at the same phase.
+
+`dry_status` went into the live cache with it. Drying starts while the robot is parked and idle, which is exactly when the frames are sparsest and the cloud snapshot is stalest — without the cache the phase would light for 1 frame and go out on the next heartbeat, which is worse than never showing it. That is the same hole 3.12.1 found in the tank fields and 3.13.0 found in the error code, and the tests take the robot's own route through the live handler rather than stubbing the status reader.
+
+**Whether Apple Home draws a phase at all is unmeasured, and this release does not pretend otherwise.** An attribute nobody reads costs nothing, and drying is worth the attempt because no other route to it exists. `enableMatterDockPhases: false` in `config.json` puts both attributes back to null if a controller dislikes them — not on the settings page, which 3.12.0 removed, but there for the person who would otherwise be reinstalling.
+
+## 3.13.1
+
+**A correction to 3.13.0, found on the maintainer's own robots within the hour, by the release that caused it.**
+
+3.13.0 gave an unrecognised `error_code` the generic Matter fault rather than silence. The argument was that a robot which has stopped and says nothing is worse than one which says something vague, and it was wrong.
+
+Within 30 minutes of the deploy, 2 robots that were docked, charging, at 100 % and in perfect health were both carrying `error_code: 2105` and both had a fault drawn on their Apple Home tile. Neither was in any kind of trouble. The reason is written in this repository already: a B01/Q7 robot's fault field is a separate diagnostic channel where informational codes linger after harmless events, which is why the adapter has always zeroed 407 — "cleaning in progress, scheduled cleanup ignored" — before it reaches anything else.
+
+So an unrecognised number is not evidence of a fault. It is evidence of a number. It is now named once in the log, per code and per robot, with a link for reporting it, and nothing is published to Apple Home for it. An existing fault is not cleared by one either.
+
+The same release stops reading a B01/Q7 robot's fault through Roborock's v1 error table at all. The 2 numbering spaces share a field name and nothing else, so translating 254 from a Q7 as "dust bin full" would have been a coincidence rather than a reading.
+
+Curated codes are unaffected: stuck, jammed wheel, blocked brush, dust bin missing or full, unreachable dock, flat battery and the rest still reach the tile exactly as 3.13.0 shipped them.
+
+## 3.13.0
+
+**Apple Home could always tell you a robot had stopped. It could never tell you why. Now it can.**
+
+A robot wedged under the sofa, a jammed wheel, a blocked brush, a dust bin someone took out and forgot to put back — Roborock reports every one of these as a numbered error code, and this plugin has polled that field on every cycle since the fork without ever showing it to anyone. The Matter side had half the answer already: operational state 3, Error, so the tile stops claiming the robot is Ready. The other half, the attribute that names the fault, has only ever carried 1 value out of 19 — an empty clean water tank.
+
+This release maps the rest. Stuck, wheel jammed or floating, main or side brush blocked, dust bin missing, dust bin full, an unpowered or unreachable dock, a flat battery, a no-go zone in the way, a dirty laser or cliff or wall sensor, a failed suction fan. An error code the plugin has never seen still reports a fault rather than silence, and the raw number reaches the Homebridge log so it can be reported and mapped properly — `error_code: 2105` on a Q7 is exactly that case and is why the branch exists.
+
+**The published codes deliberately stop at 71, and that is the interesting decision.** Matter 1.5 added names that fit several of these faults exactly: `WheelsJammed`, `BrushJammed`, `NavigationSensorObscured`. Everything up to 71 has been in the cluster since Matter 1.2. Nothing establishes which revision Apple implements, and this plugin has already measured what Apple Home does with a value it does not recognise in the neighbouring attribute — the tile sticks on "Connecting" forever, which is why `operationalStateList` ships bare ids and no labels. A robot reported as `Stuck` when the accurate word was `WheelsJammed` has lost a little precision. A robot whose tile will not finish connecting has lost the robot. The accurate 1.5 name is written to the log beside the code that was sent, so the day somebody watches a real tile with 76 on it, the mapping moves and the log already says which rows to move. A test fails if any future edit reaches for the accurate name without that measurement.
+
+An empty clean water tank still outranks the robot's own fault when both are true at once. It is the one code measured all the way to a rendered tile, and it is the one the person standing in the kitchen can fix in 30 seconds.
+
+**The plumbing got the same treatment the tank fields got in 3.12.1, for the same reason.** `error_code` was in neither the live cache nor, on the local transport, the list of dps keys the plugin reads — dps 120 was dropped on the floor, which on a B01 or Q7 is the single most likely way a fault arrives. Both are fixed, and the tests take the robot's own route through `notifyDeviceUpdater` rather than stubbing the status reader, because stubbing it is precisely how the tank feature passed its tests for 2 releases while being unable to fire.
+
+Nothing needs re-pairing. An error attribute is a live value, not a capability. `enableMatterTankFaultReporting: false` still switches the whole attribute off; the key name predates the wider mapping and is kept so that anyone who turned it off stays turned off.
+
+## 3.12.5
+
+**3 things this project told you about the Matter specification were not in the Matter specification.**
+
+An audit of the plugin's own claims against the specification text found 3 statements that were invented rather than read. None of them changes what the plugin does; all 3 were being used as reasons not to build something, which makes them expensive to leave standing.
+
+`buildOperationalStateCluster` said "RVC Operational State requires PhaseList and CurrentPhase to be null". It does not. Both attributes are mandatory on that cluster and both are nullable, and null is the specification's own way of saying the current mode has no phases. The real reason they are null is history: 1.4.58 removed a version that changed phases as a refresh trick and flapped them at every Apple Home hub. That is an argument against flapping phases, not against having them, and it matters because `PhaseList` is free-form text up to 32 entries and is the one place the dock's own jobs could be named.
+
+Which is also why the settings page no longer says mop drying "cannot be reported by any plugin". It has no operational state of its own, which is what the sentence should have said. Whether Apple Home would draw a phase is unmeasured, and the description no longer implies the question is closed.
+
+The Vacuum + Mop clean mode carried a comment saying Matter has no dedicated tag for it. Matter has had `VacuumThenMop`, 0x4003, since the cluster was defined. This release does not switch to it, and the comment now says why: `SupportedModes` is fixed at commissioning, so changing a tag would leave every already-paired robot needing a re-pair before its mode picker worked again. Combining the 2 standard tags is legal, it is what has always shipped, and it stays.
+
+No behaviour changes in this release.
+
+## 3.12.4
+
+**A correction. For one release this README said the opposite of the truth about how your robots reach Apple Home.**
+
+3.12.3 rewrote the paragraph on Matter fault reporting around 2 beliefs: that Homebridge puts every Matter accessory on 1 shared node, and that the field tests which found Apple Home drawing no vacuum faults had therefore been run on a bridge. Both are wrong, and the evidence was in the maintainer's own log the whole time.
+
+Homebridge has never bridged a robot vacuum. Its Matter layer keeps a list of device types that must be published on a dedicated Matter server of their own, and `RoboticVacuumCleaner` has been on that list since the first Matter commit landed on 23 February 2026 — before any released Homebridge could speak Matter at all. Every robot gets its own server, its own port and its own pairing code. On the maintainer's host that is ports 5532, 5533 and 5534 and 3 distinct bridge identifiers, printed in the Homebridge log at every startup.
+
+So the sentence 3.12.3 deleted was correct and the one it added was not. "Bridged versus not" cannot explain why Apple Home drew nothing in those 3 controlled tests and drew the tap icon on this maintainer's own tile on 20 August, because every one of those measurements was taken on a standalone node. The condition is still unknown, and the README says so again.
+
+The wrong version was live for 17 minutes. Nothing in the plugin changed in this release; the code shipped by 3.12.3 is untouched.
+
+## 3.12.3
+
+**A robot asked to mop said it was vacuuming — for the 40 seconds it spent driving home.**
+
+Mathias asked his S8 Pro Ultra for a mop run from Apple Home and watched the tile report Mop, then Vacuum + Mop, then Mop again. The log is unambiguous: `cleanMode=1` at 16:55:16, `cleanMode=2` at 16:56:16 the second it was sent back to the dock, `cleanMode=1` at 16:56:54 once docked. He had asked for one thing.
+
+The robot was not misbehaving. A classic S- and Q-series robot does not report its clean type, so the plugin derives it: fan power 105 means the fan is off, which means mop-only, and otherwise an active water level means vacuum + mop. That derivation is a single sample, and sending a robot home resets its fan power while leaving the water box configured — which is exactly the signature it reads as vacuum + mop.
+
+The derivation is now frozen while the robot is driving home, and only then. It stays authoritative for the rest of a run, because a mode genuinely changed in the Roborock app mid-clean must still reach Apple Home; that is a real case and it has its own test. A first attempt held the type for the whole run and broke it, which is how the scope got settled. Robots that report their clean type directly — the B01 and Q7 generation — were never affected either way, because their answer is not a guess.
+
+## 3.12.2
+
+**Flipping debug mode could switch off 9 HomeKit sensors nobody had touched.**
+
+`autoSave()` and the device-row toggle both went through `saveCredentials()`, which spread the entire settings form into the patch. The Apple Home checkboxes sat in their own panel with their own Save button and deliberately had no autoSave binding, so the intended flow was tick-then-Save. But any change to debug mode, region, email or a device row committed whatever those 4 keys happened to be in the DOM at that moment.
+
+The signature is in the config diffs: `debugMode` false to true and `enableHomeKitStateSensors` true to false in the same write. One debug-mode toggle, and an untouched checkbox rode along and unpublished 9 HAP accessories without anyone pressing Save. It happened 3 times in one day.
+
+`updatePluginConfig` is a merge, so a key left out of the patch keeps its saved value. An implicit save now writes only the fields whose own controls triggered it. The account password is off that list too, for the same reason `login()` deletes it: blurring the email field should not write a cleartext password back into `config.json`.
+
+What this does not claim: nothing unticks that box on its own. `syncFeatureDependencies` is empty and no path outside `loadConfig` assigns to `.checked`. The bug was never a checkbox with a mind of its own — it was an unrelated control persisting it.
+
+The new test enumerates the rule rather than the case: every control wired to `autoSave()` must have its key on the list, or that control silently stops saving.
+
+## 3.12.1
+
+**The empty-tank warning could never fire on a real robot, and it took the Roborock app saying "Out of water" next to a silent tile to prove it.**
+
+3.10.0 added the `Water Tank Empty` sensor and 3.12.0 added the Matter fault on the tile. Both read `dock_error_status` and `water_shortage_status` through `getNumberStatus`, which checks the live cache first and the HomeData snapshot second. Neither field is in the snapshot, and the live handler remembered 7 fields — state, charge status, battery, clean area, clean time, fan power and clean type. The tank was not among them. So both features asked for a value that had nowhere to come from, got null, and correctly said nothing at all. On my own S8 Pro Ultra the raw frames carried `dock_error_status: 38` for days while the sensor stayed Open and the tile stayed clean.
+
+The live cache now remembers both fields. Nothing else changes.
+
+The reason no test caught it is worth writing down, because it is the sort of gap that repeats: every test for this feature stubbed `getVacuumDeviceStatus` and handed the code the value it was asking about. They proved the logic and nothing about the plumbing — a feature can be entirely correct and still be wired to a socket with no power in it. There are now 4 tests that take the robot's own route instead, pushing a live frame in through `notifyDeviceUpdater` with a snapshot that knows nothing about tanks, including the sparse-frame case where one message carries the tank and the next carries only the battery. All 4 fail against 3.12.0.
+
+## 3.12.0
+
+**An empty water tank now shows on the tile, and the page of switches that used to decide such things is gone.**
+
+Apple Home draws a tap icon on the play button with "refill the water tank" when a robot publishes Matter's `WaterTankEmpty` fault. This plugin has written that attribute twice and withdrawn it twice — 1.4.61, then 3.3.0 into 3.4.1 — because 3 controlled tests on an S8 Pro Ultra with a genuinely empty tank produced nothing at all in Apple Home, and wedged the tile on "Updating…" for good measure. Then vp-debug12 posted a screenshot in [#9](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/9) of the same attribute rendered correctly by the same controller. One counterexample is worth more than my explanation, so it is back.
+
+It is deliberately narrow. `WaterTankEmpty` goes out when the robot says the tank is empty and `NoError` when it says the tank is full, because an attribute only ever written when something is wrong never clears and a warning that survives a refill is worse than no warning. A robot that has not reported its tank gets no attribute at all rather than a cheerful all-clear. And the robot is **not** dragged into the Matter Error state along with it: that was the third of Wazza151's tests, Apple still drew nothing, and a robot in Error may be refused a Start command — a real cost for a robot that is docked, charging and perfectly able to vacuum without water. No re-pairing is needed; an error attribute is a live value, not a capability.
+
+Both robots that have been measured with an empty tank disagree about how they say so. The S8 Pro Ultra sets `dock_error_status: 38` and leaves `water_shortage_status` at 0; the Q Revo sets both. Either is enough, which is the same rule the `Water Tank Empty` contact sensor already used.
+
+**And the Apple Home Features section of the settings page is gone.** 9 switches, several of them marked "⚠ re-pair", every one of them a way to end up with a robot that shows less than it could. They are all on now. Rooms and map selection, live room tracking, cleaning and suction modes, battery, dock and returning status, charging and docked on the tile, fault reporting, and the tank warning — that is what a Roborock in Apple Home is, and it should not have been a quiz.
+
+The switches were not just clutter, they were sharp. 3.10.1 measured what turning a mode set **off** does: Matter persists `CurrentMode` and does not persist `SupportedModes`, so a stored mode 6 meeting a freshly shrunken list of 0, 1, 2 throws inside `RvcCleanModeServer.initialize`, the endpoint rolls back, and the accessory never registers again — on that restart and every restart after it. The settings page was offering that as a checkbox. Growing a list has no such failure: the stored mode stays valid, which is why turning everything on is the safe direction and turning things off never was.
+
+Every key is still read from `config.json`, so `"enableMatterFaultReporting": false` still works for anyone who wants the old silence, and an existing config that already says `false` is left alone. Nothing on the settings page writes them any more, which also closes a quieter bug: a save could previously write `false` for a feature the page had no opinion about.
+
+**If your robot was paired before this release, re-pair it once.** Matter fixes an accessory's announced capabilities at commissioning, so a robot that was paired with 3 clean modes and 4 operational states keeps showing 3 and 4 until Apple Home is shown the new shape. Remove the robot in Apple Home, then add it again with the same Matter code. Anyone who already had these switched on has nothing to do.
+
+## 3.11.2
+
+**"Attempt 12 this run" counted every run since Homebridge started. So did "failed 10 times in a row", and the once-per-run explanation of why no room could be named was only ever printed on the first run of the process.**
+
+Caught on my own a70. It ran a two-room clean from Apple Home, the cloud map channel was timing out that morning, and `get_map_v1` failed all ten times it was asked — ten guaranteed-to-fail cloud requests, 10 seconds of timeout each, spread across one ten-minute clean, and not one room named.
+
+The clear that runs at every run boundary exists so nothing leaks into the next run. It dropped the cached room and nothing else. Every counter behind the log lines survived for the lifetime of the process, so three lines were telling you about a window that was not the one they named. A run that fails every attempt is exactly the run that leaves the counters high, and that run never had a cached room to clear in the first place — which is why the leak survived a release that went looking for the same class of thing. 3.11.0 stopped placeholder poses from inflating the miss count; it did not make the count per-run. It is per-run now.
+
+**The failing fetch is also no longer retried at live-display cadence for the whole run.** After 2 failures in a row the gap doubles with each further failure, capped at 5 minutes, and drops straight back to the live cadence the moment one succeeds. The first two failures are deliberately not slowed: a single lost frame on a healthy channel must not make a working live room sluggish, the same rule 3.11.1's local-mute limit follows. A streak long enough to have been slowed now says so when it ends, because "failed N times in a row" at warn level had no counterpart and a channel that recovered left the log's last word saying it was broken.
+
+Both protocol paths are covered — the classic `get_map_v1` fetch and the Q7/B01 SCMap fetch had the same two defects in the same shape. The test enumerates the rule across every live-room state the plugin keeps rather than the two call sites that happened to be found, so a third path added later fails the test instead of leaking quietly.
+
+Not addressed, because there is no measurement to justify it: why the cloud map channel timed out at all. `get_map_v1` has the default 10-second timeout and had been resolving every position on this same robot nine days earlier, so a longer timeout would be a guess. The morning also carried an unrelated cloud `get_prop` timeout on the same robot, which points at the account's cloud rather than at the map request.
+
+## 3.11.1
+
+**The LAN port was open, the robot never answered on it, and the plugin kept asking for the life of the process — 10 seconds thrown away on every poll and every command.**
+
+The reporter of [#8](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/8) runs Homebridge on a NAS in one VLAN and his Saros 10 in another. Port 58867 is reachable across that boundary, so the local client completes its TCP handshake and records `Local connect state: true` — and then every single request dies of silence 10 seconds later. `get_prop` on both startups, `app_segment_clean`, `app_pause`, `app_start`: all of them, every time.
+
+The plugin only ever gave up on the LAN when the _connect_ failed. A socket that connected and then answered nothing was retried forever, which is why he saw a `get_prop` timeout at every restart and why his commands were slow before they worked at all. A successful handshake proves the port is reachable. It does not prove the robot is listening.
+
+3 local timeouts in a row on a socket that still reports itself connected now write the LAN off for that robot and use the cloud instead, with 1 log line that says the port is open and the robot is not replying — the distinction that decides whether there is any point rewriting a firewall rule. Any local reply resets the count, so a single lost frame on a healthy network changes nothing; permanently exiling a robot to the cloud over one dropped packet would be worse than the bug being fixed.
+
+The diagnostics report names this case separately from a failed connect, because those two look identical in a log and lead to opposite conclusions.
+
+## 3.11.0
+
+**A Q7 said it was between rooms 226 times during one clean. It was in the bedroom the whole time.**
+
+I caught a run on my own robots and pulled the numbers rather than the impressions. One Q7, 47 minutes, 227 live-room fetches. 226 of them placed it at cell 22280,22100 — the same cell every time — while the room outlines on that map span 38 to 293. The pose behind it was exactly (1100, 1100), which is the same constant two other people's Q7s reported back in August. The remaining fetches resolved Stue, then Gang, then Soveværelse, in the order the robot actually moved.
+
+So the robot does send a real position. It just serves a placeholder in between, and every one of those was being written up as "the robot's position did not fall inside any known room outline (it may be between rooms, or the map may still be building)". That sentence was wrong twice over: the robot was not between rooms, and there was nothing anyone could do about it. It also fed the miss counter, which is how a robot cleaning one bedroom produced "after 46 unresolved position(s)".
+
+A position further outside the map than the map is wide is now recognised for what it is and named as a placeholder, once per run at a level you see and quietly thereafter. The test is geometry rather than the number 1100: the robot cannot be somewhere it has never mapped, which stays true if Roborock picks a different constant. A robot genuinely outside every outline — a doorway, a hallway nobody named, a strip the outlines do not cover — is still a real miss and still counts as one, because that is the case the miss line exists for. Classic S- and Q-series robots resolve every fetch and are untouched.
+
+Two things fall out of it. The room still updates on a Q7, on the fetches that carry a true position; nothing about the tile changes. And a resolved room now prints the cell it resolved at, so a working position and a failing one can be compared in one log instead of across two field sessions — which is what this one cost.
+
+**Also: 50 log lines a minute, per robot, that could never mean anything.** With debug on, every known status attribute produced `Skipping known get_status attribute without a Homebridge state object` on every poll. That check dates from this library's ioBroker origins, where the object it looks for exists; under Homebridge it never does, so the branch fired for every attribute forever and reported only that the plugin is not ioBroker. On my own server the log ring had shrunk to 90 minutes — the window you need when something real goes wrong. It is gone. An attribute nobody has mapped yet is still named once with its value, which is the half that carries information.
+
+## 3.10.2
+
+**You asked for vacuum-only, the robot mopped, and Apple Home showed vacuum anyway — because the plugin believed a command it had already logged that it lost.**
+
+The reporter of [#8](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/8) selected two rooms, vacuum only, and his Saros 10 ran a vacuum-and-mop over them. His log contains both halves of the mistake, 83 seconds apart:
+
+```
+13:50:57  Applying Vacuum mode to Weebo before starting.
+13:50:59  Roborock did not confirm the water mode and suction level ...
+          the robot may keep its previous settings for this run
+13:52:22  Roborock still reports Vacuum + Mop ... after Vacuum was applied
+          and acknowledged
+```
+
+The second line is untrue, and the first line is the plugin saying so in advance.
+
+Before a Matter start, the plugin makes the robot match the mode being displayed. On a v1 robot the difference between Vacuum and Vacuum-and-mop _is_ the water-box mode, so that one command carries the whole choice. When it lands, the plugin pins the clean type for the run so a robot whose own report lags by a minute or two cannot make the tile flicker to a mode nobody asked for — that is 3.10.0's behaviour and it is correct.
+
+The pin was taken on the wrong evidence. It was taken whenever the prep sequence _resolved_, and the prep resolves on a partial apply too: it deliberately never gives up early, because a suction command that times out must not cancel the command carrying the user's actual choice. So it sends what it can, warns about what the robot never confirmed, and returns normally. "Acknowledged" and "sent, unconfirmed, the robot may keep its previous settings" reached the caller as the same answer — nothing.
+
+So on his run the water command went unanswered, the robot kept mopping as the warning predicted, and the pin then suppressed the robot's honest vacuum-and-mop report in favour of a promise the plugin had already recorded it could not keep. The only place the failure remained visible was the floor.
+
+A pin is either known ground truth or it is not taken. The prep now hands back what the robot confirmed, and the clean type is pinned only when the command carrying it was acknowledged. An unconfirmed suction level does not disturb it, because a level inside a type says nothing about which type is running — and the warning about it is unchanged either way. This is the rule the failed-apply path has always followed, finally extended to the apply that fails while resolving.
+
+The cloud timeouts underneath this are not the plugin's to fix and are not new; what is fixed is that they can no longer be hidden from you.
+
+**Also: the plugin's own heartbeat left no trace of itself, and that cost [#7](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/7) a wasted round of testing.**
+
+Every robot gets a forced full Matter write every 60 seconds. Its evidence line is written only when the rendered line would read differently from the last one — deliberately, since 3.10.0, so an idle robot does not fill the log with identical minutes.
+
+The reporter of #7 was asked to check whether those lines were still appearing while his Apple Home tile was dead. It is the cheapest way to separate "the plugin stopped" from "the Matter session died underneath a healthy plugin". His robot was docked at 100 %, so every line rendered identically, so the last one was written at startup and none followed. He looked, correctly reported 11 minutes of nothing, and the answer was worth nothing — absence was the deduplication working, not evidence about whether anything ran. The question was unanswerable from the log at any level, which for a liveness signal is the wrong outcome.
+
+A suppressed publish is now recorded at debug, naming the robot, the values and what triggered it. The info log stays exactly as quiet as before, and with plugin debug on, 11 minutes of a docked robot leaves 11 traces — so a gap in them means something.
+
 ## 3.10.0
 
 **An empty clean-water tank can now notify you, which Matter has never had a way to say.**
@@ -64,7 +324,7 @@ It was not the cloud. Measured over 30,224 log lines covering 49 restarts: 92 re
 
 A flaky connection does not look like that. It gives a varying number of attempts at varying times. One attempt, every time, only at startup, only on the cloud-only protocol is a race — and it was an ordering mistake in the startup sequence. The dedicated Q7 status loop was started at the end of device creation, and it polls immediately; the sequence did not wait for the MQTT session until after device creation had returned. A Q7 request is cloud-only by construction, so that first poll was rejected before anything reached the wire. The wait was already there, with a comment explaining this exact hazard for the two calls after it. The loop start had simply slipped in front of it.
 
-The same event explains the other half, which had been observed fourteen times and never connected to it: for about 27 seconds after every restart, a Q7's tile in Apple Home showed `battery=100%, operationalState=0, runMode=0` — the snapshot taken at registration rather than the robot. That window is not a separate phenomenon. A refused attempt still stamps the request throttle, so the 15-second tick that followed fell inside the 25-second idle gap and was dropped, and the robot's real status did not arrive until the tick at 30 seconds. Measured median: 31 seconds.
+The same event explains the other half, which had been observed 14 times and never connected to it: for about 27 seconds after every restart, a Q7's tile in Apple Home showed `battery=100%, operationalState=0, runMode=0` — the snapshot taken at registration rather than the robot. That window is not a separate phenomenon. A refused attempt still stamps the request throttle, so the 15-second tick that followed fell inside the 25-second idle gap and was dropped, and the robot's real status did not arrive until the tick at 30 seconds. Measured median: 31 seconds.
 
 Two changes, because the ordering fix alone leaves the hazard reachable — the wait resolves on a 10-second timeout whether or not the broker came up:
 
@@ -174,7 +434,7 @@ Also on that page: saves report failure instead of looking like they worked, the
 
 **The log.** Two lines were removed as duplicates: the poll-profile notice was keyed per robot while its text is per model, so two robots of one model printed the same sentence twice, naming neither; and every room change was announced by both the library and the Matter layer with the same prefix. `Service started` was printed on the failure path — the `getHomeDetail` catch falls through to the same callback — directly under the stack trace saying it had failed; it now says what actually happened. That stack trace is gone too: a Roborock outage or a DNS blip is a warning with a sentence, not an error with a Node stack. `Starting adapter. This might take a few minutes` (it takes one second) and `Lets go!!!!!!!` are gone with the rest of the ioBroker vocabulary, `Adapter not inited. Command not executed.` now names the robot and says to try again in a few seconds, and a robot going offline is a warning that says what to check — with the matching "back online" line uncommented after who knows how long.
 
-**Fourteen more log lines were printing a raw 22-character duid to users.** `log-lines-name-the-robot` only inspected template literals written inside the logging call, so anything built into a variable or an `Error` first was invisible — it was checking 39 of 59 calls in one file alone. It now follows the three laundering channels as well, and everything it found is fixed.
+**14 more log lines were printing a raw 22-character duid to users.** `log-lines-name-the-robot` only inspected template literals written inside the logging call, so anything built into a variable or an `Error` first was invisible — it was checking 39 of 59 calls in one file alone. It now follows the three laundering channels as well, and everything it found is fixed.
 
 **One resource leak.** `localConnector.js` opened its UDP discovery socket at module load, so requiring the file bound a socket a cloud-only install never uses, a second discovery pass attached a second set of handlers to it, and the first pass's `close()` left it unbindable for the next. It is now created per run and closed once. That also removes the "A worker process has failed to exit gracefully" warning the suite has printed for months, which was masking any real leak.
 
@@ -196,7 +456,7 @@ Verified red against 3.5.3: 3 of 29 fail, exactly the disk-read and fallback rul
 
 3.5.0 mentioned pairing in one sentence, and the sentence was wrong: it assumed the bridge needed pairing, not enabling.
 
-The startup log now answers which of three situations you are in, once per start, and warns rather than informs when HAP is off — an info line about a feature that cannot work reads like the ninety other info lines a start produces. The settings page shows the steps under the toggle when the feature is on, and the README and the setting's own description carry the same three: **Plugins → homebridge-roborock-matter → ⋮ → Child Bridge Config**, check **Enable HAP**, restart, then **Connect to HomeKit** on that screen and scan that QR code. All four surfaces name the two codes that look right and are not — the main Homebridge code, and the robot's Matter code, which covers the vacuum only.
+The startup log now answers which of three situations you are in, once per start, and warns rather than informs when HAP is off — an info line about a feature that cannot work reads like the 90 other info lines a start produces. The settings page shows the steps under the toggle when the feature is on, and the README and the setting's own description carry the same three: **Plugins → homebridge-roborock-matter → ⋮ → Child Bridge Config**, check **Enable HAP**, restart, then **Connect to HomeKit** on that screen and scan that QR code. All four surfaces name the two codes that look right and are not — the main Homebridge code, and the robot's Matter code, which covers the vacuum only.
 
 `__tests__/the-switches-say-which-qr-code-to-scan.test.js` enumerates the rule over the surfaces, because the original failure was that only one surface mentioned pairing at all. Matching ignores markup, so `<strong>` and `**bold**` count as the same instruction. Verified red against 3.5.2: 26 of 26 fail.
 
@@ -345,14 +605,14 @@ The prep sequence sends up to three commands one after another, each with a two-
 
 **Nothing in this release changes what the plugin does. It removes things that were never doing anything, and two of them were actively lying.**
 
-- **Ten of the eleven shipped languages could never load.** `this.language` is only ever set from `options.language`; the sole production construction site passes none, the UI server hardcodes `"en"`, and no setting exposes the choice. So de, es, fr, it, nl, pl, pt, ru, uk and zh-cn — 78 KB of translations — were installed on every user's disk and read by nobody. They are gone. A test now enumerates the rule rather than the ten filenames: **a locale that ships must be selectable**, so adding one back fails until there is actually a way to pick it.
+- **Ten of the 11 shipped languages could never load.** `this.language` is only ever set from `options.language`; the sole production construction site passes none, the UI server hardcodes `"en"`, and no setting exposes the choice. So de, es, fr, it, nl, pl, pt, ru, uk and zh-cn — 78 KB of translations — were installed on every user's disk and read by nobody. They are gone. A test now enumerates the rule rather than the ten filenames: **a locale that ships must be selectable**, so adding one back fails until there is actually a way to pick it.
 - **The README claimed 463 automated tests in one paragraph and 263 in another.** Both were wrong. Two hand-written numbers describing one fact will drift apart and neither gets corrected, because nothing checks them. There is one number now, and a test checks it against what the suite actually declares. It deliberately does not pin an exact figure — `test.each` expands at runtime and no static reader can know by how much — it pins the two things that went wrong: state it once, and keep it in a defensible band.
 - **The publish log line still rendered `fault=…` from an attribute withdrawn in 3.4.1.** The branch was unreachable, and worse, it read as evidence the feature still existed. Removing it settles a real contradiction: `matter-fault-reporting.test.js` pinned that `operationalError` is never published, while `matter-publish-line-logs-every-change.test.js` hand-built one and asserted it rendered. Two tests disagreeing about whether a feature exists is worse than either answer.
 - **An orphaned ioBroker map viewer and a MITM sniffing script** (`roborockLib/lib/map/`, `roborockLib/lib/sniffing/`) were excluded from the npm package rather than deleted — which is exactly how they survived unreviewed for so long. Ignored by the package, invisible in review, referenced by nothing.
 - **Ten functions whose definition was their only occurrence in the entire tree** are gone: `getHomeID`, `decodeSniffedMessage`, `getConnector`, `updateDataExtraData`, `setupBasicObjects`, `getCleanSummary`, `resolve102Message`, `resolve301Message`, `BytesToInt`, `getErrorCodeDescription`, plus the unused `B01_REQUEST_DPS`/`B01_RESPONSE_DPS` constants and three exports nothing imported. `resolveLiveRoomId` went too — a one-line wrapper over `describeLiveRoomResolution` with no production callers, kept alive only by tests. Two ways to ask the same question is how one of them drifts.
 - **`errorCodes` was NOT removed**, though a first pass called it dead. `deviceFeatures.js` still uses the table for its `error_code` state mapping. Worth recording: the check that catches this is grepping the whole tree, not reasoning about one file.
 - **Two user-facing claims were false.** The `preferCloudForMatterCommands` setting promised to keep "the legacy HomeKit accessories unchanged", and a startup log line told users "The existing HomeKit accessory will continue to work." This fork removed every HAP accessory by design — there is nothing to fall back to. The log line now says what to actually do: enable Matter for the bridge.
-- **ROADMAP.md was eight releases stale**, still titled for a different package, pointing at an `AGENTS.md` that has never existed in the tree, and listing HomeKit controls as delivered features thirteen lines above its own note that all HAP accessories were removed. Rewritten, with the pre-Matter-only entries labelled rather than deleted so the history stays readable.
+- **ROADMAP.md was eight releases stale**, still titled for a different package, pointing at an `AGENTS.md` that has never existed in the tree, and listing HomeKit controls as delivered features 13 lines above its own note that all HAP accessories were removed. Rewritten, with the pre-Matter-only entries labelled rather than deleted so the history stays readable.
 
 ## 3.4.12
 
@@ -365,7 +625,7 @@ The fix that added the two fields was made one level down from the gatekeeper, w
 
 ## 3.4.11
 
-**Two docked Q7s flipped their Apple Home clean mode to "Vacuum" and back every ninety seconds, and the plugin was reporting a level it had never measured.** Caught in a log from a plugin author's own robots on 3.4.10: every battery tick produced a pair of publishes about a second apart, the first saying `cleanMode=0` and the second saying `cleanMode=6` — ten pairs in fourteen minutes, on both robots, at the same battery value.
+**Two docked Q7s flipped their Apple Home clean mode to "Vacuum" and back every 90 seconds, and the plugin was reporting a level it had never measured.** Caught in a log from a plugin author's own robots on 3.4.10: every battery tick produced a pair of publishes about a second apart, the first saying `cleanMode=0` and the second saying `cleanMode=6` — ten pairs in 14 minutes, on both robots, at the same battery value.
 
 Mode 6 is "Max Vacuum", the level the robot is actually set to. Mode 0 is plain "Vacuum", a level nobody selected. When suction-level clean modes are announced (`enableFanPowerCleanModes`), the reported mode is derived from the robot's live fan power — but the derivation had no answer for "the fan power cannot be read right now". It fell through to the last Matter selection, which defaults to plain Vacuum, so a momentary gap in the reading was published as a definite statement about the robot's suction level.
 
@@ -377,7 +637,7 @@ This is the same class of defect as 3.4.6 and 3.4.7: reporting a value derived f
 
 ## 3.4.10
 
-**The Q7 position that never resolved to a room is not a position at all.** 3.4.9 asked the two Q7s to report the range their room outlines occupy, and they answered: Garage sat in a map spanning cells 52–171 by 43–187, 1. Sal in one spanning 38–293 by 90–227. Back-computing through each map's own origin and resolution gives the same coordinate for both — exactly (1100.0, 1100.0), on two robots, two maps, and twelve minutes of active cleaning. A number that identical is arithmetic, not a place a robot stood, which means live-room tracking on these models has never worked from that field.
+**The Q7 position that never resolved to a room is not a position at all.** 3.4.9 asked the two Q7s to report the range their room outlines occupy, and they answered: Garage sat in a map spanning cells 52–171 by 43–187, 1. Sal in one spanning 38–293 by 90–227. Back-computing through each map's own origin and resolution gives the same coordinate for both — exactly (1100.0, 1100.0), on two robots, two maps, and 12 minutes of active cleaning. A number that identical is arithmetic, not a place a robot stood, which means live-room tracking on these models has never worked from that field.
 
 - **The miss line now surveys the payload rather than asserting anything about it.** It prints the size of every top-level field and every scalar inside the small ones, keyed by field path. Two consecutive lines are then a diff: the value that changed while the robot was driving is the position, and the submessage that grew is the trail behind it.
 - **Varints are surveyed, not just floats.** The pose message carries an `update` flag alongside its coordinates, so a float-only dump would have printed two plausible-looking numbers and hidden the field saying they were stale.
@@ -440,7 +700,7 @@ On a v1 robot the difference between "Vacuum" and "Vacuum and mop" **is** the wa
 - **A field nobody has seen before still gets through.** If a robot starts sending something new after hours of uptime, it is reported on its own — quietening the noise must not also hide the signal, since these lines are the raw material for a model profile.
 - **The line is now usable in a model report.** It names the robot and model, lists every field with its value, and says plainly that control, battery, rooms and state do not depend on them. Object values are serialised instead of arriving as `[object Object]`, which is what `cleaning_info` looked like in #8 — the one field where the shape was the interesting part.
 - **Two startup tests no longer assert on the clock.** Both checked that per-robot probes run concurrently by timing them against a 180 ms budget — and on a quiet machine they finish in ~65 ms, so the assertion could only ever fail for a reason it was not testing. A scheduling hiccup was enough to fail a build with the concurrency perfectly correct. The check was also redundant: serialized probes give a peak concurrency of 1, which the neighbouring assertion already catches exactly. They now assert the property directly — every probe started before the first one finished — which holds on any machine under any load. Same defect 3.4.2 removed from the B01 full-chain simulation.
-- **The log-naming rule from 3.3.2 was itself only half enumerated.** It listed three files by hand, and the files it left out held twelve log lines still printing a bare 22-character duid — including `Device <duid> is offline.`, which is exactly the line someone quotes when asking why a robot dropped out. A hand-written file list is the same mistake as a hand-written line list, one level up. The rule now discovers the file list from the source tree, so a new file is covered the moment it exists, and all twelve lines now name the robot.
+- **The log-naming rule from 3.3.2 was itself only half enumerated.** It listed three files by hand, and the files it left out held 12 log lines still printing a bare 22-character duid — including `Device <duid> is offline.`, which is exactly the line someone quotes when asking why a robot dropped out. A hand-written file list is the same mistake as a hand-written line list, one level up. The rule now discovers the file list from the source tree, so a new file is covered the moment it exists, and all 12 lines now name the robot.
 
 ## 3.4.2
 
@@ -473,7 +733,7 @@ So the feature cost people their tile and never once delivered the thing it prom
 
 ## 3.3.2
 
-- **Finished a job 3.3.1 only half did.** That release converted the B01 log lines to use the robot's name and missed eleven others, including the live-room line for classic S/Q-series robots and the battery resync line — which then appeared in a field log directly above a line that did use the name: `Battery resync for 3tELc5hUekaTlOJEW3YetI` followed by `Matter publish for Garage`. Every user-visible log line now names the robot, and a test enumerates the rule rather than the instances, so the next line written cannot reintroduce it.
+- **Finished a job 3.3.1 only half did.** That release converted the B01 log lines to use the robot's name and missed 11 others, including the live-room line for classic S/Q-series robots and the battery resync line — which then appeared in a field log directly above a line that did use the name: `Battery resync for 3tELc5hUekaTlOJEW3YetI` followed by `Matter publish for Garage`. Every user-visible log line now names the robot, and a test enumerates the rule rather than the instances, so the next line written cannot reintroduce it.
 
 ## 3.3.1
 
@@ -495,7 +755,7 @@ A robot that has stopped because it is wedged under the sofa has always looked e
 - **The Error state was never gated for a reason.** `ERROR` (3) is a member of even the basic advertised operational state list, so publishing it was always legal — it was being rewritten to `STOPPED` alongside the states that genuinely did need a gate. That is why no released version has ever shown a Roborock fault in Apple Home.
 - **A detached water tank or mop pad is not a fault.** Both are the normal, correct configuration for a vacuum-only run, so reporting them would leave a permanent warning on every dry robot's tile. They are read, and deliberately ignored.
 - **The fault detail can never cost you the tile.** `operationalError` travels in the same cluster payload as the operational state, so a Matter build that refuses the attribute would otherwise freeze Cleaning/Docked along with it — the reason the explicit write was removed back in 1.4.61. If the write is rejected, the plugin immediately re-publishes without it, logs a warning naming the reason, and stops sending it for the rest of the session. An endpoint that is merely still starting up keeps its normal retry and does not disable the feature.
-- **Diagnostics no longer truncate away the answer.** A Roborock status payload runs to about fifty fields and the export kept the first thirty — which are largely housekeeping, while the twenty it dropped included `dock_error_status`, the single field a question about the dock's water tanks turns on. The fields that matter for a fault report are now always kept, however far down the payload they sit, with the size cap otherwise unchanged and secret redaction untouched.
+- **Diagnostics no longer truncate away the answer.** A Roborock status payload runs to about 50 fields and the export kept the first 30 — which are largely housekeeping, while the 20 it dropped included `dock_error_status`, the single field a question about the dock's water tanks turns on. The fields that matter for a fault report are now always kept, however far down the payload they sit, with the size cap otherwise unchanged and secret redaction untouched.
 
 ## 3.2.0
 

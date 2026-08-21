@@ -66,6 +66,19 @@ const CLOUD_ONLY_TRANSPORT_MARKERS = Object.freeze({
 // for robots the plugin never attempts a LAN connection to.
 const UNEXPLAINED_REMOTE_REASON = "remote-device";
 
+// A local socket that completed its TCP handshake and then answered nothing.
+// This is a different failure from a connect that failed, and conflating the
+// two is what made it invisible: the port is reachable, so nothing looks
+// broken, while every request still dies of silence at its timeout.
+const LOCAL_MUTE_REMOTE_REASON = "local-socket-connected-but-mute";
+
+// Consecutive local timeouts tolerated before the LAN is written off for a
+// robot. One is noise — a single lost frame on a healthy network is ordinary,
+// and exiling that robot to the cloud for it would be worse than the bug this
+// bound fixes. Three in a row on a socket that keeps reporting itself
+// connected is not noise.
+const LOCAL_MUTE_TIMEOUT_LIMIT = 3;
+
 // Minimum gap between live-room map fetch attempts while cleaning. The map
 // payload is an order of magnitude heavier than get_status, so it rides a
 // slower cadence than the active status polls — but 20s meant a robot could
@@ -73,6 +86,57 @@ const UNEXPLAINED_REMOTE_REASON = "remote-device";
 // opposite of what a "live" room display is for. 10s keeps the map traffic
 // modest while making the room track the robot closely enough to be useful.
 const B01_LIVE_ROOM_MIN_FETCH_GAP_MS = 10000;
+
+// A live-room fetch that keeps failing is a channel that is down for this
+// robot, not a lost frame. The request is heavy, it always rides the cloud
+// (get_map_v1 is a secure request), and every failure costs a full request
+// timeout. Retrying it at live-display cadence for a whole run buys nothing:
+// measured on an a70 whose map channel was timing out, one ten-minute clean
+// spent ten guaranteed-to-fail cloud requests and never named a room. So widen
+// the gap as failures pile up, and drop straight back to the live cadence the
+// moment one answers. The first two failures are deliberately NOT slowed — a
+// single lost frame on a healthy channel must not make a working live display
+// sluggish, the same rule the local-mute limit follows.
+const LIVE_ROOM_FAILURE_BACKOFF_AFTER = 2;
+const LIVE_ROOM_FAILURE_BACKOFF_MAX_MS = 300000; // 5 min
+
+/**
+ * Required gap before the next live-room fetch attempt, given how many
+ * attempts in a row have already failed.
+ * @param {number} [consecutiveFailures]
+ * @returns {number}
+ */
+function liveRoomFetchGapMs(consecutiveFailures) {
+  const over = Number(consecutiveFailures) - LIVE_ROOM_FAILURE_BACKOFF_AFTER;
+  if (!Number.isFinite(over) || over <= 0) {
+    return B01_LIVE_ROOM_MIN_FETCH_GAP_MS;
+  }
+  return Math.min(
+    B01_LIVE_ROOM_MIN_FETCH_GAP_MS * 2 ** over,
+    LIVE_ROOM_FAILURE_BACKOFF_MAX_MS
+  );
+}
+
+/**
+ * Zero the counters that describe THIS run. clearLiveRoomForDevice runs at
+ * every run boundary and its stated job is to stop state leaking into the next
+ * run, but it used to drop only the cached room. Everything else survived, so
+ * a line reading "attempt N this run" counted every run since Homebridge
+ * started, the placeholder explanation meant to be said once per run was only
+ * ever visible on the very first run of the process, and "failed N times in a
+ * row" could greet a new run's first failure with N already at 5. Resetting
+ * has to happen even when no room was ever resolved — a run that failed every
+ * attempt is precisely the run that left the counters high.
+ * @param {{consecutiveFailures?: number, unresolvedPoseCount?: number, placeholderReported?: boolean} | null | undefined} liveState
+ */
+function resetLiveRoomRunCounters(liveState) {
+  if (!liveState) {
+    return;
+  }
+  liveState.consecutiveFailures = 0;
+  liveState.unresolvedPoseCount = 0;
+  liveState.placeholderReported = false;
+}
 
 // B01/Q7 status cadence. These were literals in three places — the two gap
 // values, the loop interval, and a hand-written startup line quoting all
@@ -92,6 +156,12 @@ const B01_LIVE_ROOM_MISS_REASONS = {
     "the map payload carried no room outlines, so there was nothing to match the position against",
   "pose-outside-outlines":
     "the robot's position did not fall inside any known room outline (it may be between rooms, or the map may still be building)",
+  // Not a miss the user can do anything about, and not the robot being
+  // between rooms: the map payload carried a placeholder where the position
+  // should be. Measured at 226 of 227 fetches on a Q7 during a 47-minute
+  // clean, always the same cell. See describeLiveRoomResolution.
+  "pose-placeholder":
+    "the map payload carried a placeholder instead of the robot's position, so this fetch could not place it (the robot sends a real position only on some fetches)",
 };
 
 /**
@@ -266,6 +336,17 @@ const MATTER_CLEAN_MODE_COMMAND_TIMEOUT_MS = 2000;
 // reports what it could not confirm, rather than being cut off mid-command with
 // nothing said. See createMatterCleanModePrepBudget.
 const MATTER_CLEAN_MODE_PREP_MARGIN_MS = 250;
+// The prep labels that carry the user's clean TYPE, as opposed to a level
+// inside it. On a v1 robot the difference between "Vacuum" and "Vacuum and mop"
+// IS the water-box mode; on the Q7/B01 dialect it is the native clean type.
+// The suction level is deliberately absent: a cosmetic command that did not
+// answer says nothing about which type the robot is running.
+//
+// Named here, once, because both ends need the same answer — the prep decides
+// what to report as unconfirmed and the caller decides whether it may still
+// outrank the robot's own report. Two hand-written copies drifting apart is the
+// most repeated defect in this codebase.
+const MATTER_CLEAN_TYPE_PREP_LABELS = new Set(["water mode", "clean type"]);
 // How long to wait before retrying to cache rooms for a saved map that did not
 // return room segments. Retrying lets newly named/segmented maps appear without
 // switching maps on every poll cycle.
@@ -313,6 +394,12 @@ class Roborock {
     // see markDeviceRemote.
     /** @type {Map<string, string>} */
     this.remoteDeviceReasons = new Map();
+    // Consecutive local request timeouts per robot, counted only while the
+    // local client still reports itself connected. Reset by any local reply:
+    // the count has to mean "this socket answers nothing", not "this socket has
+    // ever timed out".
+    /** @type {Map<string, number>} */
+    this.localMuteTimeouts = new Map();
 
     this.name = "roborock";
     this.deviceNotify = null;
@@ -1404,6 +1491,8 @@ class Roborock {
       "udp-broadcast-discovery": "UDP broadcast discovery found the vacuum",
       "marked-remote-after-connect-failure":
         "local TCP connection failed and the vacuum was marked remote",
+      [LOCAL_MUTE_REMOTE_REASON]:
+        "the local TCP socket connected but the vacuum answered nothing on it, so the cloud is used instead",
       [b01Q7Adapter.B01_CLOUD_ONLY_REMOTE_REASON]:
         "this model speaks only Roborock's cloud protocol, which has no LAN control surface",
     };
@@ -2417,19 +2506,55 @@ class Roborock {
    * from being silent by omission — the "no water command detected" branch was
    * debug-only, and that is precisely the case where the mop ran anyway.
    *
+   * It also returns what it reported, because the caller has to act on it and
+   * previously could not: this method resolves normally on a partial apply, so
+   * "sent and acknowledged" and "sent, unconfirmed, robot may keep its previous
+   * settings" arrived at the caller as the same `undefined`. Measured in #8
+   * (skmzwanke, Saros 10, 18 Aug 2026): the water mode went unconfirmed, the
+   * robot kept mopping, and Apple Home was pinned to the Vacuum he had asked
+   * for — so the plugin hid the very failure this warning announces.
+   *
+   * `cleanTypeConfirmed` answers only the question the caller needs to ask, and
+   * an unconfirmed suction level does not disturb it: it is a level inside the
+   * type, not the type.
+   *
    * @param {string} duid
    * @param {string[]} unconfirmedSettings
+   * @returns {{ unconfirmedSettings: string[], cleanTypeConfirmed: boolean }}
    */
   reportUnconfirmedMatterCleanModeSettings(duid, unconfirmedSettings) {
-    if (unconfirmedSettings.length === 0) {
-      return;
+    const reported = [...new Set(unconfirmedSettings)];
+    const result = {
+      unconfirmedSettings: reported,
+      cleanTypeConfirmed: !reported.some((label) =>
+        MATTER_CLEAN_TYPE_PREP_LABELS.has(label)
+      ),
+    };
+
+    if (reported.length === 0) {
+      return result;
     }
 
     this.log.warn(
-      `Roborock did not confirm the ${[...new Set(unconfirmedSettings)].join(" and ")} for ${this.describeDevice(duid)} before starting; the robot may keep its previous settings for this run, so the clean may not match the mode selected in your controller.`
+      `Roborock did not confirm the ${reported.join(" and ")} for ${this.describeDevice(duid)} before starting; the robot may keep its previous settings for this run, so the clean may not match the mode selected in your controller.`
     );
+
+    return result;
   }
 
+  /**
+   * Make the robot match the clean mode the controller is displaying, before a
+   * Matter-initiated start.
+   *
+   * Resolves rather than rejecting on a partial apply — the start command is
+   * sent either way — so the resolved value is the only place the caller can
+   * learn whether the user's clean TYPE actually landed.
+   *
+   * @param {string} duid
+   * @param {{ cleanMode?: number, fanPower?: number, waterBoxMode?: number }} settings
+   * @param {Record<string, unknown>} [options]
+   * @returns {Promise<{ unconfirmedSettings: string[], cleanTypeConfirmed: boolean }>}
+   */
   async applyMatterCleanModeSettings(duid, settings, options = {}) {
     const { prepWindowMs, ...commandInput } = options ?? {};
     const budget = this.createMatterCleanModePrepBudget(prepWindowMs);
@@ -2525,8 +2650,10 @@ class Roborock {
         }
       }
 
-      this.reportUnconfirmedMatterCleanModeSettings(duid, unconfirmedSettings);
-      return;
+      return this.reportUnconfirmedMatterCleanModeSettings(
+        duid,
+        unconfirmedSettings
+      );
     }
 
     // The water command goes first, and no failure below cancels a later
@@ -2614,7 +2741,10 @@ class Roborock {
       }
     }
 
-    this.reportUnconfirmedMatterCleanModeSettings(duid, unconfirmedSettings);
+    return this.reportUnconfirmedMatterCleanModeSettings(
+      duid,
+      unconfirmedSettings
+    );
   }
 
   getMatterWaterModeCommandCandidates(duid) {
@@ -2899,6 +3029,63 @@ class Roborock {
       isRemote: true,
       remoteReason,
     });
+  }
+
+  /**
+   * A local reply arrived, so the socket is not mute. Called from the one place
+   * a local response lands, so the count measures the socket's current silence
+   * rather than its history.
+   *
+   * @param {string} duid
+   * @returns {void}
+   */
+  noteLocalRequestSucceeded(duid) {
+    if (!duid) {
+      return;
+    }
+
+    this.localMuteTimeouts.delete(duid);
+  }
+
+  /**
+   * A local request timed out on a socket that reported itself connected. After
+   * LOCAL_MUTE_TIMEOUT_LIMIT of those in a row the LAN is written off for this
+   * robot and the cloud is used instead, because the alternative is paying the
+   * full timeout on every poll and every command for the life of the process.
+   *
+   * @param {string} duid
+   * @param {string} [method] the request that died, for the log line
+   * @returns {Promise<void>}
+   */
+  async noteLocalRequestTimedOut(duid, method) {
+    if (!duid) {
+      return;
+    }
+
+    const failures = (this.localMuteTimeouts.get(duid) || 0) + 1;
+    this.localMuteTimeouts.set(duid, failures);
+
+    if (failures < LOCAL_MUTE_TIMEOUT_LIMIT) {
+      return;
+    }
+
+    // Already written off: say it once, then stay quiet. The timeouts keep
+    // coming until something upstream changes, and a warning per poll would
+    // bury the one line that explains the switch.
+    if (this.remoteDevices.has(duid)) {
+      return;
+    }
+
+    this.log.warn(
+      `The local connection to ${this.describeDevice(duid)} connected but answered nothing: ` +
+        `${failures} requests in a row timed out${method ? ` (last: ${method})` : ""}. ` +
+        `Using the Roborock cloud for this robot instead. The LAN port is reachable, ` +
+        `so this is not a blocked port — the robot is not replying on it. On a segmented ` +
+        `network, check that the reply path back to Homebridge is open, not just the ` +
+        `outbound one.`
+    );
+
+    await this.markDeviceRemote(duid, LOCAL_MUTE_REMOTE_REASON);
   }
 
   /**
@@ -4471,7 +4658,10 @@ class Roborock {
     if (liveState.inflight) {
       return liveState.inflight;
     }
-    if (Date.now() - liveState.lastAttemptAt < B01_LIVE_ROOM_MIN_FETCH_GAP_MS) {
+    if (
+      Date.now() - liveState.lastAttemptAt <
+      liveRoomFetchGapMs(liveState.consecutiveFailures)
+    ) {
       return liveState.current;
     }
     liveState.lastAttemptAt = Date.now();
@@ -4513,7 +4703,7 @@ class Roborock {
 
         const resolution2 = b01Q7Adapter.describeLiveRoomResolution(parsed);
         const roomId = resolution2.roomId;
-        liveState.consecutiveFailures = 0;
+        this.noteLiveRoomFetchRecovered(duid, liveState);
 
         if (roomId === null) {
           // Debug-only used to make this invisible, and it is the single most
@@ -4524,6 +4714,26 @@ class Roborock {
           // actually sees, so "no room yet" is distinguishable from "the
           // feature is broken" — and say WHICH of the four causes it was,
           // because they call for different fixes.
+          // A placeholder pose is not the robot failing to be in a room, so
+          // it does not join the count that says how long the robot has gone
+          // unplaced. Counting it produced "after 46 unresolved position(s)"
+          // for a robot that had been cleaning one room the whole time, which
+          // reads as a fault and is not one.
+          //
+          // It is said once per run at a level the user sees, with the numbers
+          // that make it diagnosable, and then held at debug. In the field
+          // that turns 226 info-and-debug lines per clean into one.
+          if (resolution2.reason === "pose-placeholder") {
+            const placeholderMessage = `Live room for ${this.describeDevice(duid)}: ${B01_LIVE_ROOM_MISS_REASONS[resolution2.reason]} (${resolution2.outlineCount} room outline(s) in the map${resolution2.cell ? `, position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}` : ""}${describeOutlineBounds(resolution2)}).`;
+            if (!liveState.placeholderReported) {
+              liveState.placeholderReported = true;
+              this.log.info(placeholderMessage);
+            } else {
+              this.log.debug(placeholderMessage);
+            }
+            return liveState.current;
+          }
+
           liveState.unresolvedPoseCount =
             (liveState.unresolvedPoseCount || 0) + 1;
           const message = `Live room for ${this.describeDevice(duid)}: ${B01_LIVE_ROOM_MISS_REASONS[resolution2.reason]} (attempt ${liveState.unresolvedPoseCount} this run, ${resolution2.outlineCount} room outline(s) in the map${resolution2.cell ? `, position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}` : ""}${describeOutlineBounds(resolution2)}${describeRawMapFields(parsed)}).`;
@@ -4554,7 +4764,7 @@ class Roborock {
 
         if (!previous || previous.segmentId !== roomId) {
           this.log.info(
-            `Live room for ${this.describeDevice(duid)}: ${roomName} (${roomId})${previous ? ` — was ${previous.roomName} (${previous.segmentId})` : ""}${missedBeforeThis > 0 ? ` (after ${missedBeforeThis} unresolved position(s))` : ""}.`
+            `Live room for ${this.describeDevice(duid)}: ${roomName} (${roomId})${previous ? ` — was ${previous.roomName} (${previous.segmentId})` : ""}${missedBeforeThis > 0 ? ` (after ${missedBeforeThis} unresolved position(s))` : ""}${resolution2.cell ? ` [position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}]` : ""}.`
           );
           const lastV1Status = this._b01StatusState?.get(duid)?.lastV1Status;
           if (this.deviceNotify && lastV1Status) {
@@ -4598,6 +4808,27 @@ class Roborock {
     return this._b01LiveRoomState?.get(duid)?.current || null;
   }
 
+  /**
+   * Close the loop on a failure streak. "Live-room map fetch has failed N
+   * times in a row" had no counterpart, so a channel that came back left the
+   * last word in the log saying it was broken. Said exactly when the backoff
+   * had begun slowing the fetch down, so the message and the behaviour it
+   * reports on cannot drift apart.
+   * @param {string} duid
+   * @param {{consecutiveFailures?: number} | null | undefined} liveState
+   */
+  noteLiveRoomFetchRecovered(duid, liveState) {
+    const failures = liveState?.consecutiveFailures || 0;
+    if (failures > LIVE_ROOM_FAILURE_BACKOFF_AFTER) {
+      this.log.info(
+        `Live-room map fetch for ${this.describeDevice(duid)} recovered after ${failures} failed attempt(s).`
+      );
+    }
+    if (liveState) {
+      liveState.consecutiveFailures = 0;
+    }
+  }
+
   /** @param {string} duid */
   clearB01LiveRoom(duid) {
     const liveState = this._b01LiveRoomState?.get(duid);
@@ -4607,6 +4838,7 @@ class Roborock {
       );
       liveState.current = null;
     }
+    resetLiveRoomRunCounters(liveState);
   }
 
   /**
@@ -4654,6 +4886,7 @@ class Roborock {
       );
       liveState.current = null;
     }
+    resetLiveRoomRunCounters(liveState);
   }
 
   /**
@@ -4725,7 +4958,7 @@ class Roborock {
         // microseconds).
         const segmentId =
           RRMapParser.resolveLiveSegmentFromMapBuffer(mapBuffer);
-        liveState.consecutiveFailures = 0;
+        this.noteLiveRoomFetchRecovered(duid, liveState);
 
         if (segmentId === null) {
           this.log.debug(
@@ -4887,6 +5120,8 @@ module.exports = {
   Roborock,
   CLOUD_ONLY_TRANSPORT_MARKERS,
   UNEXPLAINED_REMOTE_REASON,
+  LOCAL_MUTE_REMOTE_REASON,
+  LOCAL_MUTE_TIMEOUT_LIMIT,
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

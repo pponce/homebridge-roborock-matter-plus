@@ -64,6 +64,7 @@ const CLEAN_MODE_VACUUM_MAX = 6;
 
 const FAN_POWER_TURBO = 103;
 const FAN_POWER_MAX = 104;
+const FAN_POWER_OFF = 105;
 
 const WATER_BOX_OFF = 200;
 /** Any level other than "off" is what the derivation reads as vacuum+mop. */
@@ -98,6 +99,7 @@ function createHarness({
   fanPowerCleanModes = false,
   initialStatus = {},
   applyRejectsWith = null,
+  applyResolvesWith = undefined,
 } = {}) {
   const status = {
     state: ROBOROCK_STATE_CHARGING,
@@ -146,6 +148,10 @@ function createHarness({
         if (applyRejectsWith) {
           throw applyRejectsWith;
         }
+        // The real prep resolves with what the robot confirmed. Undefined is
+        // what every other stand-in in this suite returns, and stands for the
+        // fully-acknowledged apply this rule was originally written around.
+        return applyResolvesWith;
       }),
       app_start: jest.fn(async () => {
         started.push("app_start");
@@ -475,5 +481,255 @@ describe("the pin is bounded: it belongs to one run and one command", () => {
 
     harness.set({ fan_power: FAN_POWER_TURBO });
     expect(harness.cleanMode()).toBe(CLEAN_MODE_VACUUM_TURBO);
+  });
+});
+
+// The clause this rule was missing for three releases: "acknowledged" was read
+// off the apply RESOLVING, and the prep resolves on a partial apply too. It
+// sends up to three commands, reports at warn what the robot never confirmed,
+// and returns normally — because the start command goes out regardless.
+//
+// So an apply could resolve having lost the one command that carries the user's
+// clean TYPE, and the pin treated that as ground truth. Measured in #8
+// (skmzwanke, Saros 10, 18 Aug 2026), vacuum-only on two rooms:
+//
+//   13:50:57  Applying Vacuum mode to Weebo before starting.
+//   13:50:59  Roborock did not confirm the water mode and suction level ...
+//             the robot may keep its previous settings for this run
+//   13:52:22  Roborock still reports Vacuum + Mop ... after Vacuum was applied
+//             and acknowledged
+//
+// The robot really did mop. The plugin had said so itself at 13:50:59, then
+// contradicted itself at 13:52:22 and held Apple Home on Vacuum for the run —
+// so the only place the failure was visible was the floor.
+//
+// The rule is the same one the thrown-apply case already obeys, extended to the
+// case that resolves: a pin is KNOWN ground truth or it is not taken.
+describe("an apply that resolved without confirming the type is not knowledge", () => {
+  const UNCONFIRMED_TYPE = {
+    unconfirmedSettings: ["water mode", "suction level"],
+    cleanTypeConfirmed: false,
+  };
+
+  test("#8 replayed: the robot's vacuum+mop report is not overridden", async () => {
+    const harness = createHarness({ applyResolvesWith: UNCONFIRMED_TYPE });
+
+    await startFromHome(harness);
+    expect(harness.applied).toHaveLength(1);
+    expect(harness.started).toEqual(["app_start"]);
+
+    // The robot is out cleaning and reporting water on — which, on his log, was
+    // the truth: it kept the settings it already had.
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_VACUUM_AND_MOP);
+  });
+
+  test("and it does not claim an acknowledgement it never had", async () => {
+    // The line said "was applied and acknowledged" 83 seconds after the plugin
+    // logged that Roborock had confirmed neither setting. With no pin the line
+    // cannot be reached, so the claim becomes true by construction.
+    const harness = createHarness({ applyResolvesWith: UNCONFIRMED_TYPE });
+    await startFromHome(harness);
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    harness.cleanMode();
+
+    expect(
+      harness.warnings().filter((line) => /still reports/.test(line))
+    ).toHaveLength(0);
+  });
+
+  test("an unconfirmed SUCTION LEVEL alone still leaves the pin standing", async () => {
+    // A level inside the type says nothing about which type is running, and
+    // dropping the pin for it would reintroduce the lagging-report lie for a
+    // cosmetic command's sake.
+    const harness = createHarness({
+      applyResolvesWith: {
+        unconfirmedSettings: ["suction level"],
+        cleanTypeConfirmed: true,
+      },
+    });
+    await startFromHome(harness);
+
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_VACUUM);
+  });
+
+  test("a prep that confirmed everything is unchanged", async () => {
+    const harness = createHarness({
+      applyResolvesWith: {
+        unconfirmedSettings: [],
+        cleanTypeConfirmed: true,
+      },
+    });
+    await startFromHome(harness);
+
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_VACUUM);
+  });
+
+  test("a prep that says nothing is still trusted", async () => {
+    // Seventeen suites stand the API in with a resolve of `undefined`, and the
+    // shipped prep before this change said nothing either. Only an explicit
+    // `cleanTypeConfirmed: false` withdraws the pin — absence of an answer must
+    // not silently change behaviour for every other caller in the codebase.
+    const harness = createHarness({ applyResolvesWith: undefined });
+    await startFromHome(harness);
+
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_VACUUM);
+  });
+
+  test("the withdrawal is stated in the prep, beside the pin it withdraws", () => {
+    // Both halves of the decision must be in the one method, so a future
+    // reader cannot find the pin without finding the condition on it.
+    const body = readMethodBody(
+      fs.readFileSync(SOURCE_PATH, "utf8"),
+      "private async applyCleanModeBeforeStarting("
+    );
+    expect(body).toContain("cleanTypeConfirmed === false");
+    const withdrawal = body.indexOf("cleanTypeConfirmed === false");
+    const pin = body.indexOf("this.appliedCleanTypePin = {");
+    // The check comes BEFORE the pin is taken, not as a later correction.
+    expect(withdrawal).toBeLessThan(pin);
+  });
+});
+
+describe("the drive home is not a mode change", () => {
+  // Replayed from Mathias' own log, 20 Aug, Stueetage (a70), asked to mop:
+  //
+  //   16:55:15  clean mode request 1 (Mop), run mode request 1, Mop applied
+  //   16:55:16  publish … cleanMode=1
+  //   16:55:31  publish … cleanMode=1, fault=68
+  //   16:56:15  sent back to dock
+  //   16:56:16  publish … operationalState=64, cleanMode=2   <-- wrong
+  //   16:56:54  publish … operationalState=66, cleanMode=1
+  //
+  // 1, 2, 1 on one run, and he had asked for exactly one thing. The robot was
+  // not misbehaving: sending it home resets its fan power while the water box
+  // stays configured, and "fan not off plus water on" is the signature
+  // getLiveCleanType() reads as vacuum+mop on a classic robot.
+  //
+  // Roborock state 6 is "returning to dock", which the plugin maps to Matter
+  // SEEKING_CHARGER (64). While that is the state, the derivation is frozen.
+
+  const ROBOROCK_STATE_RETURNING = 6;
+  const ROBOROCK_STATE_WASHING_MOP = 23;
+  const ROBOROCK_STATE_EMPTYING = 22;
+  const ROBOROCK_STATE_MAPPING = 29;
+
+  test("a mop run stays Mop while the robot drives home", async () => {
+    const harness = createHarness({
+      initialStatus: { fan_power: FAN_POWER_OFF, water_box_mode: WATER_BOX_ON },
+    });
+    await harness.handlers.rvcCleanMode.changeToMode({
+      newMode: CLEAN_MODE_MOP,
+    });
+    await settle();
+    await startFromHome(harness);
+
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_MOP);
+
+    // Sent home. Fan power is reset by the robot; the water box is untouched.
+    harness.set({
+      state: ROBOROCK_STATE_RETURNING,
+      fan_power: FAN_POWER_MAX,
+    });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_MOP);
+  });
+
+  test("and it is still Mop once docked", async () => {
+    const harness = createHarness({
+      initialStatus: { fan_power: FAN_POWER_OFF, water_box_mode: WATER_BOX_ON },
+    });
+    await harness.handlers.rvcCleanMode.changeToMode({
+      newMode: CLEAN_MODE_MOP,
+    });
+    await settle();
+    await startFromHome(harness);
+
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    harness.set({ state: ROBOROCK_STATE_RETURNING, fan_power: FAN_POWER_MAX });
+    harness.set({ state: ROBOROCK_STATE_CHARGING });
+
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_MOP);
+  });
+
+  test("and the dock washing the mop afterwards is not one either", async () => {
+    // 3.12.3 froze the drive home and was too narrow by exactly one dock.
+    // Replayed from the same robot 3 hours later, 20 Aug:
+    //
+    //   21:04:33  publish … operationalState=1,  cleanMode=1   mopping the hall
+    //   21:07:43  publish … operationalState=64, cleanMode=1   driving home
+    //   21:09:31  publish … operationalState=68, cleanMode=2   washing the mop
+    //
+    // Roborock state 23 is "washing the mop", which maps to Matter
+    // CLEANING_MOP (68) and still counts as part of the run. A dock washing a
+    // mop runs water with the fan off and on again, which is the same
+    // signature read the same wrong way.
+    const harness = createHarness({
+      initialStatus: { fan_power: FAN_POWER_OFF, water_box_mode: WATER_BOX_ON },
+    });
+    await harness.handlers.rvcCleanMode.changeToMode({
+      newMode: CLEAN_MODE_MOP,
+    });
+    await settle();
+    await startFromHome(harness);
+
+    // The robot agrees while it works, exactly as it did in the log — which
+    // is what releases the applied-type pin. Without this read the pin would
+    // still be holding and would mask the defect being tested.
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_MOP);
+
+    harness.set({ state: ROBOROCK_STATE_RETURNING, fan_power: FAN_POWER_MAX });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_MOP);
+
+    harness.set({ state: ROBOROCK_STATE_WASHING_MOP });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_MOP);
+  });
+
+  test("nor is the dock emptying the bin, nor updating the map", async () => {
+    const harness = createHarness({
+      initialStatus: { fan_power: FAN_POWER_OFF, water_box_mode: WATER_BOX_ON },
+    });
+    await harness.handlers.rvcCleanMode.changeToMode({
+      newMode: CLEAN_MODE_MOP,
+    });
+    await settle();
+    await startFromHome(harness);
+
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_MOP);
+    harness.set({ state: ROBOROCK_STATE_RETURNING, fan_power: FAN_POWER_MAX });
+
+    for (const state of [
+      ROBOROCK_STATE_EMPTYING,
+      ROBOROCK_STATE_MAPPING,
+      ROBOROCK_STATE_WASHING_MOP,
+    ]) {
+      harness.set({ state });
+      expect(harness.cleanMode()).toBe(CLEAN_MODE_MOP);
+    }
+  });
+
+  test("a mode genuinely changed mid-clean still reaches Apple Home", async () => {
+    // The case the freeze must not eat. This is why the fix is scoped to the
+    // drive home and not to the whole run: a first attempt held the type for
+    // the entire run and broke exactly this.
+    const harness = createHarness({
+      initialStatus: {
+        fan_power: FAN_POWER_MAX,
+        water_box_mode: WATER_BOX_OFF,
+      },
+    });
+    await startFromHome(harness);
+
+    harness.set({ state: ROBOROCK_STATE_ROOM_CLEAN });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_VACUUM);
+
+    // Water turned on in the Roborock app while the robot is still cleaning.
+    harness.set({ water_box_mode: WATER_BOX_ON });
+    expect(harness.cleanMode()).toBe(CLEAN_MODE_VACUUM_AND_MOP);
   });
 });

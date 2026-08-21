@@ -57,7 +57,7 @@ function createHarness() {
     false
   );
   instance.markRegistered();
-  return { instance, info, updateAccessoryState };
+  return { instance, info, debug: platform.log.debug, updateAccessoryState };
 }
 
 // Publish an explicit cluster snapshot, bypassing the Roborock status
@@ -72,10 +72,14 @@ function snapshot({
   operationalState = DOCKED,
   runMode = 0,
   cleanMode = 0,
+  operationalError,
 } = {}) {
   return {
     rvcRunMode: { currentMode: runMode },
-    rvcOperationalState: { operationalState },
+    rvcOperationalState:
+      operationalError === undefined
+        ? { operationalState }
+        : { operationalState, operationalError },
     rvcCleanMode: { currentMode: cleanMode },
     powerSource: { batPercentRemaining: battery },
   };
@@ -144,18 +148,47 @@ describe("the Matter publish line is emitted whenever what it says changes", () 
     );
   });
 
-  test("the line says nothing about faults, because none are published", async () => {
-    // This test used to hand-build an operationalError and assert the line
-    // rendered `fault=4 (stuck)`. That cluster shape has been unreachable
-    // since 3.4.1 withdrew fault publishing, so the assertion was keeping a
-    // dead branch alive and contradicting matter-fault-reporting.test.js,
-    // which pins that operationalError is never published in any
-    // configuration. Two tests disagreeing about whether a feature exists is
-    // worse than either answer; the withdrawal is the one backed by field
-    // evidence, so the line follows it.
+  test("a snapshot with no fault says nothing about faults", async () => {
+    // The history here is worth keeping, because this test has now been on
+    // both sides of the same question. It originally hand-built an
+    // operationalError and asserted `fault=4 (stuck)`; 3.4.1 withdrew fault
+    // publishing, that cluster shape became unreachable, and the assertion was
+    // keeping a dead branch alive. It was rewritten to assert the line never
+    // mentions faults at all — which is now equally wrong, because 3.12.0
+    // publishes WaterTankEmpty again.
+    //
+    // So the rule is neither "always" nor "never": the field appears when the
+    // cluster carries a real fault and stays away when it does not. Both
+    // halves are asserted, here and in the test below, so the line can never
+    // again describe an attribute that is not there.
     const { instance, info } = createHarness();
-    const base = snapshot({ operationalState: 3 });
-    await publish(instance, base);
+    await publish(instance, snapshot({ operationalState: 3 }));
+
+    const lines = publishLines(info);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toContain("fault");
+  });
+
+  test("a snapshot carrying a fault names it", async () => {
+    const { instance, info } = createHarness();
+    await publish(
+      instance,
+      snapshot({ operationalState: 0, operationalError: { errorStateId: 68 } })
+    );
+
+    const lines = publishLines(info);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("fault=68 (Clean water tank empty)");
+  });
+
+  test("a cleared fault is not rendered as one", async () => {
+    // NoError is published on every healthy update, so if the line rendered
+    // `fault=0` it would say something is wrong on every robot, forever.
+    const { instance, info } = createHarness();
+    await publish(
+      instance,
+      snapshot({ operationalState: 0, operationalError: { errorStateId: 0 } })
+    );
 
     const lines = publishLines(info);
     expect(lines).toHaveLength(1);
@@ -185,5 +218,106 @@ describe("the Matter publish line is emitted whenever what it says changes", () 
     instance.markRegistered();
     await publish(instance, snapshot());
     expect(publishLines(info)).toHaveLength(2);
+  });
+});
+
+// Silence at INFO is the point of the deduplication above. Silence at EVERY
+// level is a different thing, and it cost issue #7 a round trip.
+//
+// jawnlydon was asked to check whether these lines were still being written
+// while his Apple Home tile was dead — the cheap way to tell "the plugin
+// stopped" from "the Matter session died underneath a healthy plugin". His
+// sc05 was docked at 100 %, so the rendered line was identical every minute:
+//
+//   06:12:14  Matter publish for Robo: battery=100%, operationalState=0, ...
+//   06:23     tile dead. Nothing logged in between.
+//
+// He looked, correctly found nothing in eleven minutes, and the answer was
+// worthless — absence is what the method does when nothing changes, not
+// evidence about whether it ran. The question was unanswerable from the log at
+// any log level, which is the defect: the 60-second forced write is the
+// plugin's own liveness signal and it left no trace of itself.
+//
+// The rule: a publish that is suppressed at info is still recorded at debug. It
+// costs nothing when debug is off, and it keeps the info log exactly as quiet as
+// the deduplication intends.
+describe("a suppressed publish is still recorded at debug", () => {
+  const debugLines = (debug) =>
+    debug.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes("Matter publish for"));
+
+  test("the idle heartbeat leaves a trace of itself", async () => {
+    const { instance, info, debug } = createHarness();
+    await publish(instance, snapshot());
+    expect(publishLines(info)).toHaveLength(1);
+
+    await instance.publishRoborockSnapshot(
+      snapshot(),
+      "Matter state heartbeat",
+      { force: true }
+    );
+
+    // Still one info line — the deduplication is intact.
+    expect(publishLines(info)).toHaveLength(1);
+    // And exactly one debug line saying the write happened anyway.
+    expect(debugLines(debug)).toHaveLength(1);
+    expect(debugLines(debug)[0]).toContain("Matter state heartbeat");
+  });
+
+  test("the debug line names the robot and carries the full values", async () => {
+    // Same requirement as every other line in this plugin: a multi-robot log
+    // is unreadable without the name, and the values are the whole evidence.
+    const { instance, debug } = createHarness();
+    await publish(instance, snapshot({ battery: 150, operationalState: 1 }));
+    await instance.publishRoborockSnapshot(
+      snapshot({ battery: 150, operationalState: 1 }),
+      "Matter state heartbeat",
+      { force: true }
+    );
+
+    expect(debugLines(debug)[0]).toContain("Weebo");
+    expect(debugLines(debug)[0]).toContain(
+      "battery=75%, operationalState=1, runMode=0, cleanMode=0."
+    );
+  });
+
+  test("one trace per suppressed publish, so a stopped heartbeat is visible", async () => {
+    // The value is in the CADENCE: eleven minutes of a docked robot must leave
+    // eleven traces, so a gap in them is the finding.
+    const { instance, debug } = createHarness();
+    await publish(instance, snapshot());
+
+    for (let i = 0; i < 11; i += 1) {
+      await instance.publishRoborockSnapshot(
+        snapshot(),
+        "Matter state heartbeat",
+        { force: true }
+      );
+    }
+
+    expect(debugLines(debug)).toHaveLength(11);
+  });
+
+  test("the reason is named, so the two liveness questions stay separable", async () => {
+    // A heartbeat proves the Matter write path runs; a poll proves the Roborock
+    // side still answers. A trace that does not say which answers neither.
+    const { instance, debug } = createHarness();
+    await publish(instance, snapshot());
+    await publish(instance, snapshot());
+
+    expect(debugLines(debug)).toHaveLength(1);
+    expect(debugLines(debug)[0]).toContain("test");
+  });
+
+  test("a publish that WAS logged at info is not also logged at debug", async () => {
+    // Otherwise every change is stated twice and the debug trace stops being a
+    // record of what the info log omitted.
+    const { instance, info, debug } = createHarness();
+    await publish(instance, snapshot());
+    await publish(instance, snapshot({ operationalState: RUNNING }));
+
+    expect(publishLines(info)).toHaveLength(2);
+    expect(debugLines(debug)).toHaveLength(0);
   });
 });

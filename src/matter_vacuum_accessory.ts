@@ -5,6 +5,11 @@ import { getLiveMessageForThisAccessory } from "./live_message";
 import { HomeKitActionKey, HomeKitStateSensorKey } from "./types";
 import { clearTimer, scheduleTimer, unrefTimer } from "./timers";
 
+const { getModelMarketingName } =
+  require("../roborockLib/lib/deviceFeatures") as {
+    getModelMarketingName: (model: unknown) => string | null;
+  };
+
 const MATTER_CLEAN_MODE_COMMAND_TIMEOUT_MS = 2000;
 const MATTER_CLEAN_MODE_PREP_TIMEOUT_MS = 2500;
 
@@ -80,6 +85,17 @@ type RoborockCleanModePrepOptions = RoborockCommandOptions & {
   prepWindowMs: number;
 };
 
+// What the prep sequence resolved with. It resolves rather than rejecting on a
+// partial apply — the start command goes out either way — so this is the only
+// place the caller can learn that the user's clean TYPE never landed.
+// `cleanTypeConfirmed` is false only when a type-carrying command went
+// unconfirmed; an unconfirmed suction level is a level inside the type and
+// leaves it true.
+type RoborockCleanModePrepResult = {
+  unconfirmedSettings?: string[];
+  cleanTypeConfirmed?: boolean;
+};
+
 type RoborockStatusRefreshOptions = {
   force?: boolean;
   preferCloud?: boolean;
@@ -134,7 +150,7 @@ interface RoborockApi {
     duid: string,
     settings: RoborockCleanModeSettings,
     options?: RoborockCleanModePrepOptions
-  ): Promise<void>;
+  ): Promise<RoborockCleanModePrepResult | void>;
   load_multi_map?(
     duid: string,
     mapId: number,
@@ -164,6 +180,12 @@ const LIVE_STATUS_STALENESS_MS = 15 * 60 * 1000;
 // before the caller ever saw it. A hand-written field list in two places is
 // the same defect as a hand-written file list: adding a field to one of them
 // silently leaves the other behind.
+// The tank fields are in this list on purpose. A frame carrying only one of
+// them is meaningful: the gate returns early when nothing meaningful arrived,
+// so leaving them out would drop a tank-only frame before it was ever
+// remembered — and Roborock sends sparse frames as a matter of course. That
+// is the same bug 3.12.1 fixed one layer up, and the gate test caught the
+// second attempt at it.
 const MEANINGFUL_LIVE_STATUS_FIELDS = [
   "state",
   "charge_status",
@@ -172,13 +194,18 @@ const MEANINGFUL_LIVE_STATUS_FIELDS = [
   "clean_time",
   "fan_power",
   "matter_clean_type",
+  "dock_error_status",
+  "water_shortage_status",
+  "error_code",
+  "dry_status",
 ] as const;
 
 const CLEAN_MODE_VACUUM = 0;
 const CLEAN_MODE_MOP = 1;
 const CLEAN_MODE_VACUUM_AND_MOP = 2;
 
-// Opt-in fan-power clean modes (enableFanPowerCleanModes, default off since
+// Fan-power clean modes (enableFanPowerCleanModes, default ON since 3.12.0;
+// was off since
 // Matter locks the announced mode set at commissioning — enabling requires
 // one re-pair). Mode ids are stable and appended after the base modes.
 // Fan power values are Roborock v1 codes (101-104); the B01/Q7 adapter
@@ -288,6 +315,287 @@ const RVC_OPERATIONAL_STATE = {
  * and "non-zero" would report a full waste-water tank as an empty clean one.
  */
 const DOCK_ERROR_CLEAN_WATER_TANK_EMPTY = 38;
+
+/**
+ * Matter's own RVC OperationalError codes.
+ *
+ * 68 is `WaterTankEmpty`, and it is the attribute Apple Home draws as a tap
+ * icon on the play button with a localised "refill the water tank" — the one
+ * value in this list measured rendering on real hardware (a70, iOS 26.0).
+ * 0 is `NoError` and has to be published too: an error attribute that is only
+ * ever written when something is wrong never clears.
+ *
+ * WHY THIS LIST STOPS AT 71.
+ *
+ * The enum continues: the specification adds LowBattery (72),
+ * CannotReachTargetArea (73), DirtyWaterTankFull (74), DirtyWaterTankMissing
+ * (75), WheelsJammed (76), BrushJammed (77) and NavigationSensorObscured (78).
+ * Several of those name a Roborock fault exactly, and mapping to them would
+ * read better than the generic codes used below.
+ *
+ * They are all Matter 1.5. Everything from 0 to 71 has been in the cluster
+ * since 1.2. Nothing here establishes which revision Apple implements, and
+ * this file already carries one measurement of what Apple does with a value
+ * it does not recognise: a manufacturer-range id in `operationalStateList`
+ * leaves the tile in "Connecting" forever. A fault that renders as nothing
+ * would only cost the message; a fault that wedges the accessory costs the
+ * robot. Until somebody looks at a tile with 76 on it, the 1.2 set is what
+ * gets published, and the accurate 1.5 name goes in the log line instead.
+ */
+const RVC_OPERATIONAL_ERROR = {
+  NO_ERROR: 0,
+  UNABLE_TO_START_OR_RESUME: 1,
+  UNABLE_TO_COMPLETE_OPERATION: 2,
+  FAILED_TO_FIND_CHARGING_DOCK: 64,
+  STUCK: 65,
+  DUST_BIN_MISSING: 66,
+  DUST_BIN_FULL: 67,
+  WATER_TANK_EMPTY: 68,
+  WATER_TANK_MISSING: 69,
+  WATER_TANK_LID_OPEN: 70,
+  MOP_CLEANING_PAD_MISSING: 71,
+} as const;
+
+/**
+ * The dock's own jobs, named for `RvcOperationalState.PhaseList`.
+ *
+ * Drying is why this exists. Matter has an operational state for emptying the
+ * dust bin (0x43), washing the mop (0x44) and updating maps (0x46), and the
+ * plugin publishes all 3 — but the dock then spends 2 to 4 hours blowing air
+ * through a wet mop, and the specification has no state for that at all. A
+ * phase is the only place it can be said.
+ *
+ * THE LIST IS CONSTANT AND MUST STAY CONSTANT. `PhaseList` is not a Fixed
+ * attribute, so rewriting it is legal — and 1.4.58 removed a version of this
+ * plugin that changed phases as a refresh trick and flapped them against every
+ * Apple Home hub in the house. Only `CurrentPhase` moves here. A test fails if
+ * the list is ever built from anything but this constant.
+ *
+ * The other 3 are included even though each has its own operational state,
+ * because those states are optional in the device type and nothing establishes
+ * that Apple draws them. A phase costs nothing extra and gives the same fact a
+ * second route to the tile.
+ */
+const RVC_PHASE_LIST = [
+  "Emptying dust bin",
+  "Washing mop",
+  "Drying mop",
+  "Updating maps",
+] as const;
+
+const RVC_PHASE = {
+  EMPTYING_DUST_BIN: 0,
+  WASHING_MOP: 1,
+  DRYING_MOP: 2,
+  UPDATING_MAPS: 3,
+} as const;
+
+/** Reverse lookup for the published id, so the log line says what was sent. */
+const RVC_OPERATIONAL_ERROR_NAMES: Readonly<Record<number, string>> = {
+  [RVC_OPERATIONAL_ERROR.UNABLE_TO_START_OR_RESUME]: "Unable to start",
+  [RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION]:
+    "Unable to complete operation",
+  [RVC_OPERATIONAL_ERROR.FAILED_TO_FIND_CHARGING_DOCK]:
+    "Failed to find charging dock",
+  [RVC_OPERATIONAL_ERROR.STUCK]: "Stuck",
+  [RVC_OPERATIONAL_ERROR.DUST_BIN_MISSING]: "Dust bin missing",
+  [RVC_OPERATIONAL_ERROR.DUST_BIN_FULL]: "Dust bin full",
+  [RVC_OPERATIONAL_ERROR.WATER_TANK_EMPTY]: "Clean water tank empty",
+  [RVC_OPERATIONAL_ERROR.WATER_TANK_MISSING]: "Water tank missing",
+  [RVC_OPERATIONAL_ERROR.WATER_TANK_LID_OPEN]: "Water tank lid open",
+  [RVC_OPERATIONAL_ERROR.MOP_CLEANING_PAD_MISSING]: "Mop pad missing",
+};
+
+/**
+ * Roborock's `error_code` translated into a Matter fault.
+ *
+ * The source table is `errorCodes` in roborockLib/lib/deviceFeatures.js, which
+ * this plugin has carried and polled since the fork and has never once shown
+ * to a user. A robot wedged under a sofa publishes operational state 3 (Error)
+ * and no reason, so Apple Home draws a robot that has stopped and cannot say
+ * why. That is what this fixes: the state was already there, only the reason
+ * was missing.
+ *
+ * `roborock` is the plugin's own text and is logged, not published — the
+ * `ErrorStateLabel`/`ErrorStateDetails` fields that could carry it are
+ * unmeasured on Apple Home and this attribute has a history of being brittle.
+ * `spec` names the Matter 1.5 code that would be more accurate than the id
+ * actually sent, and is logged for the same reason: so the next person can see
+ * what the mapping gave up and why.
+ */
+const ROBOROCK_ERROR_TO_MATTER: ReadonlyMap<
+  number,
+  { id: number; roborock: string; spec?: string }
+> = new Map([
+  [
+    1,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Laser sensor fault",
+      spec: "NavigationSensorObscured (78)",
+    },
+  ],
+  [2, { id: RVC_OPERATIONAL_ERROR.STUCK, roborock: "Collision sensor fault" }],
+  [
+    3,
+    {
+      id: RVC_OPERATIONAL_ERROR.STUCK,
+      roborock: "Wheel floating",
+      spec: "WheelsJammed (76)",
+    },
+  ],
+  [
+    4,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Cliff sensor fault",
+      spec: "NavigationSensorObscured (78)",
+    },
+  ],
+  [
+    5,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Main brush blocked",
+      spec: "BrushJammed (77)",
+    },
+  ],
+  [
+    6,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Side brush blocked",
+      spec: "BrushJammed (77)",
+    },
+  ],
+  [
+    7,
+    {
+      id: RVC_OPERATIONAL_ERROR.STUCK,
+      roborock: "Wheel blocked",
+      spec: "WheelsJammed (76)",
+    },
+  ],
+  [8, { id: RVC_OPERATIONAL_ERROR.STUCK, roborock: "Device stuck" }],
+  [
+    9,
+    {
+      id: RVC_OPERATIONAL_ERROR.DUST_BIN_MISSING,
+      roborock: "Dust bin missing",
+    },
+  ],
+  [
+    10,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Filter blocked",
+    },
+  ],
+  [
+    11,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Magnetic field detected",
+    },
+  ],
+  [
+    12,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_START_OR_RESUME,
+      roborock: "Low battery",
+      spec: "LowBattery (72)",
+    },
+  ],
+  [
+    13,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_START_OR_RESUME,
+      roborock: "Charging problem",
+    },
+  ],
+  [
+    14,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Battery failure",
+    },
+  ],
+  [
+    15,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Wall sensor fault",
+      spec: "NavigationSensorObscured (78)",
+    },
+  ],
+  [16, { id: RVC_OPERATIONAL_ERROR.STUCK, roborock: "Uneven surface" }],
+  [
+    17,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Side brush failure",
+      spec: "BrushJammed (77)",
+    },
+  ],
+  [
+    18,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Suction fan failure",
+    },
+  ],
+  [
+    19,
+    {
+      id: RVC_OPERATIONAL_ERROR.FAILED_TO_FIND_CHARGING_DOCK,
+      roborock: "Unpowered charging station",
+    },
+  ],
+  [
+    20,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Unknown error",
+    },
+  ],
+  [
+    21,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Laser pressure sensor problem",
+    },
+  ],
+  [
+    22,
+    {
+      id: RVC_OPERATIONAL_ERROR.FAILED_TO_FIND_CHARGING_DOCK,
+      roborock: "Charge sensor problem",
+    },
+  ],
+  [
+    23,
+    {
+      id: RVC_OPERATIONAL_ERROR.FAILED_TO_FIND_CHARGING_DOCK,
+      roborock: "Dock problem",
+    },
+  ],
+  [
+    24,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_START_OR_RESUME,
+      roborock: "No-go zone or invisible wall detected",
+      spec: "CannotReachTargetArea (73)",
+    },
+  ],
+  [254, { id: RVC_OPERATIONAL_ERROR.DUST_BIN_FULL, roborock: "Bin full" }],
+  [
+    255,
+    {
+      id: RVC_OPERATIONAL_ERROR.UNABLE_TO_COMPLETE_OPERATION,
+      roborock: "Internal error",
+    },
+  ],
+]);
 
 const RVC_OPERATIONAL_STATE_LIST = [
   RVC_OPERATIONAL_STATE.STOPPED,
@@ -498,6 +806,7 @@ export default class RoborockMatterVacuumAccessory {
   } | null = null;
   private lastVacuumFanPower: number | null = null;
   private lastWaterBoxMode: number | null = null;
+  private readonly reportedUnmappedErrorCodes = new Set<number>();
   private matterInitializationRetryAttempt = 0;
   private matterInitializationRetryPending = false;
   private returnToDockRetryPending = false;
@@ -673,6 +982,175 @@ export default class RoborockMatterVacuumAccessory {
   }
 
   /**
+   * The single fault to publish, or null when the robot has not said anything
+   * either way.
+   *
+   * Order matters and it is not arbitrary. An empty clean-water tank wins,
+   * because 68 is the one code measured rendering on a real tile and because
+   * `dock_error_status` describes the dock while `error_code` describes the
+   * robot — a docked robot can carry both at once and the tank is the one the
+   * user can act on. Below that comes the robot's own fault. Only when both
+   * are known and neither is a fault does this return NoError.
+   *
+   * Returning null rather than NoError for an unknown robot is the 3.12.1
+   * lesson applied to a second field: publishing NoError on the robot's behalf
+   * would clear a warning nobody has contradicted.
+   */
+  private getMatterFault(): { id: number; text: string } | null {
+    const tankEmpty = this.isWaterTankEmpty();
+    if (tankEmpty === true) {
+      return {
+        id: RVC_OPERATIONAL_ERROR.WATER_TANK_EMPTY,
+        text: "Clean water tank empty",
+      };
+    }
+
+    const errorCode = this.getNumberStatus("error_code");
+    if (errorCode !== null && errorCode !== 0) {
+      // The table is Roborock's v1 numbering. A B01/Q7 robot's `fault` field
+      // is a different space entirely — 407, 2105 — passed through under the
+      // same name by the adapter, so reading 254 from one of those robots as
+      // "bin full" would be a coincidence, not a translation.
+      const speaksV1ErrorCodes =
+        this.getNumberStatus("matter_clean_type") === null;
+      const mapped = speaksV1ErrorCodes
+        ? ROBOROCK_ERROR_TO_MATTER.get(errorCode)
+        : undefined;
+      if (mapped) {
+        return {
+          id: mapped.id,
+          text: mapped.spec
+            ? `${mapped.roborock}, Roborock ${errorCode}; spec has ${mapped.spec}`
+            : `${mapped.roborock}, Roborock ${errorCode}`,
+        };
+      }
+
+      // An error_code with no entry in the table publishes NOTHING, and this
+      // is the correction 3.13.1 exists for.
+      //
+      // 3.13.0 published a generic fault for it, on the reasoning that a
+      // robot which has stopped saying nothing is worse than a robot saying
+      // something vague. That reasoning had a hole, and 2 of the maintainer's
+      // own robots found it within the hour: both sat docked at 100 %, both
+      // carrying `error_code: 2105`, and both got a fault drawn on a tile
+      // that had nothing wrong with it. The B01/Q7 fault channel is
+      // documented in this very repository as one where informational codes
+      // linger after harmless events — the adapter already zeroes 407 for
+      // exactly that reason.
+      //
+      // So an unrecognised number is not evidence of a fault. It is evidence
+      // of a number. It gets logged once so it can be reported and mapped,
+      // and the attribute is left alone: no fault invented, and no existing
+      // fault cleared either.
+      this.reportUnmappedErrorCode(errorCode);
+      return null;
+    }
+
+    if (tankEmpty === false || errorCode === 0) {
+      // At least one source affirmatively says it is fine and neither says
+      // otherwise. Requiring both to be known would mean a robot that never
+      // reports `error_code` could never clear a tank warning after a refill,
+      // which is worse than no warning at all.
+      return { id: RVC_OPERATIONAL_ERROR.NO_ERROR, text: "" };
+    }
+
+    // Neither source has said anything.
+    return null;
+  }
+
+  /**
+   * The phase attributes, with an escape hatch.
+   *
+   * On by default, and not on the settings page — 3.12.0 removed that whole
+   * section. This exists for the same reason the fault attribute's key does:
+   * a controller that dislikes an attribute can leave a tile unusable, and
+   * this plugin has measured Apple Home refusing to finish commissioning over
+   * a neighbouring list attribute it did not like. `PhaseList` is a list of
+   * manufacturer-defined strings by design, which is not the same situation —
+   * but "not the same situation" is what was said before, twice, and both
+   * times a line in config.json would have saved somebody a reinstall.
+   */
+  private areDockPhasesEnabled(): boolean {
+    return this.platform.platformConfig.enableMatterDockPhases !== false;
+  }
+
+  /**
+   * Is the dock drying the mop right now?
+   *
+   * One field, 2 producers. A v1 robot with a drying dock reports `dry_status`
+   * itself — it is declared in this library's own feature table under
+   * `isSupportedDrying()`, gated on the robot's capability bitmask. A B01/Q7
+   * reports raw status 10, `mop_airdrying`, which the adapter maps to v1 state
+   * 8 so the tile reads Docked; since 3.14.0 it also writes `dry_status` under
+   * the same name so the fact is not lost in that mapping.
+   *
+   * Null means the robot has not said, which is not the same as "not drying" —
+   * a robot with no drying dock never reports the field at all.
+   */
+  private isMopDrying(): boolean | null {
+    const dryStatus = this.getNumberStatus("dry_status");
+    if (dryStatus === null) {
+      return null;
+    }
+    return dryStatus !== 0;
+  }
+
+  /**
+   * The index into RVC_PHASE_LIST, or null when the dock is not doing any of
+   * its own jobs.
+   *
+   * Order is deliberate: the states the robot reports directly win over the
+   * derived one. A dock washing the mop is also, technically, about to dry it,
+   * and saying "Washing mop" while it washes is the more useful of the 2.
+   */
+  private getCurrentPhase(): number | null {
+    // The UNGATED state on purpose. `getOperationalState` applies the user's
+    // extended-states choice, and someone who has turned those off has asked
+    // for a plainer tile, not for the dock to stop saying what it is doing.
+    // A phase naming the sub-activity inside a running state is exactly the
+    // shape the base cluster describes, so the 2 attributes do not contradict
+    // each other even when the gate is closed.
+    const dockActivity = this.getRoborockOperationalState(
+      this.getNumberStatus("state"),
+      this.getNumberStatus("charge_status")
+    );
+
+    switch (dockActivity) {
+      case RVC_OPERATIONAL_STATE.EMPTYING_DUST_BIN:
+        return RVC_PHASE.EMPTYING_DUST_BIN;
+      case RVC_OPERATIONAL_STATE.CLEANING_MOP:
+        return RVC_PHASE.WASHING_MOP;
+      case RVC_OPERATIONAL_STATE.UPDATING_MAPS:
+        return RVC_PHASE.UPDATING_MAPS;
+      default:
+        break;
+    }
+
+    return this.isMopDrying() === true ? RVC_PHASE.DRYING_MOP : null;
+  }
+
+  /**
+   * Name an unmapped error_code in the log once per code, per robot, per run.
+   *
+   * Once, because these codes linger: 2105 was present on every poll of 2
+   * robots for the whole evening it was found, and a line per poll would bury
+   * the log the way the ioBroker leftover did before 3.11.2 removed it.
+   */
+  private reportUnmappedErrorCode(errorCode: number): void {
+    if (this.reportedUnmappedErrorCodes.has(errorCode)) {
+      return;
+    }
+    this.reportedUnmappedErrorCodes.add(errorCode);
+    this.platform.log.info(
+      `${this.getVacuumName()} reports error_code ${errorCode}, which this plugin has no mapping for. ` +
+        "Nothing is published to Apple Home for it, because an unrecognised code is as likely to be " +
+        "informational as it is to be a fault. If the robot really is in trouble right now, please report " +
+        "the number and what the Roborock app says: " +
+        "https://github.com/mathiashornbek/homebridge-roborock-matter/issues"
+    );
+  }
+
+  /**
    * Whether the robot has reported enough for a sensor to claim anything.
    *
    * State 0 is not a Roborock state — the enum starts at 1 and the mapping
@@ -776,9 +1254,23 @@ export default class RoborockMatterVacuumAccessory {
     // set both so Apple Home is less likely to show a generic name.
     this.accessory.name = displayName;
     this.accessory.manufacturer = "Roborock";
-    this.accessory.model =
+    // Reads as a name, not a code (#10). Note that neither this nor the
+    // manufacturer above reaches Apple Home yet: Homebridge discards both for
+    // external Matter accessories and reports "Homebridge" with the display
+    // name as the model (homebridge/homebridge#3996). They are correct here so
+    // that they are right the moment that lands, and they are already visible
+    // in the Homebridge UI and on the HAP sensors today.
+    //
+    // Resolved here rather than delegated to the platform on purpose: this
+    // accessory is constructed directly by two dozen test harnesses whose
+    // platform is a stub, and reaching for a platform method for a pure
+    // model-string lookup made every one of them a mock-shape problem.
+    const reportedModel =
       this.api.getProductAttribute(duid, "model") ||
-      this.api.getVacuumDeviceInfo(duid, "model") ||
+      this.api.getVacuumDeviceInfo(duid, "model");
+    this.accessory.model =
+      getModelMarketingName(reportedModel) ||
+      reportedModel ||
       "Roborock Vacuum";
     this.accessory.serialNumber =
       this.api.getVacuumDeviceInfo(duid, "sn") || duid;
@@ -857,14 +1349,42 @@ export default class RoborockMatterVacuumAccessory {
     const cleanMode = clusters.rvcCleanMode as
       | Record<string, unknown>
       | undefined;
-    // No fault field here on purpose. 3.4.0 published RVC OperationalError and
-    // 3.4.1 withdrew it after three controlled field tests showed Apple Home
-    // drew no Matter vacuum fault at all. The line
-    // kept rendering `fault=…` from an attribute that is now never published,
-    // so the branch was permanently dead — and worse, it read as evidence that
-    // the feature still existed. If faults ever come back, this line gets the
-    // field back with a test that publishes one for real.
-    return `Matter publish for ${this.getVacuumName()}: battery=${typeof halfPercent === "number" ? halfPercent / 2 + "%" : "n/a"}, operationalState=${opState?.operationalState ?? "n/a"}, runMode=${runMode?.currentMode ?? "n/a"}, cleanMode=${cleanMode?.currentMode ?? "n/a"}.`;
+    // The fault field is back, and only because something is published into
+    // it again. 3.4.1 removed the attribute but left this rendering `fault=…`
+    // from a value that was never written — a permanently dead branch that
+    // read as evidence the feature still existed. It returns under the same
+    // condition the comment set at the time: a test publishes one for real.
+    const fault = opState?.operationalError as
+      | { errorStateId?: number }
+      | undefined;
+    // The generic codes cover many Roborock faults, so the id alone no longer
+    // says what happened. The resolver's own text is re-read here rather than
+    // threaded through the cluster, because the cluster carries only what
+    // Matter defines.
+    const faultDetail = this.getMatterFault()?.text ?? "";
+    // The phase, named rather than numbered, and only when there is one.
+    //
+    // This field is here because the feature it reports is UNMEASURED: nobody
+    // knows whether Apple Home draws a phase. Without it, someone looking at a
+    // tile that says nothing during a dry cannot tell whether the controller
+    // ignored the attribute or the plugin never sent it — which is exactly the
+    // mistake that cost the tank warning 2 releases and 3 field tests.
+    const phaseIndex = opState?.currentPhase;
+    const phaseList = opState?.phaseList;
+    const phaseText =
+      typeof phaseIndex === "number" && Array.isArray(phaseList)
+        ? `, phase=${phaseList[phaseIndex] ?? phaseIndex}`
+        : "";
+    const faultText =
+      typeof fault?.errorStateId === "number" && fault.errorStateId !== 0
+        ? `, fault=${fault.errorStateId} (${RVC_OPERATIONAL_ERROR_NAMES[fault.errorStateId] ?? "unnamed"}${
+            faultDetail && faultDetail !== "Clean water tank empty"
+              ? `: ${faultDetail}`
+              : ""
+          })`
+        : "";
+
+    return `Matter publish for ${this.getVacuumName()}: battery=${typeof halfPercent === "number" ? halfPercent / 2 + "%" : "n/a"}, operationalState=${opState?.operationalState ?? "n/a"}, runMode=${runMode?.currentMode ?? "n/a"}, cleanMode=${cleanMode?.currentMode ?? "n/a"}${phaseText}${faultText}.`;
   }
 
   /**
@@ -880,11 +1400,31 @@ export default class RoborockMatterVacuumAccessory {
    * hand-written list of interesting fields — means any value the line names
    * triggers it, including one added to the message later. A heartbeat's
    * forced republish of unchanged values still says nothing new, so the
-   * self-healing full write stays silent.
+   * self-healing full write stays silent at INFO.
+   *
+   * It is not silent at debug, and that gap cost issue #7 a round trip. A
+   * docked robot at 100 % renders an identical line every time, so its publish
+   * evidence appeared once at startup and never again — and the reporter was
+   * asked to check whether these lines were still being written while his Apple
+   * Home tile was dead. He looked, correctly found none in eleven minutes, and
+   * the answer meant nothing: absence was what this method does, not evidence
+   * that the plugin had stopped. "Is this plugin still publishing?" was
+   * unanswerable from the log at any level. One debug line per suppressed
+   * publish makes it answerable without spending a single INFO line, which is
+   * the whole point of the deduplication above.
    */
-  private logMatterPublishIfChanged(clusters: MatterClusterState): void {
+  private logMatterPublishIfChanged(
+    clusters: MatterClusterState,
+    reason: string
+  ): void {
     const line = this.buildMatterPublishLogLine(clusters);
     if (line === this.lastLoggedMatterPublishLine) {
+      // Names the reason so the two liveness questions stay separable: the
+      // 60-second heartbeat proves the Matter write path is still running, a
+      // poll proves the Roborock side still answers.
+      this.platform.log.debug(
+        `${line} Unchanged since the last logged line, so it was written but not repeated at info (${reason}).`
+      );
       return;
     }
     this.lastLoggedMatterPublishLine = line;
@@ -1414,7 +1954,7 @@ export default class RoborockMatterVacuumAccessory {
       }
       if (Object.keys(changed).length === 0) {
         // Everything already published: a no-op is a successful publish.
-        this.logMatterPublishIfChanged(snapshot);
+        this.logMatterPublishIfChanged(snapshot, reason);
         return true;
       }
       clusters = changed;
@@ -1442,7 +1982,7 @@ export default class RoborockMatterVacuumAccessory {
 
     const updated = await this.updateMatterState(clusters, reason);
     if (updated) {
-      this.logMatterPublishIfChanged(snapshot);
+      this.logMatterPublishIfChanged(snapshot, reason);
     }
     if (updated && resyncEligible) {
       this.powerSourceResyncDone = true;
@@ -1506,6 +2046,12 @@ export default class RoborockMatterVacuumAccessory {
     const cleanTime = this.getNumberFromValue(status.clean_time);
     const fanPower = this.getNumberFromValue(status.fan_power);
     const matterCleanType = this.getNumberFromValue(status.matter_clean_type);
+    const dockErrorStatus = this.getNumberFromValue(status.dock_error_status);
+    const waterShortageStatus = this.getNumberFromValue(
+      status.water_shortage_status
+    );
+    const errorCode = this.getNumberFromValue(status.error_code);
+    const dryStatus = this.getNumberFromValue(status.dry_status);
 
     // Fan power and clean type count as meaningful updates too. A suction or
     // mop-mode change made in the Roborock app (or chosen by SmartPlan) pushes
@@ -1528,6 +2074,10 @@ export default class RoborockMatterVacuumAccessory {
       clean_time: cleanTime,
       fan_power: fanPower,
       matter_clean_type: matterCleanType,
+      dock_error_status: dockErrorStatus,
+      water_shortage_status: waterShortageStatus,
+      error_code: errorCode,
+      dry_status: dryStatus,
     };
     if (
       MEANINGFUL_LIVE_STATUS_FIELDS.every(
@@ -1563,6 +2113,32 @@ export default class RoborockMatterVacuumAccessory {
     // cleans (re)configured outside Apple Home surface within one update.
     this.rememberLiveStatus("fan_power", fanPower);
     this.rememberLiveStatus("matter_clean_type", matterCleanType);
+    // The tank fields, and this is why they have to be here.
+    //
+    // getNumberStatus reads the live cache first and the HomeData snapshot
+    // second. These 2 fields are not in the snapshot, so if the live cache
+    // does not remember them there is nowhere left to read them from and
+    // isWaterTankEmpty() answers null forever. That is exactly what happened:
+    // 3.10.0 shipped the Water Tank Empty sensor, 3.12.0 shipped the Matter
+    // fault, both were correct, and neither could ever fire on a real robot
+    // while the Roborock app showed "Out of water" on the same dock.
+    //
+    // The unit tests did not catch it because they stub
+    // getVacuumDeviceStatus, so they proved the logic and nothing about the
+    // plumbing.
+    this.rememberLiveStatus("dock_error_status", dockErrorStatus);
+    this.rememberLiveStatus("water_shortage_status", waterShortageStatus);
+    // Same reasoning for the robot's own fault: a robot that gets stuck
+    // mid-run announces it in a live frame, and the HomeData snapshot behind
+    // it can be minutes old. Remembering it here is what makes a fault reach
+    // the tile while the robot is still stuck rather than after the next
+    // cloud refresh.
+    this.rememberLiveStatus("error_code", errorCode);
+    // Drying is a dock job, so it arrives while the robot itself is idle and
+    // the frames are at their sparsest. Without the cache a single frame
+    // carrying only `dry_status` would light the phase and the next heartbeat
+    // would put it out again.
+    this.rememberLiveStatus("dry_status", dryStatus);
 
     if (
       (state ?? previousState) === ROOM_CLEAN_STATE &&
@@ -1754,8 +2330,13 @@ export default class RoborockMatterVacuumAccessory {
           modeTags: [{ value: RVC_CLEAN_MODE_TAG_MOP }],
         },
         {
-          // Matter has no dedicated "vacuum then mop" tag, so combine the two
-          // standard RVC Clean Mode tags instead of an undefined tag value.
+          // Matter does have a dedicated tag for this -- VacuumThenMop, 0x4003 --
+          // and this mode does not use it. Two reasons, both about other people's
+          // homes rather than correctness: SupportedModes is fixed at commissioning,
+          // so swapping the tag would make every existing robot need re-pairing
+          // before its mode picker worked again; and Apple renders the tag rather
+          // than the label, so the change is visible and would have to be worth it.
+          // Combining the 2 standard tags is legal and is what ships today.
           label: "Vacuum + Mop",
           mode: CLEAN_MODE_VACUUM_AND_MOP,
           modeTags: [
@@ -1793,7 +2374,7 @@ export default class RoborockMatterVacuumAccessory {
   }
 
   private isFanPowerCleanModesEnabled(): boolean {
-    return this.platform.platformConfig.enableFanPowerCleanModes === true;
+    return this.platform.platformConfig.enableFanPowerCleanModes !== false;
   }
 
   private getFanPowerCleanMode(
@@ -1824,7 +2405,42 @@ export default class RoborockMatterVacuumAccessory {
     const inCleaningRun = this.isInCleaningRunMode(this.getOperationalState());
     this.trackAppliedCleanTypeRun(inCleaningRun);
 
-    if (!this.selectedCleanModeNeedsApply && inCleaningRun) {
+    // The wind-down is not a mode change, and on a classic robot it looks
+    // exactly like one.
+    //
+    // Measured 20 Aug on an a70 asked to mop: it reported Mop while cleaning,
+    // vacuum+mop the second it was sent home, then Mop again once docked —
+    // 1, 2, 1 on a single run, with the user having asked for one thing. The
+    // robot was fine. Sending it home resets its fan power while the water
+    // box stays configured, and "fan not off plus water on" is precisely the
+    // signature getLiveCleanType() reads as vacuum+mop.
+    //
+    // So the derivation is frozen from the moment the robot stops cleaning
+    // the floor until the run formally ends. It stays authoritative while the
+    // robot is actually working, because a mode genuinely changed in the
+    // Roborock app mid-clean must still reach Apple Home — that is a real case
+    // with a test of its own. A robot that reports its clean type directly is
+    // unaffected either way: its answer is not a guess.
+    //
+    // 3.12.3 froze only the drive home, and that was too narrow by exactly
+    // one dock. Measured on the same robot 3 hours later: the flap moved from
+    // 16:56 to 21:09, from state 64 to state 68. The robot finished mopping
+    // the hall, drove home with the type correctly held at Mop, and then
+    // reported Vacuum + Mop the moment it reached the dock and started
+    // washing its mop — because a dock washing a mop runs water with the fan
+    // off and on again, which is the same signature read the same wrong way.
+    //
+    // Everything `isInCleaningRunMode` counts as part of a run except
+    // actually running or paused IS the wind-down: driving home, emptying the
+    // bin, washing the mop, updating the map. During those the fan power and
+    // water box belong to the dock's business, not to what the user asked for.
+    const operationalState = this.getOperationalState();
+    const windingDown =
+      inCleaningRun &&
+      operationalState !== RVC_OPERATIONAL_STATE.RUNNING &&
+      operationalState !== RVC_OPERATIONAL_STATE.PAUSED;
+
+    if (!this.selectedCleanModeNeedsApply && inCleaningRun && !windingDown) {
       const liveCleanType = this.getLiveCleanType();
       if (
         liveCleanType !== null &&
@@ -1849,6 +2465,9 @@ export default class RoborockMatterVacuumAccessory {
     if (
       this.isFanPowerCleanModesEnabled() &&
       !this.selectedCleanModeNeedsApply &&
+      // Same reason as above: the fan power the robot reports on its way home
+      // is the one it reset to, not the one it cleaned with.
+      !windingDown &&
       selected !== CLEAN_MODE_MOP &&
       selected !== CLEAN_MODE_VACUUM_AND_MOP
     ) {
@@ -2073,7 +2692,7 @@ export default class RoborockMatterVacuumAccessory {
       `Applying ${this.getCleanModeLabel(cleanMode)} mode to ${this.getVacuumName()} before starting.`
     );
     try {
-      await this.withCleanModePrepTimeout(
+      const prep = await this.withCleanModePrepTimeout(
         applySettings.call(
           this.api,
           this.getDuid(),
@@ -2081,6 +2700,26 @@ export default class RoborockMatterVacuumAccessory {
           this.getMatterCleanModePrepCommandOptions()
         )
       );
+      // Resolving is not the same as landing. The prep sends up to three
+      // commands and resolves either way, reporting at warn what the robot
+      // never confirmed — so an apply can succeed as a call while the command
+      // carrying the clean TYPE went unanswered, and then the robot keeps the
+      // settings it already had. Measured in #8 (skmzwanke, Saros 10, 18 Aug
+      // 2026): the water mode was unconfirmed, his Saros ran vacuum+mop over
+      // rooms he had asked to be vacuumed, and the pin below made Apple Home
+      // show Vacuum for the whole run. The plugin held the tile on a promise it
+      // had already logged that it could not keep.
+      //
+      // Pinning is only defensible as KNOWN ground truth. When the prep says
+      // the type went unconfirmed, nothing is known, and the rule from the
+      // thrown-error path below applies unchanged: the robot's own report is
+      // the only signal there is, so it keeps its authority. Silence here is
+      // deliberate — the prep already warned, naming the settings it lost.
+      if (prep && prep.cleanTypeConfirmed === false) {
+        this.appliedCleanTypePin = null;
+        return;
+      }
+
       // Sent AND acknowledged, so this is known ground truth about the run
       // that is starting. It outranks a robot report that has not caught up.
       this.appliedCleanTypePin = {
@@ -2217,11 +2856,48 @@ export default class RoborockMatterVacuumAccessory {
 
   private buildOperationalStateCluster(): Record<string, unknown> {
     const operationalState = this.getOperationalState();
+    const dockPhase = this.areDockPhasesEnabled()
+      ? this.getCurrentPhase()
+      : null;
 
     const cluster: Record<string, unknown> = {
-      // RVC Operational State requires PhaseList and CurrentPhase to be null.
-      phaseList: null,
-      currentPhase: null,
+      // The dock's own jobs, named. Both attributes are mandatory on this
+      // cluster and nullable; they were null from 1.4.58 until 3.14.0, because
+      // the version 1.4.58 removed had used phase changes as a refresh hack
+      // and flapped them at every Apple Home hub in the house. The answer to
+      // flapping is a list that never changes, not an empty one — so the list
+      // is a module constant and only CurrentPhase moves.
+      //
+      // Whether Apple Home draws a phase is UNMEASURED. Drying the mop is the
+      // reason to try: it runs for hours after every mop clean and the
+      // specification gives it no operational state, so a phase is the only
+      // place it can be expressed at all.
+      // THE LIST IS PRESENT ONLY WHILE THERE IS A PHASE, AND THAT IS NOT A
+      // STYLE CHOICE — matter.js refuses the write otherwise.
+      //
+      // `OperationalStateServer.#assertCurrentPhase` throws
+      // ImplementationError on a null CurrentPhase whenever PhaseList is
+      // non-empty: "Current phase null is out of bounds for phase list of
+      // length 4". Homebridge swallows that throw, so the whole cluster write
+      // is silently rejected and the controller keeps whatever it last
+      // accepted. 3.14.0 shipped a constant list with a null phase whenever
+      // the dock was idle, which is nearly always — so from the moment a robot
+      // finished washing its mop, its operational state froze in Apple Home.
+      // Measured on a real run: the tile read "Cleaning Mop" for 5 minutes
+      // while the robot mopped the hall, and would have read it until the next
+      // dock job.
+      //
+      // Null list plus null phase is the specification's own encoding for "the
+      // current mode has no phases", so this is also the more faithful
+      // reading. The anti-flap argument that made the list a constant still
+      // holds and the constant is still the only source: the list either is
+      // that constant or is absent, and never anything else.
+      //
+      // Order matters and is load-bearing. matter.js reads `this.state
+      // .phaseList` while validating `currentPhase`, so phaseList MUST be
+      // assigned first — leaving the list, then the index, in that order.
+      phaseList: dockPhase === null ? null : [...RVC_PHASE_LIST],
+      currentPhase: dockPhase,
       // Advertise operational state IDs without labels. Apple Home stops
       // commissioning ("Connecting" forever) when the list carries labels or
       // manufacturer-range IDs, so only bare IDs are exposed here.
@@ -2231,8 +2907,20 @@ export default class RoborockMatterVacuumAccessory {
       operationalState,
     };
 
-    // The Matter fault attribute (`operationalError`) is deliberately never
-    // published, in any configuration.
+    // The Matter fault attribute (`operationalError`), for the one condition
+    // that has ever been seen to render. On by default since 3.12.0; see below
+    // for what that is worth and what it costs.
+    if (this.isFaultAttributeEnabled()) {
+      const fault = this.getMatterFault();
+      // Null means neither the dock nor the robot has said. Publishing NoError
+      // on their behalf would clear a warning nobody has contradicted, so an
+      // unknown robot leaves the attribute exactly where it was.
+      if (fault !== null) {
+        cluster.operationalError = { errorStateId: fault.id };
+      }
+    }
+
+    // WHY THIS IS NARROW, when the same attribute was withdrawn twice before.
     //
     // Three controlled tests on an S8 Pro Ultra with an empty clean water
     // tank settled it. Apple Home drew no warning when the fault was sent
@@ -2247,6 +2935,24 @@ export default class RoborockMatterVacuumAccessory {
     // has the same attribute rendering correctly elsewhere; the condition
     // that separates the two cases is still unknown, and guessing at it has
     // cost this plugin two round trips already.
+    //
+    // What changed is the evidence, not the risk. #9 carries a screenshot of
+    // this exact attribute rendered correctly — tap icon on the play button,
+    // localised string — by the same controller that drew nothing for
+    // Wazza151. So "Apple never renders it" is false, and the condition that
+    // separates the two cases is still unknown.
+    //
+    // It has its own config key rather than riding on fault reporting, so it
+    // can be switched off again without losing the Error state feature — the
+    // mistake 3.3.0 made by bundling the two. The key is not on the settings
+    // page: 3.12.0 removed that whole section because a page of switches
+    // whose off position can brick an accessory is worse than no page.
+    //
+    // The operational state is deliberately NOT forced to Error along with
+    // it. Wazza151's third test did exactly that and Apple still drew
+    // nothing, so it buys nothing measured — and a robot in Error may be
+    // refused a Start command, which is a real cost for a robot that is
+    // docked, charging and perfectly able to vacuum without water.
     //
     // The Error operational STATE is a different matter and is still
     // reported below: Apple renders operational states perfectly well (the
@@ -3074,24 +3780,50 @@ export default class RoborockMatterVacuumAccessory {
 
   private isExtendedOperationalStateEnabled(): boolean {
     return (
-      this.platform.platformConfig.enableMatterExtendedOperationalStates ===
-      true
+      this.platform.platformConfig.enableMatterExtendedOperationalStates !==
+      false
     );
   }
 
   private isChargingDockedStateEnabled(): boolean {
     return (
-      this.platform.platformConfig.enableMatterChargingDockedStates === true
+      this.platform.platformConfig.enableMatterChargingDockedStates !== false
     );
   }
 
   /**
-   * Opt-in: report the Matter Error state when the robot has genuinely
-   * halted, instead of showing Ready. Off by default because a robot in
-   * Error may be refused a Start command by the controller.
+   * Report the Matter Error state when the robot has genuinely halted,
+   * instead of showing Ready. On by default since 3.12.0. The cost is that a
+   * robot in Error may be refused a Start command by the controller, which is
+   * the right answer for a robot that cannot run; `false` in config.json
+   * restores the old silence.
    */
   private isFaultReportingEnabled(): boolean {
-    return this.platform.platformConfig.enableMatterFaultReporting === true;
+    return this.platform.platformConfig.enableMatterFaultReporting !== false;
+  }
+
+  /**
+   * Separate from fault reporting above on purpose.
+   *
+   * That setting means "a robot that has genuinely halted should say so
+   * instead of showing Ready". An empty clean-water tank is not that: the
+   * robot is docked, charging, and can vacuum all day. Folding the two
+   * together would change what a setting already switched on by other people
+   * does to their tile, which is how 3.3.0 got into trouble.
+   */
+  /**
+   * The `operationalError` attribute as a whole, tank and robot alike.
+   *
+   * The config key still says "Tank" because that is what it gated when it was
+   * introduced in 3.12.0 and renaming it would silently re-enable the
+   * attribute for anyone who had turned it off. The switch is no longer on the
+   * settings page either way; it survives for the person who needs to turn the
+   * attribute off from config.json after it misbehaves on some controller.
+   */
+  private isFaultAttributeEnabled(): boolean {
+    return (
+      this.platform.platformConfig.enableMatterTankFaultReporting !== false
+    );
   }
 
   /**
@@ -3272,7 +4004,7 @@ export default class RoborockMatterVacuumAccessory {
       (operationalState === RVC_OPERATIONAL_STATE.CHARGING ||
         operationalState === RVC_OPERATIONAL_STATE.DOCKED)
     ) {
-      // Opt-in: report real charging/docked states so Apple Home shows
+      // Report real charging/docked states so Apple Home shows
       // "Charging"/"Docked" on the tile instead of "Ready". The battery
       // percentage is the discriminator between the two: worn batteries can
       // make the robot claim "fully charged" (or drop the charging flag)
@@ -3410,6 +4142,12 @@ export default class RoborockMatterVacuumAccessory {
     if (dps) {
       const status: Record<string, unknown> = {};
 
+      // 120 is error_code. A B01/Q7 robot that hits a fault mid-run pushes a
+      // frame carrying only this field, and until 3.13.0 it was dropped here —
+      // the one transport on which a fault is most likely to arrive alone.
+      if (Object.prototype.hasOwnProperty.call(dps, "120")) {
+        status.error_code = dps["120"];
+      }
       if (Object.prototype.hasOwnProperty.call(dps, "121")) {
         status.state = dps["121"];
       }

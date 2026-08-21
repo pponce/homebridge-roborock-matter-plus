@@ -8,24 +8,7 @@ const elements = {
   devicesEmpty: document.getElementById("devices-empty"),
   refreshDevices: document.getElementById("refresh-devices"),
   debugMode: document.getElementById("debug-mode"),
-  enableMatterServiceArea: document.getElementById(
-    "enable-matter-service-area"
-  ),
-  enableLiveRoomTracking: document.getElementById("enable-live-room-tracking"),
-  enableMatterCleanMode: document.getElementById("enable-matter-clean-mode"),
-  enableFanPowerCleanModes: document.getElementById(
-    "enable-fan-power-clean-modes"
-  ),
-  enableMatterPowerSource: document.getElementById(
-    "enable-matter-power-source"
-  ),
-  enableMatterExtendedStates: document.getElementById(
-    "enable-matter-extended-states"
-  ),
   saveFeatureSettings: document.getElementById("save-feature-settings"),
-  enableMatterChargingDocked: document.getElementById(
-    "enable-matter-charging-docked"
-  ),
   enableHomeKitActionSwitches: document.getElementById(
     "enable-homekit-action-switches"
   ),
@@ -49,9 +32,6 @@ const elements = {
     "homekit-state-water-tank-empty"
   ),
   homeKitActionSchedules: document.getElementById("homekit-action-schedules"),
-  enableMatterFaultReporting: document.getElementById(
-    "enable-matter-fault-reporting"
-  ),
   matterChargedBatteryThreshold: document.getElementById(
     "matter-charged-battery-threshold"
   ),
@@ -195,40 +175,10 @@ async function loadConfig() {
       elements.skipDevices.value = config.skipDevices;
     }
     elements.debugMode.checked = Boolean(config.debugMode);
-    // Apple Home feature toggles. Service Area, clean mode, power source and
-    // live room tracking default ON (config semantics: `!== false`);
-    // suction-level modes and extended states default OFF.
-    if (elements.enableMatterServiceArea) {
-      elements.enableMatterServiceArea.checked =
-        config.enableMatterServiceArea !== false;
-    }
-    if (elements.enableLiveRoomTracking) {
-      elements.enableLiveRoomTracking.checked =
-        config.enableLiveRoomTracking !== false;
-    }
-    if (elements.enableMatterCleanMode) {
-      elements.enableMatterCleanMode.checked =
-        config.enableMatterCleanMode !== false;
-    }
-    if (elements.enableFanPowerCleanModes) {
-      elements.enableFanPowerCleanModes.checked = Boolean(
-        config.enableFanPowerCleanModes
-      );
-    }
-    if (elements.enableMatterPowerSource) {
-      elements.enableMatterPowerSource.checked =
-        config.enableMatterPowerSource !== false;
-    }
-    if (elements.enableMatterExtendedStates) {
-      elements.enableMatterExtendedStates.checked = Boolean(
-        config.enableMatterExtendedOperationalStates
-      );
-    }
-    if (elements.enableMatterChargingDocked) {
-      elements.enableMatterChargingDocked.checked = Boolean(
-        config.enableMatterChargingDockedStates
-      );
-    }
+    // No Apple Home feature toggles to load any more. 3.12.0 removed the
+    // whole section: every Matter feature is on unless config.json explicitly
+    // says false, and nothing here reads or writes those keys, so a save can
+    // never turn one off by accident.
     if (elements.enableHomeKitActionSwitches) {
       elements.enableHomeKitActionSwitches.checked = Boolean(
         config.enableHomeKitActionSwitches
@@ -248,11 +198,6 @@ async function loadConfig() {
     }
     syncActionSwitchAvailability();
     syncFeatureDependencies();
-    if (elements.enableMatterFaultReporting) {
-      elements.enableMatterFaultReporting.checked = Boolean(
-        config.enableMatterFaultReporting
-      );
-    }
     if (elements.matterChargedBatteryThreshold) {
       elements.matterChargedBatteryThreshold.value =
         config.matterChargedBatteryThreshold != null
@@ -386,19 +331,24 @@ async function describeEnabledMatterFeatures() {
     return "unavailable";
   }
 
-  // Defaults matter here: several of these are on unless explicitly disabled.
+  // Every Matter feature is on unless someone has explicitly written false in
+  // config.json. The report still lists them, because a support thread needs
+  // to know what a robot was actually publishing — and an override that is no
+  // longer reachable from the settings page is exactly the thing that would
+  // otherwise go unnoticed.
   const enabled = [
     ["serviceArea", config.enableMatterServiceArea !== false],
     ["liveRoomTracking", config.enableLiveRoomTracking !== false],
     ["cleanMode", config.enableMatterCleanMode !== false],
     ["powerSource", config.enableMatterPowerSource !== false],
-    ["fanPowerCleanModes", config.enableFanPowerCleanModes === true],
+    ["fanPowerCleanModes", config.enableFanPowerCleanModes !== false],
     [
       "extendedOperationalStates",
-      config.enableMatterExtendedOperationalStates === true,
+      config.enableMatterExtendedOperationalStates !== false,
     ],
-    ["chargingDockedStates", config.enableMatterChargingDockedStates === true],
-    ["faultReporting", config.enableMatterFaultReporting === true],
+    ["chargingDockedStates", config.enableMatterChargingDockedStates !== false],
+    ["faultReporting", config.enableMatterFaultReporting !== false],
+    ["tankFaultReporting", config.enableMatterTankFaultReporting !== false],
     [
       `homeKitActionSwitches(${readActionSwitchSelection(config).join("+") || "none"})`,
       config.enableHomeKitActionSwitches === true,
@@ -422,32 +372,6 @@ async function describeEnabledMatterFeatures() {
 /** True when a feature checkbox differs from what is saved in the config. */
 function hasUnsavedMatterFeatureEdits(config) {
   const comparisons = [
-    [
-      elements.enableMatterServiceArea,
-      config.enableMatterServiceArea !== false,
-    ],
-    [elements.enableLiveRoomTracking, config.enableLiveRoomTracking !== false],
-    [elements.enableMatterCleanMode, config.enableMatterCleanMode !== false],
-    [
-      elements.enableMatterPowerSource,
-      config.enableMatterPowerSource !== false,
-    ],
-    [
-      elements.enableFanPowerCleanModes,
-      config.enableFanPowerCleanModes === true,
-    ],
-    [
-      elements.enableMatterExtendedStates,
-      config.enableMatterExtendedOperationalStates === true,
-    ],
-    [
-      elements.enableMatterChargingDocked,
-      config.enableMatterChargingDockedStates === true,
-    ],
-    [
-      elements.enableMatterFaultReporting,
-      config.enableMatterFaultReporting === true,
-    ],
     [
       elements.enableHomeKitActionSwitches,
       config.enableHomeKitActionSwitches === true,
@@ -584,27 +508,16 @@ function applyStateSensorSelection(selection) {
 }
 
 /**
- * Grey out settings whose prerequisite is switched off.
+ * Kept as a no-op on purpose.
  *
- * Three settings do nothing on their own and said so only in their help text.
- * Two of them are re-pair settings, so a user could tick one, save, restart,
- * remove the robot from Apple Home, pair it again — and only then find out it
- * was never going to do anything.
+ * It used to grey out settings whose prerequisite was switched off — three of
+ * them, two of which were re-pair settings a user could tick, save, restart,
+ * re-pair, and only then discover had never been going to do anything. All
+ * of those prerequisites are now permanently met, so there is nothing left to
+ * grey out. The function stays because several call sites are about the page
+ * settling after a load, and deleting it would turn a tidy-up into a hunt.
  */
-function syncFeatureDependencies() {
-  const cleanMode = Boolean(elements.enableMatterCleanMode?.checked);
-  if (elements.enableFanPowerCleanModes) {
-    elements.enableFanPowerCleanModes.disabled = !cleanMode;
-  }
-  const serviceArea = Boolean(elements.enableMatterServiceArea?.checked);
-  if (elements.enableLiveRoomTracking) {
-    elements.enableLiveRoomTracking.disabled = !serviceArea;
-  }
-  const chargingDocked = Boolean(elements.enableMatterChargingDocked?.checked);
-  if (elements.matterChargedBatteryThreshold) {
-    elements.matterChargedBatteryThreshold.disabled = !chargingDocked;
-  }
-}
+function syncFeatureDependencies() {}
 
 /** Grey out the per-action and per-state boxes while their feature is off. */
 function syncActionSwitchAvailability() {
@@ -662,9 +575,9 @@ async function handleSaveClick(button) {
   }
 }
 
-/** An auto-save that cannot fail silently. */
+/** An auto-save that cannot fail silently, and cannot write the panel below. */
 function autoSave() {
-  saveCredentials(false).catch(() =>
+  saveCredentials(false, { only: AUTO_SAVED_FIELDS }).catch(() =>
     showToast("error", "Could not save that change.")
   );
 }
@@ -687,6 +600,50 @@ function getCode() {
   return elements.code.value.trim();
 }
 
+/**
+ * The keys an implicit save is allowed to write.
+ *
+ * Every control wired to `autoSave()` lives in the Account panel or the
+ * advanced block inside it, and the device rows only ever edit `skipDevices`.
+ * The Apple Home checkboxes sit in their own panel with their own Save button
+ * and deliberately have no autoSave binding — but the implicit saves spread the
+ * WHOLE form, so a change to debug mode, region, email or a device row
+ * committed whatever those four Apple Home keys happened to be in the DOM at
+ * that moment. Two ways that goes wrong, and the first one cost nine
+ * accessories three times in one day:
+ *
+ *  - a box was unticked and NOT saved, and an unrelated change persisted it.
+ *    On 20 Aug `debugMode` went `false` -> `true` and
+ *    `enableHomeKitStateSensors` went `true` -> `false` in the SAME write: one
+ *    debug-mode toggle, and the untouched checkbox rode along.
+ *  - the same in reverse — a stray tick committed without a Save.
+ *
+ * `updatePluginConfig` is a merge, so leaving a key out of the patch keeps
+ * whatever is saved. That is the whole fix: an implicit save writes the fields
+ * whose own controls triggered it, and nothing else. The password is off the
+ * list for the same reason `login()` deletes it — an email-field blur should
+ * not write an account password into config.json in cleartext.
+ */
+const AUTO_SAVED_FIELDS = [
+  "email",
+  "baseURL",
+  "skipDevices",
+  "debugMode",
+  "matterChargedBatteryThreshold",
+  "preferCloudForMatterCommands",
+  "cloudOnlyMode",
+  "transientWarningThrottleHours",
+];
+
+/** The listed keys only. Absent keys survive, because the save is a merge. */
+function pickFields(source, keys) {
+  const picked = {};
+  for (const key of keys) {
+    picked[key] = source[key];
+  }
+  return picked;
+}
+
 function getFormValues() {
   return {
     email: getEmail(),
@@ -694,22 +651,6 @@ function getFormValues() {
     baseURL: getBaseUrl(),
     skipDevices: getSkipDevices(),
     debugMode: getDebugMode(),
-    enableMatterServiceArea: Boolean(elements.enableMatterServiceArea?.checked),
-    enableLiveRoomTracking: Boolean(elements.enableLiveRoomTracking?.checked),
-    enableMatterCleanMode: Boolean(elements.enableMatterCleanMode?.checked),
-    enableFanPowerCleanModes: Boolean(
-      elements.enableFanPowerCleanModes?.checked
-    ),
-    enableMatterPowerSource: Boolean(elements.enableMatterPowerSource?.checked),
-    enableMatterExtendedOperationalStates: Boolean(
-      elements.enableMatterExtendedStates?.checked
-    ),
-    enableMatterChargingDockedStates: Boolean(
-      elements.enableMatterChargingDocked?.checked
-    ),
-    enableMatterFaultReporting: Boolean(
-      elements.enableMatterFaultReporting?.checked
-    ),
     enableHomeKitActionSwitches: Boolean(
       elements.enableHomeKitActionSwitches?.checked
     ),
@@ -853,7 +794,9 @@ function onManagedDeviceToggle(device, managed) {
 
   setSkipTokens(tokens);
   rerenderMatterPairing();
-  saveCredentials(false)
+  // A device row edits `skipDevices`. It has no business saving the Apple Home
+  // panel on the way past.
+  saveCredentials(false, { only: AUTO_SAVED_FIELDS })
     .then(() => {
       showToast(
         "success",
@@ -868,7 +811,13 @@ function onManagedDeviceToggle(device, managed) {
   renderManagedDevices();
 }
 
-async function saveCredentials(showSuccess = false) {
+/**
+ * @param {boolean} showSuccess
+ * @param {{only?: string[] | null}} [options] `only` narrows the patch to those
+ *   keys — see AUTO_SAVED_FIELDS. Omit it for the explicit Save buttons, which
+ *   are the only thing allowed to write the whole form.
+ */
+async function saveCredentials(showSuccess = false, { only = null } = {}) {
   const formValues = getFormValues();
   const { email, password } = formValues;
   if (!email) {
@@ -876,10 +825,12 @@ async function saveCredentials(showSuccess = false) {
     return;
   }
 
-  const patch = {
-    ...formValues,
-    enableMatterServiceAreaBeta: undefined,
-  };
+  const patch = only
+    ? pickFields(formValues, only)
+    : {
+        ...formValues,
+        enableMatterServiceAreaBeta: undefined,
+      };
 
   if (!password) {
     delete patch.password;
@@ -887,7 +838,8 @@ async function saveCredentials(showSuccess = false) {
 
   await updatePluginConfig(patch);
 
-  if (password) {
+  // Only when this save actually carried it. A narrowed patch never does.
+  if (password && !only) {
     state.hasPassword = true;
   }
 
@@ -1936,18 +1888,6 @@ function init() {
     rerenderMatterPairing();
   });
   elements.debugMode.addEventListener("change", () => autoSave());
-  for (const gate of [
-    elements.enableMatterCleanMode,
-    elements.enableMatterServiceArea,
-    elements.enableMatterChargingDocked,
-  ]) {
-    gate?.addEventListener("change", () => syncFeatureDependencies());
-  }
-  if (elements.enableMatterChargingDocked) {
-    elements.enableMatterChargingDocked.addEventListener("change", () =>
-      autoSave()
-    );
-  }
   if (elements.matterChargedBatteryThreshold) {
     elements.matterChargedBatteryThreshold.addEventListener("change", () =>
       autoSave()
