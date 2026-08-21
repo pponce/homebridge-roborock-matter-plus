@@ -17,6 +17,7 @@ function makeCoordinator() {
     roborockAPI: {},
     log: {
       info: jest.fn(),
+      debug: jest.fn(),
       warn: jest.fn(),
     },
   };
@@ -191,9 +192,7 @@ describe("HAP schedule coordinator cache", () => {
     // Simulate the 30-second backoff having expired.
     coordinator.lastFailedRefreshAt = Date.now() - 31000;
 
-    getServerTimers.mockResolvedValueOnce([
-      ["timer-existing", "off"],
-    ]);
+    getServerTimers.mockResolvedValueOnce([["timer-existing", "off"]]);
 
     await expect(coordinator.refreshIfNeeded()).resolves.toBe(true);
     expect(getServerTimers).toHaveBeenCalledTimes(2);

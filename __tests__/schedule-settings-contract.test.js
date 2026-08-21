@@ -170,6 +170,40 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
+  test("schedule ordering is deterministic by schedule ID", () => {
+    expect(scheduleSource).toContain("schedules.sort((a, b) =>");
+    expect(scheduleSource).toContain(
+      "a.id.localeCompare(b.id, undefined, { numeric: true })"
+    );
+  });
+
+  test("schedule refresh preserves a HomeKit ConfiguredName", () => {
+    expect(scheduleSource).toContain(
+      "const previousAccessoryName = this.accessory.displayName;"
+    );
+    expect(scheduleSource).toContain(
+      "const currentConfiguredName = configuredName.value;"
+    );
+    expect(scheduleSource).toContain(
+      "String(currentConfiguredName) === previousAccessoryName"
+    );
+  });
+
+  test("schedule verification uses the shared timer utility", () => {
+    expect(scheduleSource).toContain(
+      'import { scheduleTimer, unrefTimer } from "./timers";'
+    );
+    expect(scheduleSource).toContain(
+      "const timer = scheduleTimer(resolve, VERIFY_DELAY_MS);"
+    );
+    expect(scheduleSource).toContain("unrefTimer(timer);");
+  });
+
+  test("routine schedule payload logging is debug-level", () => {
+    expect(scheduleSource).toContain("this.platform.log.debug(");
+    expect(scheduleSource).toContain("`Schedule discovery for ${this.duid}: `");
+  });
+
   test("schedule switch GET returns cached state without waiting for refresh", () => {
     expect(scheduleSource).toMatch(
       /\.onGet\(\(\) => \{[\s\S]*?void this\.coordinator\.refreshIfNeeded\(\);[\s\S]*?return this\.schedule\.enabled;/

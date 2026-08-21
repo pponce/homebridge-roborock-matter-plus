@@ -482,14 +482,14 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       const self = this;
       let devices: any[] = [];
 
-      this.log.info(
+      this.log.debug(
         `Discovery state: roborockAPI.isInited()=${self.roborockAPI.isInited()}`
       );
 
       if (self.roborockAPI.isInited()) {
         devices = self.roborockAPI.getVacuumList();
 
-        this.log.info(
+        this.log.debug(
           `Discovery retrieved ${
             Array.isArray(devices) ? devices.length : "non-array"
           } device(s) from getVacuumList().`

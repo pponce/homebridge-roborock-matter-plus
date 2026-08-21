@@ -4,6 +4,7 @@ exports.HAP_SCHEDULE_EXTENSION = exports.HAP_EXTENSION_KIND = void 0;
 exports.parseServerTimers = parseServerTimers;
 exports.isHapScheduleAccessory = isHapScheduleAccessory;
 const hap_schedule_api_1 = require("./hap_schedule_api");
+const timers_1 = require("./timers");
 const VERIFY_DELAY_MS = 3000;
 const WRITE_SUPPRESSION_MS = 5000;
 const SCHEDULE_CACHE_TTL_MS = 60 * 1000;
@@ -138,7 +139,7 @@ class RoborockHapScheduleAccessory {
             const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
                 requestTimeoutMs: 10000,
             });
-            this.platform.log.info(`Schedule discovery for ${this.duid}: ` +
+            this.platform.log.debug(`Schedule discovery for ${this.duid}: ` +
                 `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
                 `value=${JSON.stringify(raw)}`);
             if (!Array.isArray(raw)) {
@@ -151,6 +152,9 @@ class RoborockHapScheduleAccessory {
                 };
             }
             const schedules = parseServerTimers(raw);
+            // Keep display numbering stable even if Roborock returns schedules
+            // in a different order between refreshes.
+            schedules.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
             // A non-empty response that parses to zero schedules is not a
             // trustworthy empty snapshot. Preserve the previous state instead
             // of deleting every HomeKit schedule switch.
@@ -222,7 +226,7 @@ class RoborockHapScheduleAccessory {
         this.platform.api.updatePlatformAccessories([this.managerAccessory]);
     }
     sync(schedules) {
-        this.platform.log.info(`Schedule sync: ${this.duid} received ${schedules.length} parsed schedule(s).`);
+        this.platform.log.debug(`Schedule sync: ${this.duid} received ${schedules.length} parsed schedule(s).`);
         const ids = new Set(schedules.map((schedule) => schedule.id));
         for (let i = 0; i < schedules.length; i++) {
             const schedule = schedules[i];
@@ -235,12 +239,12 @@ class RoborockHapScheduleAccessory {
             const child = new RoborockHapScheduleSwitchAccessory(this.platform, this, this.managerAccessory, this.duid, schedule.id);
             child.initialize(displayName, schedule);
             this.scheduleAccessories.set(schedule.id, child);
-            this.platform.log.info(`Schedule sync: ${this.scheduleAccessories.has(schedule.id) ? "restored" : "added"} HAP switch '${displayName}' for ${schedule.id}.`);
+            this.platform.log.debug(`Schedule sync: added HAP switch '${displayName}' for ${schedule.id}.`);
         }
         for (const [id, child] of this.scheduleAccessories) {
             if (ids.has(id))
                 continue;
-            this.platform.log.info(`Schedule sync: removing stale HAP switch for ${id}.`);
+            this.platform.log.debug(`Schedule sync: removing stale HAP switch for ${id}.`);
             child.dispose();
             const service = this.managerAccessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(id)}`);
             if (service) {
@@ -304,13 +308,19 @@ class RoborockHapScheduleSwitchAccessory {
         service.updateCharacteristic(this.platform.Characteristic.On, schedule.enabled);
     }
     updateIdentity(displayName, schedule) {
+        const previousAccessoryName = this.accessory.displayName;
         this.schedule = { ...schedule, timer: [...schedule.timer] };
         this.accessory.displayName = displayName;
         const switchService = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
         if (switchService) {
             switchService.setCharacteristic(this.platform.Characteristic.Name, displayName);
             switchService.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
-            switchService.setCharacteristic(this.platform.Characteristic.ConfiguredName, displayName);
+            const configuredName = switchService.getCharacteristic(this.platform.Characteristic.ConfiguredName);
+            const currentConfiguredName = configuredName.value;
+            if (currentConfiguredName == null ||
+                String(currentConfiguredName) === previousAccessoryName) {
+                configuredName.setValue(displayName);
+            }
             switchService.updateCharacteristic(this.platform.Characteristic.On, schedule.enabled);
         }
     }
@@ -381,7 +391,10 @@ class RoborockHapScheduleSwitchAccessory {
         }
     }
     async verify(api, enabled) {
-        await new Promise((resolve) => setTimeout(resolve, VERIFY_DELAY_MS));
+        await new Promise((resolve) => {
+            const timer = (0, timers_1.scheduleTimer)(resolve, VERIFY_DELAY_MS);
+            (0, timers_1.unrefTimer)(timer);
+        });
         const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
             requestTimeoutMs: 10000,
         });
