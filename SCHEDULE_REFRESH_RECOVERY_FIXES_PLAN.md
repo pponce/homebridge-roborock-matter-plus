@@ -83,12 +83,26 @@ The schedule-write verification path is now integrated with the shared coordinat
 - Changed-file formatting: **passed**.
 - Tested commit pushed to `schedule-refresh-recovery-fixes`: `9d09016`.
 
+### Progress update — Batch C teardown safety
+
+The coordinator teardown race is now guarded and regression-tested.
+
+- Disposed coordinators are explicitly marked disposed.
+- A refresh that is already in flight cannot synchronize schedule accessories after teardown.
+- A refresh that completes after disposal cannot repopulate the cached schedule snapshot or refresh timestamps.
+- Added focused regression coverage for disposal while a refresh is in flight.
+- Targeted schedule tests: **34/34 passed**.
+- Full repository test suite: **86/86 suites, 1,349/1,349 tests passed**.
+- Typecheck: **passed**.
+- Build: **passed**.
+- Changed-file formatting: **passed**.
+- Tested commit pushed to `schedule-refresh-recovery-fixes`: `c8a3531`.
+
 ### Remaining recovery items
 
-The following items remain intentionally open and have not yet been marked complete:
+The remaining work is validation only:
 
-- Final end-to-end validation of recovery after the failure/backoff window expires is still pending on real hardware.
-- Prevent disposed coordinators from syncing after teardown.
+- Final end-to-end recovery validation after the failure/backoff window expires is still pending on real hardware.
 
 This is the **active handoff plan** for the follow-up work requested by Mathias after his review of `schedule-refresh-recovery-clean`.
 
@@ -101,7 +115,7 @@ The historical first-phase record is `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. Do not
 - Completed first phase: `schedule-refresh-recovery-clean`
 - Active follow-up branch: `schedule-refresh-recovery-fixes`
 - Follow-up branch is based on `schedule-refresh-recovery-clean` with Mathias 3.15.3 merged on top.
-- Current branch tip: `9d09016`
+- Current branch tip: `c8a3531`
 - Pre-fix functional baseline: merge `9a7cd13`, with 86 suites / 1336 tests passing.
 
 ## Mathias's required fixes
@@ -392,7 +406,7 @@ After the local gate passes and the branch is pushed:
 - [x] ConfiguredName is not repeatedly overwritten by unchanged schedule refreshes.
 - [x] Schedule ordering is deterministic.
 - [x] `verify()` participates correctly in the coordinator/coalescing model.
-- [ ] Disposed coordinators cannot sync after teardown.
+- [x] Disposed coordinators cannot sync after teardown.
 - [x] Coordinator timers use the shared timer utility.
 - [x] Routine schedule payload logging is debug-level rather than info-level.
 - [x] Q7 neutral `get_server_timer` behavior is documented.
@@ -413,4 +427,4 @@ The three important branches remain:
 - `schedule-refresh-recovery-clean` = completed first-phase work.
 - `schedule-refresh-recovery-fixes` = current follow-up work.
 
-The next implementation work should proceed one focused item at a time, starting with **disposed coordinator teardown safety**. Keep changes local, tests local, pushes deliberate, and real-device testing only after the tested branch is on GitHub.
+The implementation work is complete. The next step is final real-device end-to-end validation of recovery after the failure/backoff window expires. Keep real-device testing focused and do not change unrelated Homebridge configuration.
