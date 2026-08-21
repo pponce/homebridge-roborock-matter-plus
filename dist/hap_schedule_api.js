@@ -69,12 +69,15 @@ async function updateTimer(api, duid, timer, enabled, options = {}) {
         waitForResult: true,
         throwOnError: true,
     });
-    if (typeof api.startCommand === "function") {
-        return api.startCommand(duid, "upd_timer", [timerId, enabled ? "on" : "off"], requestOptions);
-    }
+    // Prefer the underlying vacuum command path because upd_timer is not
+    // included in SIMPLE_VACUUM_COMMANDS and startCommand can therefore
+    // resolve without actually sending the command.
     const vacuum = (_a = api.vacuums) === null || _a === void 0 ? void 0 : _a[duid];
     if (typeof (vacuum === null || vacuum === void 0 ? void 0 : vacuum.command) === "function") {
         return vacuum.command(duid, "upd_timer", [timerId, enabled ? "on" : "off"], requestOptions);
+    }
+    if (typeof api.startCommand === "function") {
+        return api.startCommand(duid, "upd_timer", [timerId, enabled ? "on" : "off"], requestOptions);
     }
     throw new Error("Roborock timer command API is unavailable");
 }

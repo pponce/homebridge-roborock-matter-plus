@@ -142,8 +142,13 @@ export async function updateTimer(
     throwOnError: true,
   });
 
-  if (typeof api.startCommand === "function") {
-    return api.startCommand(
+  // Prefer the underlying vacuum command path because upd_timer is not
+  // included in SIMPLE_VACUUM_COMMANDS and startCommand can therefore
+  // resolve without actually sending the command.
+  const vacuum = api.vacuums?.[duid];
+
+  if (typeof vacuum?.command === "function") {
+    return vacuum.command(
       duid,
       "upd_timer",
       [timerId, enabled ? "on" : "off"],
@@ -151,9 +156,8 @@ export async function updateTimer(
     );
   }
 
-  const vacuum = api.vacuums?.[duid];
-  if (typeof vacuum?.command === "function") {
-    return vacuum.command(
+  if (typeof api.startCommand === "function") {
+    return api.startCommand(
       duid,
       "upd_timer",
       [timerId, enabled ? "on" : "off"],
