@@ -1,205 +1,368 @@
 # Schedule Refresh & Recovery Plan
 
-## Current repository strategy — 2026-08-21
+## Purpose
+
+This is the working plan and continuity record for the clean implementation of schedule-switch refresh/recovery work on `homebridge-roborock-matter-plus`.
+
+The implementation starts **fresh from `hap-schedules-scenes`** and does not carry forward source changes from the previous `schedule-coordinator-refresh-recovery` branch. That older branch is reference material only.
+
+## Repository / Branch Context
 
 - Repository: `pponce/homebridge-roborock-matter-plus`
-- `main` must remain a clean copy of Mathias's upstream release, with no fork-specific changes.
-- Mathias upstream is currently **3.15.3**, commit `02cdd263aa55b703dd45da1ed4967d43b927b896`.
-- `main` has been reset to that exact upstream commit and is clean.
-- `schedule-refresh-recovery-clean` remains the reviewed/validated first-phase branch based on Mathias 3.15.0 and contains the completed schedule cache/coalescing/recovery work.
-- `schedule-refresh-recovery-fixes` is the current follow-up branch. It is based on `schedule-refresh-recovery-clean`, and Mathias upstream 3.15.3 has now been merged into it.
+- Starting point: `hap-schedules-scenes`
+- Current working branch: `schedule-refresh-recovery-clean`
+- Base commit: `20ae39d6d7f0fbf5fb7619d1a40b42413df803cc`
+- GitHub branch: `https://github.com/pponce/homebridge-roborock-matter-plus/tree/schedule-refresh-recovery-clean`
 
-## First-phase work already completed
+The purpose of this branch is to make the smallest, reviewable changes needed to address Mathias's comment while adding one narrowly defined user requirement.
 
-Mathias reviewed `schedule-refresh-recovery-clean` and said the caching design, coalescer, and scoped `roborockLib` change were the right shape. The branch has:
+## Source of Truth / Development Workflow
 
-- No permanent three-minute schedule polling timer.
-- One cached schedule snapshot per vacuum with approximately 60-second freshness.
-- One in-flight refresh promise per vacuum to coalesce concurrent requests.
-- HomeKit reads refresh stale snapshots from Roborock cloud.
-- One successful snapshot synchronizes all schedule switches for that vacuum.
-- Failed/untrusted schedule retrieval preserves existing schedules rather than treating failure as zero schedules.
-- Schedule discovery is independent of local vacuum reachability.
-- Existing schedule writes and delayed verification remain intact.
-- Stable schedule-ID reconciliation is preserved.
-- Real Homebridge/HomeKit testing confirmed that opening Home causes a stale snapshot to refresh from Roborock, while leaving Home closed does not create continuous schedule polling.
+GitHub is the source of truth for the branch.
 
-## Mathias follow-up — required fixes
+Recommended workflow:
 
-Mathias's 2026-08-21 review identified one blocker and four additional fixes, in priority order.
+1. Keep the local checkout synchronized with `origin/schedule-refresh-recovery-clean` before local work.
+2. Make one focused functional change at a time.
+3. Run targeted tests after each functional change.
+4. Push the tested source change to the branch.
+5. Let the repository's existing workflow regenerate and commit `dist/` where appropriate.
+6. Re-read this plan before the next functional step.
+7. Keep commits small enough that each one has one understandable purpose.
 
-### Blocker
+Do not use the previous `schedule-coordinator-refresh-recovery` implementation as a base. Inspect it only when it provides useful evidence about a prior failure or design idea.
 
-**HomeKit GET must not wait for the Roborock cloud.**
+## Scope
 
-Current pattern:
+### Required from Mathias's comment
 
-```js
-.onGet(async () => {
-  await this.coordinator.refreshIfNeeded();
-  return this.schedule.enabled;
-});
-```
+1. Make the release gate clean, including Prettier.
+2. Remove the permanent three-minute schedule polling timer.
+3. Use a per-vacuum cached schedule snapshot with an approximately 60-second lifetime.
+4. Refresh schedules on HomeKit reads when the cache is stale.
+5. Coalesce concurrent refreshes so multiple simultaneous refresh triggers result in one schedule cloud request.
+6. One successful schedule snapshot must synchronize all schedule switches for that vacuum.
+7. Preserve the existing schedule write and verification behavior. A user-initiated write followed by the approximately 3-second verification is legitimate cloud traffic and is not the background polling being removed.
+8. Preserve stable schedule-ID identity and existing reconciliation behavior wherever possible.
 
-Required direction:
+### Additional user requirement
 
-```js
-.onGet(() => {
-  void this.coordinator.refreshIfNeeded();
-  return this.schedule.enabled;
-});
-```
+The schedule switches should **not be gated on local/device reachability**.
 
-The read should return the cached value immediately; the asynchronous refresh should update the characteristic when the fresh snapshot arrives. This prevents HAP's approximately 3-second warning / approximately 9-second hard read timeout from being exceeded by the existing 10-second cloud request timeout.
+The desired behavior is:
 
-Also add failure timestamp/backoff behavior so repeated HomeKit reads during a cloud outage do not each initiate another 10-second request.
+> If a configured/known vacuum is currently unreachable but the Roborock cloud can successfully return its schedules, create the schedule switches from that successful cloud snapshot anyway.
 
-### Additional fixes
+Therefore:
 
-1. **Failed first refresh:** avoid restoring apparently-live schedule accessories that have no working handlers when initial discovery fails. Mathias prefers a visibly dead accessory over one that appears functional but silently does nothing.
-2. **Disable setting:** turning HAP schedules off must actually dispose/remove previously created schedule accessories, including after restart. Do not rely only on the in-memory `hapScheduleAccessories` map populated later by sync.
-3. **`upd_timer` fallback:** the fallback currently reaches `startCommand` but `upd_timer` is not in `SIMPLE_VACUUM_COMMANDS`, so it warns and resolves without sending. Use the existing `updateServerTimer` command path/order instead.
-4. **Parser safety:** a non-empty Roborock response that the parser cannot understand must not be interpreted as an authoritative empty schedule list. `raw.length > 0 && parsed.length === 0` is an untrusted response and should preserve the current schedule state.
+- **Do create** schedule switches for a currently unreachable vacuum when `get_server_timer` / `getServerTimers` succeeds and returns valid schedules.
+- **Do not require** a local reachable state before attempting schedule discovery.
+- If schedule discovery fails because the cloud/API request fails or cannot be trusted, do not invent an empty schedule set and do not create a broken schedule group solely from the failure.
+- If switches already exist, keep them when the vacuum becomes unreachable.
+- A temporary reachability problem must never by itself remove an existing schedule group or child schedule switches.
+- Only a **successful** schedule snapshot should drive removal of a schedule switch, and only when that snapshot proves the schedule ID no longer exists.
 
-### Smaller follow-ups (only if appropriate after the above)
+This replaces the earlier idea of waiting for an `unavailable -> reachable` transition before creating a first-time schedule group. We should not add a reachability transition hook solely for initial schedule creation unless investigation shows that cloud schedule discovery genuinely cannot work for an unreachable vacuum.
 
-- Avoid resetting HomeKit ConfiguredName on every successful refresh.
-- Consider deterministic schedule ordering rather than relying on cloud-array order.
-- Ensure `verify()` uses the coalescer correctly.
-- Ensure disposed coordinators cannot sync into a tearing-down bridge after an in-flight refresh completes.
-- Route the coordinator timer through the shared timer utility.
-- Keep routine schedule payload logging at debug rather than info.
-- Add a comment explaining the Q7 `get_server_timer` adapter behavior that returns a neutral empty list.
-
-## Upstream integration status
-
-Mathias released **3.15.1, 3.15.2, and 3.15.3** after the previous 3.15.0 baseline. These have now been integrated into `schedule-refresh-recovery-fixes`.
-
-Completed before starting the follow-up code changes:
-
-1. Local `main` was updated to exact upstream 3.15.3.
-2. Mathias's upstream remote was fetched.
-3. `schedule-refresh-recovery-fixes` was created from the schedule-refresh-recovery work.
-4. `upstream/main` (3.15.3) was merged into `schedule-refresh-recovery-fixes` with no conflicts.
-5. The full local Jest suite was run after the merge.
-
-Current merge commit: `9a7cd13` (`Merge remote-tracking branch 'upstream/main' into schedule-refresh-recovery-fixes`).
-
-### Post-merge test baseline
+## North Star Architecture
 
 ```text
-Test Suites: 86 passed, 86 total
-Tests:       1336 passed, 1336 total
-Snapshots:   0 total
-Time:        7.774 s
+                 Roborock cloud
+                       |
+                       | getServerTimers (cloud preferred)
+                       v
+              +--------------------+
+              | Schedule Coordinator|
+              |     per vacuum      |
+              +----------+----------+
+                         |
+                  cached snapshot
+                    (~60 seconds)
+                         |
+             +-----------+-----------+
+             |           |           |
+             v           v           v
+         Schedule 1  Schedule 2  Schedule 3
+          HAP switch  HAP switch  HAP switch
 ```
 
-This is the clean baseline for the follow-up fixes. Do not start fixing Mathias's requested issues from an unverified state.
+Refresh triggers are:
 
-## Development / validation workflow
+1. Initial schedule discovery for a known/configured vacuum.
+2. HomeKit GET when the cached snapshot is stale.
+3. A user schedule write followed by the existing verification flow.
+4. Any other narrowly justified refresh request that can coalesce through the same coordinator.
 
-Work locally first. Do not use GitHub as the development environment.
+There is **no permanent background three-minute schedule timer**.
 
-Typical sequence:
+Reachability is not itself a prerequisite for cloud schedule discovery.
 
-```bash
-cd ~/devProjects/homebridge-roborock-matter-plus
+## Desired State Semantics
 
-git status --short
-git branch --show-current
-npm test -- --runInBand
-npm run build
-npx prettier --check .
-```
+The implementation must distinguish three fundamentally different states:
 
-Keep command output short when collecting diagnostics. Prefer targeted `grep`, `tail`, `git log -n`, and individual test commands rather than dumping large logs or full files. This matters because large pasted command output can hit chat text limits.
-
-After local changes pass, push to GitHub so the real Homebridge installation can consume the branch:
-
-```bash
-git push origin schedule-refresh-recovery-fixes
-```
-
-Then install the pushed branch on the real Homebridge host:
-
-```bash
-sudo hb-service stop
-sudo hb-service add https://github.com/pponce/homebridge-roborock-matter-plus.git#schedule-refresh-recovery-fixes
-sudo hb-service start
-```
-
-Use the real Apple Home app and Roborock app for end-to-end validation. Do not treat a local test run as proof of HomeKit/HAP timing behavior.
-
-## Real Homebridge environment
-
-Homebridge is running as an `hb-service` installation. The primary Homebridge log is:
+### 1. Successful non-empty schedule snapshot
 
 ```text
-/var/lib/homebridge/homebridge.log
+SUCCESS + schedules = [...]
 ```
 
-Useful live log command:
+Use it to create/update/reconcile schedule switches.
 
-```bash
-sudo tail -F /var/lib/homebridge/homebridge.log | grep --line-buffered -E "Schedule (discovery|parser|sync|command|refresh)|Roborock"
-```
-
-The user's real setup includes two Roborock vacuums, with DUIDs observed during validation:
-
-- `66xmjtyk5YgGyXD9epni7Y`
-- `5QNhUVywYYnWc2pPBk3URp`
-
-Other Homebridge plugins are active, including deCONZ, homebridge-http-webhooks, UniFi Protect, and Virtual Accessories. Their unrelated log traffic can be very noisy, so targeted Roborock/Schedule filtering is preferred.
-
-## Cloud-request observations
-
-Overnight testing on 2026-08-21 showed repeated `get_server_timer` 10-second timeouts:
+### 2. Successful empty schedule snapshot
 
 ```text
-Unable to refresh Roborock schedules ... Cloud request ... get_server_timer timed out after 10 seconds. MQTT connection state: true. Preserving existing schedules.
+SUCCESS + schedules = []
 ```
 
-These occurred for both vacuums and sometimes repeated within seconds. A separate `get_prop` request also timed out. This strongly suggests the schedule refresh path can encounter Roborock cloud/MQTT request pressure or transient cloud failure; it is **not evidence by itself of a HomeKit bug or proof of a formal Roborock rate cap**. The failure-backoff work above is therefore important to avoid amplifying a cloud problem.
+This is trustworthy information. It means the cloud successfully told us that the vacuum currently has no schedules. Existing schedule switches may therefore be reconciled away as appropriate.
 
-## Important architectural constraint
-
-Do **not** reintroduce a permanent schedule-specific polling loop merely to work around HomeKit reads. Mathias explicitly preferred the cached/coalesced design and did not want a dedicated periodic schedule poll. The desired model is:
+### 3. Failed/untrusted schedule retrieval
 
 ```text
-Roborock cloud
-      |
-      v
-per-vacuum coordinator/cache
-      |
-      +--> HomeKit reads return cached state immediately
-      |
-      +--> stale read triggers one async refresh
-      |
-      +--> fresh snapshot synchronizes every schedule switch
+FAILED / timeout / malformed / unavailable
 ```
 
-The existing broader Roborock polling infrastructure may be reused only where it already exists and where doing so does not create a new schedule-specific polling loop.
+Do **not** interpret this as zero schedules.
 
-## Definition of done for this phase
+Preserve existing schedule accessories and switches.
 
-- [x] Local `main` exactly matches Mathias 3.15.3.
-- [x] `schedule-refresh-recovery-fixes` contains the clean schedule work plus upstream 3.15.3 integration.
-- [ ] HomeKit GET no longer waits on the cloud.
-- [ ] Failed refreshes receive negative-cache/backoff treatment.
-- [ ] Failed initial discovery cannot leave silently nonfunctional restored accessories.
-- [ ] Disabling HAP schedules removes/disposes existing schedule accessories, including after restart.
-- [ ] `upd_timer` fallback actually sends the intended command.
-- [ ] Parser rejects non-empty-but-unparseable responses as authoritative empties.
-- [ ] Full local gate passes after the follow-up changes, apart from any known sandbox-only `ui-server-local-probe` issue if reproduced there.
-- [ ] Real Homebridge/HomeKit validation passes.
-- [ ] No permanent schedule polling timer is introduced.
+This distinction is important because the Roborock cloud itself can be the flaky component.
 
-## Continuity / next chat
+## Important Cloud-vs-Reachability Principle
 
-This file is the handoff document for the next development chat. Before changing code, re-read it and inspect the current GitHub branch/commit state. Preserve the distinction between:
+Local reachability and cloud schedule availability are separate concepts.
 
-- `main` = clean Mathias upstream 3.15.3.
-- `schedule-refresh-recovery-clean` = completed first-phase schedule refresh/recovery work.
-- `schedule-refresh-recovery-fixes` = follow-up work requested by Mathias, with upstream 3.15.3 already merged.
+The schedule-discovery rule is:
 
-The next chat should start by confirming that the pushed branch contains merge commit `9a7cd13` and this updated plan, then proceed with Mathias's blocker first: make HomeKit GET fire-and-forget and add failure backoff, followed by the four additional fixes in his requested order.
+```text
+Known/configured vacuum
+        |
+        v
+Attempt cloud schedule snapshot
+        |
+        +---- success ----> synchronize/create switches
+        |
+        +---- failure ----> preserve existing state / retry on a later legitimate refresh
+```
+
+Not:
+
+```text
+Vacuum unreachable -> never query cloud
+```
+
+The HAP schedule switch only needs the schedule ID, enabled state, and timer data. It does not need a local vacuum connection merely to exist in HomeKit.
+
+## Existing Behavior to Preserve
+
+Do not unnecessarily redesign or modify:
+
+- existing Matter vacuum behavior;
+- existing `roborockLib` behavior;
+- existing UI/config behavior;
+- existing command suppression behavior;
+- existing schedule write/verification behavior;
+- existing stable schedule-ID identity/reconciliation behavior;
+- the opt-in nature of HAP schedule switches;
+- the committed `dist/` package output arrangement.
+
+## Implementation Phases
+
+### Phase 0 — Clean baseline
+
+- [x] Create `schedule-refresh-recovery-clean` from the exact `hap-schedules-scenes` commit.
+- [x] Record the starting commit in this plan.
+- [x] Verify local checkout is clean and synchronized with the new branch.
+- [x] Run the baseline release gate before functional changes.
+
+### Phase 1 — Make the release gate clean
+
+Before or during the first implementation pass:
+
+- [x] Run `npm run lint:fix`.
+- [x] Verify typecheck:
+      `tsc --noEmit -p tsconfig.json && tsc -p tsconfig.roborockLib.json`
+- [x] Verify build:
+      `rimraf ./dist && tsc`
+- [x] Verify tests:
+      `jest`
+- [x] Verify formatting:
+      `prettier --check .`
+- [ ] Keep `dist/` committed and generated from source.
+
+Do not treat a green Jest run as sufficient. Mathias's release gate is the definition of done.
+
+### Phase 2 — Replace permanent polling with cached refresh
+
+Implement the smallest coordinator-level change that achieves:
+
+- [x] Remove `SCHEDULE_POLL_INTERVAL_MS` and the permanent `setInterval` polling loop.
+- [x] Maintain one cached schedule snapshot per vacuum/coordinator.
+- [x] Maintain a timestamp for the cached snapshot.
+- [x] Use approximately 60 seconds as the cache lifetime.
+- [x] Add/retain a single in-flight refresh guard/promise so concurrent callers coalesce into one cloud request.
+- [x] On a stale HomeKit GET, perform one `getServerTimers` / `get_server_timer` request and synchronize all switches from that snapshot.
+- [x] Fresh reads within the cache lifetime must not make another schedule cloud request.
+- [x] Do not create one cache per individual schedule switch.
+
+### Phase 3 — Make schedule discovery independent of local reachability
+
+Inspect the existing startup/discovery lifecycle and adjust it so that:
+
+- [ ] Known/configured vacuums are eligible for schedule discovery even when their local/device state is currently unreachable.
+- [ ] The schedule API continues to prefer cloud for this operation.
+- [ ] If the cloud returns a successful valid schedule snapshot, create/update the schedule group and child switches regardless of local reachability.
+- [ ] If the first schedule query fails, do not create a broken/empty schedule group merely because the vacuum is known.
+- [ ] A later legitimate refresh can create the schedule group without requiring a Homebridge restart if the cloud becomes available.
+
+Do **not** introduce a periodic reachability poll just to accomplish this.
+
+### Phase 4 — Preserve accessories across connectivity loss
+
+Make the lifecycle explicit and test it:
+
+- [ ] Existing schedule groups remain registered when a vacuum becomes unreachable.
+- [ ] Existing child schedule switches remain registered when a vacuum becomes unreachable.
+- [ ] Failed schedule queries never cause an existing group to be removed.
+- [ ] Failed schedule queries never cause existing switches to be interpreted as deleted schedules.
+- [ ] A successful empty schedule snapshot may legitimately remove stale schedule switches because it is trustworthy.
+- [ ] A successful non-empty snapshot reconciles additions, updates, and deletions by stable schedule ID.
+
+### Phase 5 — Preserve command verification
+
+Leave the existing user-command flow intact unless a test demonstrates that the new coordinator requires a narrowly scoped change:
+
+```text
+HomeKit schedule switch write
+        |
+        v
+upd_server_timer
+        |
+        v
+wait ~3 seconds
+        |
+        v
+getServerTimers verification
+        |
+        v
+update local schedule snapshot/state
+```
+
+The verification cloud read is intentionally retained. It is not background polling.
+
+### Phase 6 — Tests
+
+Add or update tests for the actual requirements:
+
+#### Refresh/cache
+
+- [x] Fresh cache -> no additional schedule cloud call.
+- [x] Expired cache -> exactly one schedule cloud call.
+- [x] Multiple simultaneous refresh requests -> one in-flight schedule cloud call.
+- [x] One successful snapshot updates all switches.
+
+#### Unreachable vacuum
+
+- [ ] Known/configured vacuum is unreachable but cloud schedule query succeeds -> switches are created.
+- [ ] Known/configured vacuum is unreachable and schedule query fails -> no broken/empty schedule group is created.
+- [ ] Existing schedule group + vacuum becomes unreachable -> group remains.
+- [ ] Existing switches + schedule request failure -> switches remain.
+- [ ] Later successful schedule refresh after a previous failure -> missing schedule group/switches can be created without reboot.
+
+#### Reconciliation
+
+- [ ] Successful snapshot adds a new schedule -> new switch created.
+- [ ] Successful snapshot updates an existing schedule -> existing switch identity preserved by schedule ID.
+- [ ] Successful snapshot removes a schedule -> corresponding switch removed.
+- [ ] Successful empty snapshot -> existing schedule switches reconciled appropriately.
+- [ ] Failed/malformed snapshot -> no schedule switches removed.
+- [ ] Reordering schedules -> stable schedule IDs retain their accessory identity.
+
+#### Existing behavior
+
+- [ ] Existing schedule write + verification behavior remains passing.
+- [ ] Existing schedule settings/UI contract tests remain passing.
+
+### Phase 7 — Release gate and review artifact
+
+- [ ] Full typecheck passes.
+- [ ] Full build passes.
+- [ ] Full Jest suite passes.
+- [ ] Prettier check passes.
+- [ ] Review the complete diff against `hap-schedules-scenes`.
+- [ ] Confirm there is no permanent schedule polling loop.
+- [ ] Confirm there is no new independent reachability polling loop.
+- [ ] Confirm failed schedule queries preserve existing accessories.
+- [ ] Confirm the only functional scope is schedule refresh/reconciliation and the explicit unreachable-vacuum creation/persistence requirement.
+- [ ] Ensure generated `dist/` matches the tested source.
+- [ ] Record final test counts and relevant commit SHAs in this plan.
+
+## Commit Strategy
+
+Use small focused commits, preferably along these lines:
+
+1. `Fix schedule branch formatting`
+2. `Replace permanent schedule polling with cached refresh`
+3. `Add schedule refresh/cache tests`
+4. `Allow cloud schedule discovery independent of local reachability`
+5. `Preserve schedule accessories across transient connectivity failures`
+6. `Add/finish regression tests and release-gate cleanup`
+
+Do not combine unrelated refactors into these commits.
+
+## What We Are Explicitly Not Doing
+
+- No permanent three-minute schedule polling.
+- No exponential-backoff timer as a substitute for polling.
+- No independent polling loop whose sole purpose is to detect vacuum reachability.
+- No requirement that the vacuum be locally reachable before querying cloud schedules.
+- No removal of existing schedule accessories solely because a vacuum is unreachable.
+- No treating a failed schedule cloud request as an authoritative empty schedule list.
+- No unrelated changes to Matter behavior or the shared Roborock library.
+- No redesign of the existing schedule command verification unless required by a failing regression test.
+
+## Continuity Rule
+
+Before each new functional change, re-read this file and verify that the proposed change advances one of the checked/unchecked requirements above.
+
+If a proposed change does not clearly map to this plan, stop and explain why it is necessary before adding it.
+
+## Current Status
+
+### Last update
+
+2026-08-20
+
+### Current branch
+
+`schedule-refresh-recovery-clean`
+
+### Current implementation phase
+
+**Phase 2 complete.** Permanent schedule polling has been replaced by a per-vacuum cached refresh coordinator.
+
+Verified:
+
+- 76 test suites passed
+- 1,126 tests passed
+- typecheck passed
+- build passed
+- Prettier passed
+- fresh-cache reads avoid cloud calls
+- stale-cache reads refresh once
+- concurrent refreshes coalesce into one cloud request
+- successful empty snapshots are cached as successful empty state
+- no permanent schedule polling loop remains
+
+### Latest Phase 2 checkpoint
+
+The Phase 2 implementation is ready to commit as the next focused checkpoint. Generated `dist/` output has been rebuilt from source.
+
+### Next step
+
+Move to Phase 3: make initial schedule discovery independent of local/device reachability. Do not add a reachability polling loop.
+
+### Next step
+
+Synchronize the local checkout to `schedule-refresh-recovery-clean`, run the baseline release gate, and then inspect the current schedule discovery/refresh code to identify the smallest implementation for Phase 2 without importing the previous recovery branch's source changes.

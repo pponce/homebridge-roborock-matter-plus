@@ -590,6 +590,16 @@ class RoborockMatterVacuumAccessory {
         this.serviceAreaProgress = [];
         this.selectedCleanMode = CLEAN_MODE_VACUUM;
         this.selectedCleanModeNeedsApply = false;
+        /**
+         * Whether `selectedCleanMode` holds a choice or merely its initial value.
+         *
+         * The two are indistinguishable by value — the initial value IS Vacuum — and
+         * the difference decides whether an empty clean-water tank is announced as a
+         * blocking fault. See isVacuumOnlyModeChosen(). This never returns to false:
+         * a choice, once made, remains the last thing the user said about this robot
+         * for the life of the process.
+         */
+        this.userSelectedCleanMode = false;
         // The run mode last decided by a state that was not a dock chore. Dock
         // chores inherit it instead of deciding one of their own — see
         // resolveRunMode(). Idle is the honest starting point: a plugin that boots
@@ -783,7 +793,7 @@ class RoborockMatterVacuumAccessory {
      */
     getMatterFault() {
         const tankEmpty = this.isWaterTankEmpty();
-        if (tankEmpty === true) {
+        if (tankEmpty === true && !this.isVacuumOnlyModeChosen()) {
             return {
                 id: RVC_OPERATIONAL_ERROR.WATER_TANK_EMPTY,
                 text: "Clean water tank empty",
@@ -827,15 +837,87 @@ class RoborockMatterVacuumAccessory {
             this.reportUnmappedErrorCode(errorCode);
             return null;
         }
-        if (tankEmpty === false || errorCode === 0) {
+        if (tankEmpty !== null || errorCode === 0) {
             // At least one source affirmatively says it is fine and neither says
             // otherwise. Requiring both to be known would mean a robot that never
             // reports `error_code` could never clear a tank warning after a refill,
             // which is worse than no warning at all.
+            //
+            // `tankEmpty === true` reaches here only when the run was ruled to use
+            // no water above, and then NoError is the affirmative answer rather
+            // than an invention: the tank is known, and it is known not to block
+            // anything. Going quiet instead would leave a 68 standing in the Matter
+            // store, and Apple Home re-notifies about a blocking condition for as
+            // long as it stands — which is the loop reported in issue #9.
             return { id: RVC_OPERATIONAL_ERROR.NO_ERROR, text: "" };
         }
         // Neither source has said anything.
         return null;
+    }
+    /**
+     * Whether something has affirmatively said this robot is not going to use
+     * water.
+     *
+     * WHY THE TANK FAULT NEEDS THIS AT ALL. Apple Home does not draw
+     * `operationalError` as a passive warning — it draws WaterTankEmpty as a
+     * BLOCKING condition and says so in words. vp-debug12's screenshot in issue
+     * #9: "Rellena el depósito de agua — 'Roborock Qrevo' empezará a limpiar
+     * cuando se llene el depósito de agua." It is a push notification, not tile
+     * decoration (Wazza151 confirmed the same on an a70 in #5), and it repeated
+     * every 2 minutes while his robot was set to Vacuum. On a vacuum-only run
+     * every word of it is false: the robot is not waiting for water and will not
+     * start cleaning when the tank is filled. So this is not a preference about
+     * when a warning is welcome — the plugin was asserting a block that did not
+     * exist.
+     *
+     * WHY "VACUUM IS SELECTED" IS NOT THE TEST. `selectedCleanMode` is not
+     * persisted: it starts at CLEAN_MODE_VACUUM on every restart (measured 20
+     * Aug), so reading it directly would silence the tank warning on every robot
+     * until somebody happened to touch the mode picker — quietly undoing the one
+     * field-verified thing this attribute does. Only a mode somebody actually
+     * said counts: the robot's own report while it is genuinely cleaning, the
+     * user's selection outside that. The wind-down is excluded for the same
+     * reason getCurrentCleanMode() excludes it — a dock washing a mop runs water
+     * with the fan off and on again, which reads as vacuum+mop and is nothing of
+     * the sort.
+     *
+     * WHERE THIS DELIBERATELY DIFFERS FROM getCurrentCleanMode(), because the
+     * difference looks like an oversight and is not: there, a Matter selection
+     * that has not been applied yet outranks the robot's live report, so the
+     * mode picker keeps showing what the user just asked for instead of
+     * flickering back. Here it does not. A selection made mid-run is not applied
+     * mid-run — the prep only runs before a start — so the robot carries on with
+     * the water it already had, and a robot physically mopping with an empty
+     * tank is blocked no matter what the picker shows. The picker reports
+     * intent; this reports what is happening to the floor.
+     *
+     * The derived type goes through acceptLiveCleanType() like every other
+     * consumer of it, and that gate is right here for the same reason it is
+     * right there: a robot whose water this plugin has already turned off and
+     * had acknowledged is not using water, however long its own report takes to
+     * agree. Announcing a block during that window would be the lag talking.
+     *
+     * The HAP `Water Tank Empty` sensor is deliberately NOT gated by this. It
+     * states a fact about the tank, makes no claim about what the robot is going
+     * to do, and automations are built on it.
+     */
+    isVacuumOnlyModeChosen() {
+        const operationalState = this.getOperationalState();
+        const inCleaningRun = this.isInCleaningRunMode(operationalState);
+        const windingDown = inCleaningRun &&
+            operationalState !== RVC_OPERATIONAL_STATE.RUNNING &&
+            operationalState !== RVC_OPERATIONAL_STATE.PAUSED;
+        if (inCleaningRun && !windingDown) {
+            const liveCleanType = this.getLiveCleanType();
+            if (liveCleanType !== null && this.acceptLiveCleanType(liveCleanType)) {
+                return this.getBaseCleanType(liveCleanType) === CLEAN_MODE_VACUUM;
+            }
+        }
+        if (this.userSelectedCleanMode) {
+            return (this.getBaseCleanType(this.selectedCleanMode) === CLEAN_MODE_VACUUM);
+        }
+        // Nothing has said. An unknown mode must not silence a real warning.
+        return false;
     }
     /**
      * The phase attributes, with an escape hatch.
@@ -1308,6 +1390,7 @@ class RoborockMatterVacuumAccessory {
             this.rememberCurrentRoborockCleanModeSettings();
             this.selectedCleanMode = newMode;
             this.selectedCleanModeNeedsApply = true;
+            this.userSelectedCleanMode = true;
             // Discard the level remembered from the robot: from here on the user
             // has said what they want, and an unreadable fan power must fall back
             // to their choice rather than to what the robot said before it. The
@@ -1710,6 +1793,7 @@ class RoborockMatterVacuumAccessory {
         }
         if (state !== null) {
             this.completeServiceAreaProgressIfDone(this.getOperationalState(state, chargeStatus));
+            this.beginFullCleanServiceAreaProgressIfUnannounced(state, chargeStatus);
         }
         // Live map-position room tracking: reflect the physically detected room
         // in currentArea/progress before the snapshot below is built.
@@ -2470,12 +2554,34 @@ class RoborockMatterVacuumAccessory {
         this.persistServiceAreaProgress();
     }
     /**
-     * A full-home clean operates on every supported area. We cannot know which
-     * room the robot is physically inside (the robots do not report it), so no
-     * area is marked operating and currentArea stays null — but publishing the
-     * run's scope as pending -> completed gives controllers real progress data
-     * instead of an empty list, which Apple Home otherwise renders as a
-     * permanent "Preparing".
+     * A full-home clean operates on every supported area, and we cannot know
+     * which room the robot is physically inside — the robots do not report it.
+     * So `currentArea` stays null: no room is named that we are not sure of.
+     *
+     * The scope is published as OPERATING rather than PENDING, and that choice
+     * is the whole point of this function, so it is worth writing down why.
+     *
+     * Matter has 4 progress values and none of them means "in this run, exact
+     * position unknown". Both available encodings are therefore imperfect:
+     * every area operating asserts the robot is in all of them, every area
+     * pending asserts it is in none of them. The second is the one that reads
+     * as a bug, because Apple Home renders "nothing is operating" as *the robot
+     * is still on its way* — "Traveling to Room", "heading to the room",
+     * "Desplazándose" — and keeps saying it for the entire run while the robot
+     * is demonstrably cleaning.
+     *
+     * 2.3.1 already tried the honest-looking option. It moved a full clean from
+     * an empty list to an all-pending list hoping Apple's label would improve,
+     * and said out loud that whether it did was up to Apple's renderer. It did
+     * not: skmzwanke reported the stuck label in #8, and vp-debug12 reported
+     * exactly the same thing in #9 months and many versions later, in Spanish.
+     * 2 independent users, one unchanged symptom, one failed mitigation.
+     *
+     * So this picks the encoding that produces the true statement at the only
+     * place a person looks. The robot IS operating; it is not on its way. Live
+     * map-position tracking still collapses this to the accurate single-room
+     * picture the moment it resolves a room, and the run still flips wholly to
+     * completed when the robot returns to the charger.
      */
     beginFullCleanServiceAreaProgress() {
         const areaIds = this.getMatterServiceAreas().map((area) => area.areaId);
@@ -2487,9 +2593,46 @@ class RoborockMatterVacuumAccessory {
         this.serviceAreaCurrentArea = null;
         this.serviceAreaProgress = areaIds.map((areaId) => ({
             areaId,
-            status: SERVICE_AREA_PROGRESS.PENDING,
+            status: SERVICE_AREA_PROGRESS.OPERATING,
         }));
         this.persistServiceAreaProgress();
+    }
+    /**
+     * Announce a run that arrived as a status change rather than as a command.
+     *
+     * 3.15.1 fixed the encoding of a whole-home clean's progress list, but it
+     * only ever ran from the Matter/HAP start handler — so it only fixed runs
+     * started in Apple Home, and most runs are not. A clean started in the
+     * Roborock app, by a schedule stored in the app, by the button on the lid or
+     * by a voice assistant reaches this plugin as a state change and nothing
+     * else. The progress list then stayed empty, or stale all-completed from the
+     * last Apple Home run, for the whole run — which is precisely the "Traveling
+     * to Room" / "Desplazándose" symptom #8 and #9 reported, still unfixed for
+     * the way they most likely start their robots.
+     *
+     * The asymmetry was the tell: completion has always been status-driven
+     * (`completeServiceAreaProgressIfDone`), and only the start was not.
+     */
+    beginFullCleanServiceAreaProgressIfUnannounced(state, chargeStatus) {
+        // The UNGATED state on purpose. With extended operational states off, the
+        // dock chores are rewritten to RUNNING, and a dock washing the mop must
+        // not announce that the robot is cleaning every room in the house. The
+        // rule is deliberately "whatever we already publish as a running robot",
+        // one list rather than a second one that can drift out of step with it.
+        if (this.getRoborockOperationalState(state, chargeStatus) !==
+            RVC_OPERATIONAL_STATE.RUNNING) {
+            return;
+        }
+        // Anything still operating or pending is a run somebody already announced
+        // — either one started here, whose narrower and better-known scope must
+        // not be widened, or one this function announced on an earlier poll. Only
+        // an empty list, or a stale all-completed one from the previous run, means
+        // no controller has been told that the robot is working.
+        if (this.serviceAreaProgress.some((entry) => entry.status === SERVICE_AREA_PROGRESS.OPERATING ||
+            entry.status === SERVICE_AREA_PROGRESS.PENDING)) {
+            return;
+        }
+        this.beginFullCleanServiceAreaProgress();
     }
     clearServiceAreaProgress() {
         this.liveConfirmedServiceAreaIds = new Set();
