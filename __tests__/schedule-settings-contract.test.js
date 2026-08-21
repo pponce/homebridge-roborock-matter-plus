@@ -154,12 +154,12 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
-  test("schedule switch GET returns cached state without waiting for refresh", () => {
+  test("schedule switch GET awaits refresh before returning state", () => {
     expect(scheduleSource).toMatch(
-      /\.onGet\(\(\) => \{[\s\S]*?void this\.coordinator\.refreshIfNeeded\(\);[\s\S]*?return this\.schedule\.enabled;/
+      /\.onGet\(async \(\) => \{[\s\S]*?await this\.coordinator\.refreshIfNeeded\(\);[\s\S]*?return this\.schedule\.enabled;/
     );
     expect(scheduleSource).not.toMatch(
-      /\.onGet\(async \(\) => \{[\s\S]*?await this\.coordinator\.refreshIfNeeded\(\);/
+      /\.onGet\(\(\) => \{[\s\S]*?void this\.coordinator\.refreshIfNeeded\(\);/
     );
   });
 
