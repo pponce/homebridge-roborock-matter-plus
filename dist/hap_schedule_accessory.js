@@ -121,6 +121,17 @@ class RoborockHapScheduleAccessory {
         const result = await this.refreshDetailed();
         return result.hasSchedules;
     }
+    async refreshAndGetSchedule(scheduleId) {
+        var _a;
+        await this.refreshDetailed();
+        const schedule = (_a = this.cachedSchedules) === null || _a === void 0 ? void 0 : _a.find((candidate) => candidate.id === scheduleId);
+        return schedule
+            ? {
+                ...schedule,
+                timer: [...schedule.timer],
+            }
+            : undefined;
+    }
     async refreshDetailed() {
         if (this.refreshInProgress) {
             return this.refreshInProgress;
@@ -390,24 +401,16 @@ class RoborockHapScheduleSwitchAccessory {
             this.writes.delete(this.scheduleId);
         }
     }
-    async verify(api, enabled) {
+    async verify(_api, enabled) {
         await new Promise((resolve) => {
             const timer = (0, timers_1.scheduleTimer)(resolve, VERIFY_DELAY_MS);
             (0, timers_1.unrefTimer)(timer);
         });
-        const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
-            requestTimeoutMs: 10000,
-        });
-        if (!Array.isArray(raw)) {
-            return false;
-        }
-        const schedules = parseServerTimers(raw);
-        const current = schedules.find((schedule) => schedule.id === this.scheduleId);
+        const current = await this.coordinator.refreshAndGetSchedule(this.scheduleId);
         if (!current) {
             return false;
         }
         this.schedule = { ...current, timer: [...current.timer] };
-        this.coordinator.recordScheduleUpdate(current);
         this.updateService(current.enabled);
         return current.enabled === enabled;
     }

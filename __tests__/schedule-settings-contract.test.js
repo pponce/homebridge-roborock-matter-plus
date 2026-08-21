@@ -213,10 +213,25 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
-  test("verified schedule writes update the coordinator snapshot", () => {
-    expect(scheduleSource).toMatch(
-      /this\.coordinator\.recordScheduleUpdate\(current\);/
+  test("schedule verification refreshes through the coordinator", () => {
+    expect(scheduleSource).toContain("this.coordinator.refreshAndGetSchedule(");
+    expect(scheduleSource).toContain(
+      "const current = await this.coordinator.refreshAndGetSchedule("
     );
+    expect(scheduleSource).toContain(
+      "this.schedule = { ...current, timer: [...current.timer] };"
+    );
+    expect(scheduleSource).toContain("return current.enabled === enabled;");
+  });
+
+  test("verified schedule writes use the coordinator snapshot", () => {
+    expect(scheduleSource).toContain(
+      "const current = await this.coordinator.refreshAndGetSchedule("
+    );
+    expect(scheduleSource).toContain(
+      "this.schedule = { ...current, timer: [...current.timer] };"
+    );
+    expect(scheduleSource).toContain("this.updateService(current.enabled);");
   });
 
   test("schedule dispose removes dynamic services but preserves manager", () => {

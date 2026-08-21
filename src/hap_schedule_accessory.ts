@@ -197,6 +197,23 @@ export default class RoborockHapScheduleAccessory {
     return result.hasSchedules;
   }
 
+  async refreshAndGetSchedule(
+    scheduleId: string
+  ): Promise<RoborockSchedule | undefined> {
+    await this.refreshDetailed();
+
+    const schedule = this.cachedSchedules?.find(
+      (candidate) => candidate.id === scheduleId
+    );
+
+    return schedule
+      ? {
+          ...schedule,
+          timer: [...schedule.timer],
+        }
+      : undefined;
+  }
+
   private async refreshDetailed(): Promise<RoborockScheduleRefreshResult> {
     if (this.refreshInProgress) {
       return this.refreshInProgress;
@@ -605,30 +622,23 @@ class RoborockHapScheduleSwitchAccessory {
     }
   }
 
-  private async verify(api: any, enabled: boolean): Promise<boolean> {
+  private async verify(_api: any, enabled: boolean): Promise<boolean> {
     await new Promise<void>((resolve) => {
       const timer = scheduleTimer(resolve, VERIFY_DELAY_MS);
       unrefTimer(timer);
     });
-    const raw = await getServerTimers(api, this.duid, {
-      requestTimeoutMs: 10000,
-    });
 
-    if (!Array.isArray(raw)) {
-      return false;
-    }
-
-    const schedules = parseServerTimers(raw);
-    const current = schedules.find(
-      (schedule) => schedule.id === this.scheduleId
+    const current = await this.coordinator.refreshAndGetSchedule(
+      this.scheduleId
     );
+
     if (!current) {
       return false;
     }
 
     this.schedule = { ...current, timer: [...current.timer] };
-    this.coordinator.recordScheduleUpdate(current);
     this.updateService(current.enabled);
+
     return current.enabled === enabled;
   }
 

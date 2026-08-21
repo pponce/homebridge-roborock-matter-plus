@@ -206,6 +206,65 @@ describe("HAP schedule coordinator cache", () => {
     ]);
   });
 
+  test("refreshAndGetSchedule returns the full refreshed snapshot entry", async () => {
+    const coordinator = makeCoordinator();
+
+    getServerTimers.mockResolvedValue([
+      ["timer-1", "off"],
+      ["timer-2", "on"],
+    ]);
+
+    const result = await coordinator.refreshAndGetSchedule("timer-2");
+
+    expect(getServerTimers).toHaveBeenCalledTimes(1);
+    expect(coordinator.cachedSchedules).toEqual([
+      {
+        id: "timer-1",
+        enabled: false,
+        timer: ["timer-1", "off"],
+      },
+      {
+        id: "timer-2",
+        enabled: true,
+        timer: ["timer-2", "on"],
+      },
+    ]);
+    expect(result).toEqual({
+      id: "timer-2",
+      enabled: true,
+      timer: ["timer-2", "on"],
+    });
+  });
+
+  test("refreshAndGetSchedule coalesces with an in-flight refresh", async () => {
+    const coordinator = makeCoordinator();
+
+    let resolveRequest;
+    getServerTimers.mockReturnValue(
+      new Promise((resolve) => {
+        resolveRequest = resolve;
+      })
+    );
+
+    const first = coordinator.refreshIfNeeded();
+    const verification = coordinator.refreshAndGetSchedule("timer-1");
+
+    expect(getServerTimers).toHaveBeenCalledTimes(1);
+
+    resolveRequest([["timer-1", "off"]]);
+
+    await expect(Promise.all([first, verification])).resolves.toEqual([
+      true,
+      {
+        id: "timer-1",
+        enabled: false,
+        timer: ["timer-1", "off"],
+      },
+    ]);
+
+    expect(getServerTimers).toHaveBeenCalledTimes(1);
+  });
+
   test("successful empty snapshot is cached as empty", async () => {
     const coordinator = makeCoordinator();
 
