@@ -13,6 +13,81 @@ The implementation branch for this work is:
 
 The existing `SCHEDULE_REFRESH_RECOVERY_PLAN.md` remains the record of the completed first phase. This file records only the follow-up fixes.
 
+## Development workflow / continuity notes
+
+Use the user's **local checkout for development and tests first**. Do not make every small change by editing GitHub directly.
+
+Local repository:
+
+```text
+~/devProjects/homebridge-roborock-matter-plus
+```
+
+Normal workflow:
+
+1. Work on the requested local feature branch.
+2. Run targeted tests locally after each logical change.
+3. Run the full test/typecheck/build/lint gate locally before real-device testing.
+4. Push the tested branch to GitHub.
+5. Install that exact pushed branch on the real Homebridge host.
+6. Test with the actual Roborock and Home apps.
+7. Bring the observed logs/results back here for diagnosis before making the next change.
+
+For real-device installation, the established procedure is:
+
+```bash
+sudo hb-service stop
+sudo hb-service add https://github.com/pponce/homebridge-roborock-matter-plus.git#<tested-branch>
+sudo hb-service start
+```
+
+For this work the branch placeholder should normally be `schedule-refresh-recovery-fixes`.
+
+Avoid casually uninstalling/reinstalling the existing paired Matter installation or changing unrelated Homebridge configuration. The Homebridge-managed plugin lives under:
+
+```text
+/var/lib/homebridge/node_modules/homebridge-roborock-matter
+```
+
+The Homebridge data/log root is:
+
+```text
+/var/lib/homebridge
+```
+
+`hb-service` is installed at:
+
+```text
+/usr/local/bin/hb-service
+```
+
+The established log inspection method is `hb-service view` or the Homebridge log file under `/var/lib/homebridge`. For focused Roborock debugging, use a narrow `tail`/`grep` rather than dumping the entire log.
+
+**Output-size rule:** keep shell commands and requested diagnostics short. Prefer one focused command with a narrow grep and a small time window over large recursive output. This is important because the user frequently pastes terminal output back into ChatGPT and long output can hit message/text caps.
+
+When asking the user to run diagnostics, provide only the minimum output needed to answer the current question.
+
+## Homebridge environment notes
+
+The real test environment is a Homebridge installation managed by `hb-service`, using `/var/lib/homebridge` as its data directory. Existing Matter devices are already paired. Real-device tests therefore need to preserve the existing installation and pairing state.
+
+The user commonly inspects logs with commands such as:
+
+```bash
+sudo tail -F /var/lib/homebridge/homebridge.log | grep --line-buffered -E "Schedule (discovery|parser|sync|command|refresh)"
+```
+
+For historical/focused inspection, prefer a bounded `grep`/`tail` around the relevant timestamps rather than following the whole log.
+
+The real validation environment includes:
+
+- Homebridge running the forked Roborock Matter plugin.
+- Apple Home / HomeKit controlling the paired Matter accessories.
+- The Roborock app as the authoritative external source for schedule changes.
+- Two Roborock robots in the observed test setup, including DUIDs `66xmjtyk5YgGyXD9epni7Y` and `5QNhUVywYYnWc2pPBk3URp`.
+
+The important behavioral observation from the first phase is that changing a schedule in the Roborock app does **not** itself cause the plugin to continuously poll. Opening Home causes the HomeKit read path to initiate the stale-snapshot refresh, after which the authoritative Roborock snapshot synchronizes the schedule switches. That behavior is intentional and should not be replaced with a permanent schedule-specific polling timer.
+
 ## Important upstream finding: Mathias moved past 3.15.0
 
 The `schedule-refresh-recovery-clean` branch was based on Mathias's `v3.15.0` commit `b850c17`. Mathias has since made six commits on upstream `main`, including releases 3.15.1, 3.15.2, and 3.15.3. The current upstream tip is `02cdd263` (3.15.3).
@@ -68,8 +143,6 @@ The read returns the cached value immediately. The refresh happens asynchronousl
 ### 2. Prevent failed refreshes from immediately retrying on every read
 
 Current failure behavior leaves `lastScheduleRefreshAt` unchanged. A failed cloud request therefore leaves the snapshot stale and allows the next HomeKit read to start another full cloud request.
-
-This matches the overnight evidence from 2026-08-21: repeated `get_server_timer` 10-second timeouts occurred for both vacuums, sometimes only seconds apart, with the same failure logged repeatedly.
 
 Required behavior:
 
@@ -210,7 +283,7 @@ Also verify `dist/` matches the final source build.
 
 ## Real-world validation
 
-After the code and tests are green, validate on the real Homebridge installation:
+After the code and tests are green, push the tested branch to GitHub and install that exact branch with the established `hb-service` procedure before testing the real apps.
 
 1. Change a schedule in the Roborock app.
 2. Do not open Home for a controlled interval and confirm there is no schedule-specific cloud polling.
@@ -220,6 +293,8 @@ After the code and tests are green, validate on the real Homebridge installation
 6. Confirm schedule enable/disable commands and their verification still work.
 7. Confirm no schedule switches disappear on a transient refresh failure.
 8. Confirm disabling the feature removes schedule accessories correctly.
+
+When reporting real-device results, capture only focused Roborock schedule lines and the relevant timestamp window. Do not paste the entire Homebridge log unless specifically needed.
 
 ## Definition of Done
 
@@ -235,10 +310,13 @@ After the code and tests are green, validate on the real Homebridge installation
 - [ ] Successful empty responses remain authoritative.
 - [ ] Targeted regression tests pass.
 - [ ] Full typecheck/build/test/lint gate passes.
+- [ ] Changes are pushed to GitHub before real-device installation.
 - [ ] Real Homebridge/HomeKit validation passes.
 
 ## Continuity for the next chat
 
 The next chat should begin by reading this file and the existing `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. The working branch is `schedule-refresh-recovery-fixes` and its intended parent is `schedule-refresh-recovery-clean` at `17639204`.
+
+Use the local checkout at `~/devProjects/homebridge-roborock-matter-plus` for implementation and tests. Push only the tested branch to GitHub before installing it on the real Homebridge host. Keep terminal commands and requested output short because the user pastes diagnostics back into ChatGPT and large output can hit text caps.
 
 Do not start by re-implementing the original schedule-refresh architecture. That work is already complete. The next task is to integrate Mathias's post-3.15.0 upstream changes and address the review findings above with focused tests and minimal changes.
