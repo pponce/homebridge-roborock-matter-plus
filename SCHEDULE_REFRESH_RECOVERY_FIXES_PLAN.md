@@ -67,12 +67,27 @@ The following smaller Mathias review items are now implemented, regression-teste
 - **Regression coverage:** the focused schedule tests now cover the new contracts.
 - **Validation:** 29/29 targeted tests passed; full suite **86/86 suites, 1,344/1,344 tests** passed; typecheck, build, and changed-file formatting all passed.
 
+### Progress update — Batch B `verify()` coalescing fix
+
+The schedule-write verification path is now integrated with the shared coordinator refresh/coalescing model.
+
+- `verify()` no longer performs its own direct `getServerTimers()` request.
+- Verification now waits for the coordinator's shared refresh and reads the requested schedule from the full cached snapshot.
+- This prevents an individual schedule verification from creating a parallel cloud request.
+- This also prevents a single-schedule observation from incorrectly advancing the whole-vacuum cache timestamp.
+- Added focused regression coverage for full-snapshot verification and coalescing with an in-flight refresh.
+- Targeted schedule tests: **32/32 passed**.
+- Full repository test suite: **86/86 suites, 1,347/1,347 tests passed**.
+- Typecheck: **passed**.
+- Build: **passed**.
+- Changed-file formatting: **passed**.
+- Tested commit pushed to `schedule-refresh-recovery-fixes`: `9d09016`.
+
 ### Remaining recovery items
 
 The following items remain intentionally open and have not yet been marked complete:
 
 - Final end-to-end validation of recovery after the failure/backoff window expires is still pending on real hardware.
-- Make `verify()` participate correctly in the coordinator refresh/coalescing model.
 - Prevent disposed coordinators from syncing after teardown.
 
 This is the **active handoff plan** for the follow-up work requested by Mathias after his review of `schedule-refresh-recovery-clean`.
@@ -86,7 +101,7 @@ The historical first-phase record is `SCHEDULE_REFRESH_RECOVERY_PLAN.md`. Do not
 - Completed first phase: `schedule-refresh-recovery-clean`
 - Active follow-up branch: `schedule-refresh-recovery-fixes`
 - Follow-up branch is based on `schedule-refresh-recovery-clean` with Mathias 3.15.3 merged on top.
-- Current branch tip: `0b0b660`
+- Current branch tip: `9d09016`
 - Pre-fix functional baseline: merge `9a7cd13`, with 86 suites / 1336 tests passing.
 
 ## Mathias's required fixes
@@ -376,7 +391,7 @@ After the local gate passes and the branch is pushed:
 - [x] Concurrent reads coalesce to one in-flight refresh per vacuum.
 - [x] ConfiguredName is not repeatedly overwritten by unchanged schedule refreshes.
 - [ ] Schedule ordering is deterministic.
-- [ ] `verify()` participates correctly in the coordinator/coalescing model.
+- [x] `verify()` participates correctly in the coordinator/coalescing model.
 - [ ] Disposed coordinators cannot sync after teardown.
 - [ ] Coordinator timers use the shared timer utility.
 - [ ] Routine schedule payload logging is debug-level rather than info-level.
