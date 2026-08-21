@@ -5,9 +5,9 @@
 - Repository: `pponce/homebridge-roborock-matter-plus`
 - `main` must remain a clean copy of Mathias's upstream release, with no fork-specific changes.
 - Mathias upstream is currently **3.15.3**, commit `02cdd263aa55b703dd45da1ed4967d43b927b896`.
-- `main` has been reset to that exact upstream commit.
+- `main` has been reset to that exact upstream commit and is clean.
 - `schedule-refresh-recovery-clean` remains the reviewed/validated first-phase branch based on Mathias 3.15.0 and contains the completed schedule cache/coalescing/recovery work.
-- `schedule-refresh-recovery-fixes` is the next working branch. It is based on `schedule-refresh-recovery-clean` and is where Mathias's requested follow-up fixes will be implemented.
+- `schedule-refresh-recovery-fixes` is the current follow-up branch. It is based on `schedule-refresh-recovery-clean`, and Mathias upstream 3.15.3 has now been merged into it.
 
 ## First-phase work already completed
 
@@ -71,21 +71,30 @@ Also add failure timestamp/backoff behavior so repeated HomeKit reads during a c
 - Keep routine schedule payload logging at debug rather than info.
 - Add a comment explaining the Q7 `get_server_timer` adapter behavior that returns a neutral empty list.
 
-## Upstream integration plan
+## Upstream integration status
 
-Mathias has released **3.15.1, 3.15.2, and 3.15.3** since the previous 3.15.0 baseline. The latest upstream `main` is 3.15.3 (`02cdd263`).
+Mathias released **3.15.1, 3.15.2, and 3.15.3** after the previous 3.15.0 baseline. These have now been integrated into `schedule-refresh-recovery-fixes`.
 
-Before implementing the follow-up fixes:
+Completed before starting the follow-up code changes:
 
-1. Update local `main` from `origin/main` so it exactly matches upstream 3.15.3.
-2. Fetch Mathias's upstream remote.
-3. On `schedule-refresh-recovery-fixes`, merge Mathias upstream `main` into the branch.
-4. Resolve any conflicts while preserving the schedule-refresh-recovery-clean behavior.
-5. Run the full local gate before pushing.
-6. Push the fixes branch to GitHub.
-7. Install the pushed branch on the real Homebridge instance for validation.
+1. Local `main` was updated to exact upstream 3.15.3.
+2. Mathias's upstream remote was fetched.
+3. `schedule-refresh-recovery-fixes` was created from the schedule-refresh-recovery work.
+4. `upstream/main` (3.15.3) was merged into `schedule-refresh-recovery-fixes` with no conflicts.
+5. The full local Jest suite was run after the merge.
 
-The branch must retain `schedule-refresh-recovery-clean` as its functional base; upstream changes are integrated on top before the new fixes are made.
+Current merge commit: `9a7cd13` (`Merge remote-tracking branch 'upstream/main' into schedule-refresh-recovery-fixes`).
+
+### Post-merge test baseline
+
+```text
+Test Suites: 86 passed, 86 total
+Tests:       1336 passed, 1336 total
+Snapshots:   0 total
+Time:        7.774 s
+```
+
+This is the clean baseline for the follow-up fixes. Do not start fixing Mathias's requested issues from an unverified state.
 
 ## Development / validation workflow
 
@@ -103,9 +112,9 @@ npm run build
 npx prettier --check .
 ```
 
-Keep command output short when collecting diagnostics. Prefer targeted `grep`, `tail`, `git log -n`, and individual test commands rather than dumping large logs or full files.
+Keep command output short when collecting diagnostics. Prefer targeted `grep`, `tail`, `git log -n`, and individual test commands rather than dumping large logs or full files. This matters because large pasted command output can hit chat text limits.
 
-After local changes pass:
+After local changes pass, push to GitHub so the real Homebridge installation can consume the branch:
 
 ```bash
 git push origin schedule-refresh-recovery-fixes
@@ -173,22 +182,24 @@ The existing broader Roborock polling infrastructure may be reused only where it
 
 ## Definition of done for this phase
 
-- [ ] Local `main` exactly matches Mathias 3.15.3.
-- [ ] `schedule-refresh-recovery-fixes` contains clean + upstream 3.15.3 integration.
+- [x] Local `main` exactly matches Mathias 3.15.3.
+- [x] `schedule-refresh-recovery-fixes` contains the clean schedule work plus upstream 3.15.3 integration.
 - [ ] HomeKit GET no longer waits on the cloud.
 - [ ] Failed refreshes receive negative-cache/backoff treatment.
 - [ ] Failed initial discovery cannot leave silently nonfunctional restored accessories.
 - [ ] Disabling HAP schedules removes/disposes existing schedule accessories, including after restart.
 - [ ] `upd_timer` fallback actually sends the intended command.
 - [ ] Parser rejects non-empty-but-unparseable responses as authoritative empties.
-- [ ] Mathias's existing clean gate passes, apart from the known sandbox-only `ui-server-local-probe` failure if reproduced there.
+- [ ] Full local gate passes after the follow-up changes, apart from any known sandbox-only `ui-server-local-probe` issue if reproduced there.
 - [ ] Real Homebridge/HomeKit validation passes.
 - [ ] No permanent schedule polling timer is introduced.
 
-## Continuity
+## Continuity / next chat
 
 This file is the handoff document for the next development chat. Before changing code, re-read it and inspect the current GitHub branch/commit state. Preserve the distinction between:
 
-- `main` = clean Mathias upstream.
+- `main` = clean Mathias upstream 3.15.3.
 - `schedule-refresh-recovery-clean` = completed first-phase schedule refresh/recovery work.
-- `schedule-refresh-recovery-fixes` = follow-up work requested by Mathias.
+- `schedule-refresh-recovery-fixes` = follow-up work requested by Mathias, with upstream 3.15.3 already merged.
+
+The next chat should start by confirming that the pushed branch contains merge commit `9a7cd13` and this updated plan, then proceed with Mathias's blocker first: make HomeKit GET fire-and-forget and add failure backoff, followed by the four additional fixes in his requested order.
