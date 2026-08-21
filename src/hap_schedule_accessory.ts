@@ -155,10 +155,22 @@ export default class RoborockHapScheduleAccessory {
   async refreshIfNeeded(): Promise<boolean> {
     const now = Date.now();
 
+    this.platform.log.info(
+      `Schedule refreshIfNeeded: entered; ` +
+      `cached=${this.cachedSchedules?.length ?? "undefined"}; ` +
+      `lastRefreshAgeMs=${this.lastScheduleRefreshAt > 0 ? now - this.lastScheduleRefreshAt : "never"}; ` +
+      `lastFailureAgeMs=${this.lastFailedRefreshAt > 0 ? now - this.lastFailedRefreshAt : "never"}`
+    );
+
     if (
       this.cachedSchedules !== undefined &&
       now - this.lastScheduleRefreshAt < SCHEDULE_CACHE_TTL_MS
     ) {
+      this.platform.log.info(
+        `Schedule refreshIfNeeded: CACHE HIT; ` +
+        `ageMs=${now - this.lastScheduleRefreshAt}; ` +
+        `returning=${this.cachedSchedules.length > 0}`
+      );
       return this.cachedSchedules.length > 0;
     }
 
@@ -166,8 +178,17 @@ export default class RoborockHapScheduleAccessory {
       this.lastFailedRefreshAt > 0 &&
       now - this.lastFailedRefreshAt < SCHEDULE_FAILURE_BACKOFF_MS
     ) {
+      this.platform.log.info(
+        `Schedule refreshIfNeeded: FAILURE BACKOFF; ` +
+        `ageMs=${now - this.lastFailedRefreshAt}; ` +
+        `returning=${(this.cachedSchedules?.length ?? 0) > 0}`
+      );
       return (this.cachedSchedules?.length ?? 0) > 0;
     }
+
+    this.platform.log.info(
+      `Schedule refreshIfNeeded: CALLING refresh()`
+    );
 
     return this.refresh();
   }
