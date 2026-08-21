@@ -28,6 +28,7 @@ function makeCoordinator() {
   coordinator.managerRemoved = false;
   coordinator.cachedSchedules = undefined;
   coordinator.lastScheduleRefreshAt = 0;
+  coordinator.lastFailedRefreshAt = 0;
   coordinator.refreshInProgress = undefined;
   coordinator.sync = jest.fn();
 
@@ -162,6 +163,48 @@ describe("HAP schedule coordinator cache", () => {
     expect(coordinator.scheduleAccessories.get("timer-existing")).toBe(
       existingChild
     );
+  });
+
+  test("failed refresh backoff suppresses repeated cloud requests and later retries", async () => {
+    const coordinator = makeCoordinator();
+
+    coordinator.cachedSchedules = [
+      {
+        id: "timer-existing",
+        enabled: true,
+        timer: ["timer-existing", "on"],
+      },
+    ];
+    coordinator.lastScheduleRefreshAt = Date.now() - 61000;
+
+    getServerTimers.mockRejectedValueOnce(new Error("cloud timeout"));
+
+    await expect(coordinator.refreshIfNeeded()).resolves.toBe(false);
+    expect(getServerTimers).toHaveBeenCalledTimes(1);
+    expect(coordinator.lastFailedRefreshAt).toBeGreaterThan(0);
+
+    // The failed refresh should suppress another cloud request during backoff,
+    // while preserving the existing cached schedule state.
+    await expect(coordinator.refreshIfNeeded()).resolves.toBe(true);
+    expect(getServerTimers).toHaveBeenCalledTimes(1);
+
+    // Simulate the 30-second backoff having expired.
+    coordinator.lastFailedRefreshAt = Date.now() - 31000;
+
+    getServerTimers.mockResolvedValueOnce([
+      ["timer-existing", "off"],
+    ]);
+
+    await expect(coordinator.refreshIfNeeded()).resolves.toBe(true);
+    expect(getServerTimers).toHaveBeenCalledTimes(2);
+
+    expect(coordinator.cachedSchedules).toEqual([
+      {
+        id: "timer-existing",
+        enabled: false,
+        timer: ["timer-existing", "off"],
+      },
+    ]);
   });
 
   test("successful empty snapshot is cached as empty", async () => {

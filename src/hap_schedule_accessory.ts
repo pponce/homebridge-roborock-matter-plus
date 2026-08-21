@@ -10,6 +10,7 @@ import { HAP_PLUGIN_IDENTIFIER, PLATFORM_NAME } from "./settings";
 const VERIFY_DELAY_MS = 3000;
 const WRITE_SUPPRESSION_MS = 5000;
 const SCHEDULE_CACHE_TTL_MS = 60 * 1000;
+const SCHEDULE_FAILURE_BACKOFF_MS = 30 * 1000;
 const SERVICE_PREFIX = "roborock-schedule-";
 
 export const HAP_EXTENSION_KIND = "hapExtension" as const;
@@ -96,6 +97,7 @@ export default class RoborockHapScheduleAccessory {
   private managerRemoved = false;
   private cachedSchedules: RoborockSchedule[] | undefined;
   private lastScheduleRefreshAt = 0;
+  private lastFailedRefreshAt = 0;
   private refreshInProgress: Promise<RoborockScheduleRefreshResult> | undefined;
 
   constructor(
@@ -160,6 +162,13 @@ export default class RoborockHapScheduleAccessory {
       return this.cachedSchedules.length > 0;
     }
 
+    if (
+      this.lastFailedRefreshAt > 0 &&
+      now - this.lastFailedRefreshAt < SCHEDULE_FAILURE_BACKOFF_MS
+    ) {
+      return (this.cachedSchedules?.length ?? 0) > 0;
+    }
+
     return this.refresh();
   }
 
@@ -196,6 +205,7 @@ export default class RoborockHapScheduleAccessory {
       );
 
       if (!Array.isArray(raw)) {
+        this.lastFailedRefreshAt = Date.now();
         this.platform.log.warn(
           `Unable to reliably read Roborock schedules for ${this.duid}: ` +
             `get_server_timer returned ${typeof raw}; preserving existing schedules.`
@@ -213,6 +223,7 @@ export default class RoborockHapScheduleAccessory {
         timer: [...schedule.timer],
       }));
       this.lastScheduleRefreshAt = Date.now();
+      this.lastFailedRefreshAt = 0;
 
       this.platform.log.info(
         `Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`
@@ -227,6 +238,7 @@ export default class RoborockHapScheduleAccessory {
         hasSchedules: schedules.length > 0,
       };
     } catch (error) {
+      this.lastFailedRefreshAt = Date.now();
       const message = error instanceof Error ? error.message : String(error);
       this.platform.log.warn(
         `Unable to refresh Roborock schedules for ${this.duid}: ${message}. Preserving existing schedules.`
@@ -415,8 +427,8 @@ class RoborockHapScheduleSwitchAccessory {
     service
       .getCharacteristic(this.platform.Characteristic.On)
       .onSet((value) => this.setSchedule(Boolean(value)))
-      .onGet(async () => {
-        await this.coordinator.refreshIfNeeded();
+      .onGet(() => {
+        void this.coordinator.refreshIfNeeded();
         return this.schedule.enabled;
       });
     service.updateCharacteristic(
