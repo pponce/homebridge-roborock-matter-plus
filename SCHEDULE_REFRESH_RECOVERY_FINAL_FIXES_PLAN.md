@@ -514,13 +514,29 @@ The operational implication for this project is:
 
 ## Current status — 2026-08-22
 
-**Branch state:** Mathias v3.15.5 has been merged cleanly into `schedule-refresh-recovery-final-fixes`. The baseline checkpoint is `1fb6e3d`; Fix 1 is pushed as `8fc2531`.
+**Branch state:** Mathias v3.15.5 has been merged cleanly into `schedule-refresh-recovery-final-fixes`. The branch is synchronized with origin at the final validation checkpoint.
 
-**Code state:** Fix 1, Fix 2, and the remaining minor review items are implemented and verified. The branch passed the final source/test gate at **86/86 suites and 1,377/1,377 tests**, with both typechecks, build, Prettier, and `git diff --check` passing. Mathias's follow-up comment confirms that the implementation direction is correct.
+**Code state:** Fix 1, Fix 2, and the remaining minor review items are implemented. Mathias's latest review confirms that both substantive fixes are correct in the code, including the restored-handler path for Fix 1 and the pre-write refresh guard for Fix 2.
 
-**Real Homebridge state:** The exact pushed branch has been installed on the live Homebridge host successfully. No installation problem remains.
+**Automated validation:** The canonical npm-script release gate passes at **87/87 suites and 1,378/1,378 tests**, including lint, both TypeScript typechecks, build, and the full Jest suite. The README test count was synchronized with `npm run sync:test-count`.
 
-**Remaining release work:** The code itself does not need another change based on Mathias's comment. The remaining work is release bookkeeping and real-device behavior validation: synchronize the README test count with the actual 1,377-test suite using `npm run sync:test-count`, rerun the canonical npm-script gate after that documentation change, push the synchronized checkpoint, and then perform the controlled schedule recovery and write/verify tests on the live Homebridge installation.
+**Regression coverage:** The schedule tests cover transient-refresh preservation, restored-handler reconstruction, refresh coalescing, verification races, stale-refresh protection, and the related contract requirements. The dedicated `__tests__/schedule-startup-recovery.test.js` test exercises the startup/new-coordinator failure branch through `syncHapSchedules()`.
+
+**Real Homebridge state:** The final-fixes branch was installed successfully on the live Homebridge host. Live failure testing provided supplemental evidence that schedule state can be preserved across transport failures and that Apple Home presentation is not by itself authoritative evidence of accessory registration.
+
+**Live-test limitation:** The controlled network tests exposed Roborock MQTT broker failover and transport-specific failure modes, so they are not treated as the authoritative proof of the lifecycle branches. Deterministic automated tests provide the authoritative regression coverage for Fix 1 and Fix 2.
+
+**Mathias review:** Mathias has confirmed that both fixes are correct and that the regression is closed. He requested that generated `dist/` artifacts remain out of Git because the parent project tracks none of them.
+
+**Release disposition:** The branch is PR-ready. Generated `dist/` artifacts are no longer tracked, and the branch-specific generated-dist workflow has been removed. The package remains directly installable from GitHub because its npm `prepack` lifecycle builds the required `dist/` output.
+
+## GitHub-direct installation compatibility
+
+The final PR should follow the parent project's convention of keeping generated `dist/` output out of Git. This does **not** remove the ability to install the fork directly from GitHub for live validation.
+
+The package declares `main: "dist/index.js"` and owns build preparation through the npm `prepack` lifecycle script, which runs `npm run build`. npm runs `prepack` when installing a Git dependency, so a direct GitHub installation can generate the required `dist/` output during package preparation rather than requiring generated files to be tracked in the repository.
+
+Until these changes are incorporated upstream and released by the parent project, the final-fixes branch remains the supported direct-GitHub installation ref for this project's live validation.
 
 ## Live-test lessons — 2026-08-22
 
