@@ -107,14 +107,18 @@ class RoborockHapScheduleAccessory {
     restoreScheduleHandlersFromAccessory() {
         const restored = [];
         const seen = new Set();
+        let switchServiceCount = 0;
+        let scheduleSwitchServiceCount = 0;
         for (const service of this.managerAccessory.services) {
             if (service.UUID !== this.platform.Service.Switch.UUID) {
                 continue;
             }
+            switchServiceCount++;
             const subtype = service.subtype;
             if (typeof subtype !== "string" || !subtype.startsWith(SERVICE_PREFIX)) {
                 continue;
             }
+            scheduleSwitchServiceCount++;
             let scheduleId;
             try {
                 scheduleId = decodeURIComponent(subtype.slice(SERVICE_PREFIX.length));
@@ -134,10 +138,24 @@ class RoborockHapScheduleAccessory {
             });
         }
         if (restored.length === 0) {
+            this.platform.log.debug(`Schedule restoration for ${this.vacuumName}: ` +
+                `managerUUID=${this.managerAccessory.UUID}; ` +
+                `services=${this.managerAccessory.services.length}; ` +
+                `switchServices=${switchServiceCount}; ` +
+                `scheduleSwitchServices=${scheduleSwitchServiceCount}; ` +
+                `restored=0; handlersReattached=false`);
             return false;
         }
         restored.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
         this.sync(restored);
+        this.platform.log.debug(`Schedule restoration for ${this.vacuumName}: ` +
+            `managerUUID=${this.managerAccessory.UUID}; ` +
+            `services=${this.managerAccessory.services.length}; ` +
+            `switchServices=${switchServiceCount}; ` +
+            `scheduleSwitchServices=${scheduleSwitchServiceCount}; ` +
+            `restored=${restored.length}; ` +
+            `scheduleIds=${restored.map((schedule) => schedule.id).join(",")}; ` +
+            `handlersReattached=true`);
         return true;
     }
     async refreshIfNeeded() {
