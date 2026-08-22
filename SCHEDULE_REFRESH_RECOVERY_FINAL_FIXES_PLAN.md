@@ -259,7 +259,7 @@ Results:
 - Roborock library TypeScript typecheck: **passed** (`0`).
 - Jest: **86/86 suites passed; 1,370/1,370 tests passed**.
 - Build: **passed** (`0`).
-- Prettier: **failed only because this active plan file itself was not yet formatted**.
+- Prettier: **passed after formatting the active plan file with the repository-local Prettier**.
 - The failed earlier build attempt using global TypeScript 7 was an environment/tool-version problem, not a project-source failure, and the tracked `dist/` output was restored before the real baseline.
 - The successful baseline build regenerated `dist/matter_vacuum_accessory.js(.map)` and `dist/platform.js(.map)` from the v3.15.5 source merge. These generated changes need to be retained/committed as appropriate for the tested branch.
 
@@ -288,10 +288,10 @@ The baseline therefore shows **no functional/test/typecheck regression attributa
 - [x] Verified repository-local toolchain versions.
 - [x] Restored tracked `dist/` after the intentionally failed global-tool build attempt.
 - [x] Ran the real baseline typechecks, Jest suite, Prettier check, and build using repository-local tools.
-- [ ] Format the active plan file with repository Prettier and commit the formatting fix.
-- [ ] Commit the v3.15.5-generated `dist/` updates produced by the successful baseline build.
-- [ ] Apply Fix 1 and its tests.
-- [ ] Run focused tests.
+- [x] Format the active plan file with repository Prettier and commit the formatting fix.
+- [x] Commit the v3.15.5-generated `dist/` updates produced by the successful baseline build.
+- [x] Apply Fix 1 and its tests.
+- [x] Run focused tests.
 - [ ] Apply Fix 2 and its race tests.
 - [ ] Run focused tests.
 - [ ] Apply Fixes 3–5 and corresponding contract assertions.
@@ -301,6 +301,37 @@ The baseline therefore shows **no functional/test/typecheck regression attributa
 - [ ] Install the exact pushed branch on the real Homebridge host.
 - [ ] Run controlled failure/recovery and write/verify tests on the real installation.
 - [ ] Record final test counts and commit SHAs here.
+
+## Fix 1 checkpoint — 2026-08-22
+
+Fix 1 is complete and committed as `8fc2531`.
+
+### Behavior fixed
+
+- A failed schedule refresh no longer unregisters an existing restored schedule accessory.
+- A rejected refresh follows the same preservation rule.
+- Restored HomeKit Switch services can be reconstructed into schedule child objects so their normal GET/SET handlers are reattached.
+- Restoration state is treated as local recovery state, not as a trusted cloud snapshot.
+- A successful authoritative empty snapshot can still remove stale schedule accessories.
+- Restored `ConfiguredName` values are preserved during child rehydration.
+
+### Verification
+
+- Focused schedule cache/contract tests: **35/35 passed**.
+- Full schedule test gate (`hap-schedule-api`, `hap-schedule-cache`, `schedule-settings-contract`): **37/37 passed**.
+- Main TypeScript typecheck: **passed**.
+- Changed source/test files: **Prettier passed**.
+
+### Review correction caught during implementation
+
+The first recovery implementation could have overwritten a user's restored `ConfiguredName` because it creates a fresh child object before calling `initialize()`. The child initialization path was corrected to preserve an existing custom `ConfiguredName`, matching the already-reviewed refresh behavior.
+
+### Files changed
+
+- `src/platform.ts`
+- `src/hap_schedule_accessory.ts`
+- `__tests__/hap-schedule-cache.test.js`
+- `__tests__/schedule-settings-contract.test.js`
 
 ## Release gate
 
@@ -328,8 +359,10 @@ Definition of done also requires:
 
 ## Current status — 2026-08-22
 
-**Branch state:** Mathias v3.15.5 has been merged cleanly into `schedule-refresh-recovery-final-fixes` and pushed to GitHub as `72cf81c`.
+**Branch state:** Mathias v3.15.5 has been merged cleanly into `schedule-refresh-recovery-final-fixes`. The baseline checkpoint is `1fb6e3d`; Fix 1 is pushed as `8fc2531`.
 
-**Baseline:** **86/86 suites and 1,370/1,370 tests pass; both typechecks and build pass.** Prettier currently fails only because this active plan file itself needs formatting.
+**Baseline:** **86/86 suites and 1,370/1,370 tests pass; both typechecks and build pass.** The active plan is formatted with the repository-local Prettier.
 
-**Next concrete action:** format the plan with the repository-local Prettier and commit the generated v3.15.5 `dist/` changes from the successful baseline build. Then start Fix 1 and its focused regression tests. Fix 1 must address both halves of the review: never unregister an existing schedule accessory on transient failure, and reattach handlers to restored schedule Switch services when initial cloud discovery fails. Update this plan after each checkpoint.
+**Functional final fixes:** Fix 1 is complete. Fix 2 and the three minor cleanup items remain.
+
+**Next concrete action:** implement Fix 2, the pre-write verification race. Keep normal refresh coalescing, but prevent verification from joining a refresh that started before the write. Add race coverage, then implement Fixes 3–5 and run the full release gate. Update this plan after each checkpoint.
