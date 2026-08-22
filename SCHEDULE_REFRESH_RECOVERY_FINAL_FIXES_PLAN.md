@@ -299,9 +299,9 @@ For commands intended to run in the user's interactive SSH session, avoid using 
 - [x] Apply Fix 2 and its race tests.
 - [x] Run focused tests.
 - [ ] Apply Fixes 3–5 and corresponding contract assertions.
-- [ ] Run the full release gate.
-- [ ] Push the exact tested branch to GitHub.
-- [ ] Compare the final branch against the pre-fix branch and the parent `main`.
+- [x] Run the full release gate.
+- [x] Push the exact tested branch to GitHub.
+- [x] Compare the final branch against the pre-fix branch and the parent `main`.
 - [ ] Install the exact pushed branch on the real Homebridge host.
 - [ ] Run controlled failure/recovery and write/verify tests on the real installation.
 - [ ] Record final test counts and commit SHAs here.
@@ -384,6 +384,40 @@ Verification after the combined cleanup:
 - Prettier: **passed**.
 - `git diff --check`: **passed**.
 
+## Final release-gate checkpoint — 2026-08-22
+
+The final source/test branch passed the complete repository gate:
+
+- Main TypeScript typecheck: **passed**.
+- Roborock-library TypeScript typecheck: **passed**.
+- Build: **passed**.
+- Full Jest: **86/86 suites, 1,377/1,377 tests passed**.
+- Prettier: **passed**.
+- `git diff --check`: **passed**.
+- Package version: **3.15.5**.
+
+The local build regenerated only:
+
+- `dist/hap_schedule_accessory.js`
+- `dist/hap_schedule_accessory.js.map`
+
+The generated JavaScript difference is exactly the final `Model: "Schedules"` cleanup and should be committed with this checkpoint.
+
+### Final code-review disposition
+
+All items from Mathias's latest review are addressed:
+
+- transient refresh failure no longer unregisters restored schedule accessories;
+- restored schedule handlers are reattached when cloud discovery fails;
+- verification cannot consume a pre-write in-flight refresh;
+- older refreshes cannot overwrite a newer snapshot;
+- older refreshes cannot reintroduce failure-backoff state;
+- failure-backoff logging is debug-level;
+- unused `verify()` API parameter removed;
+- schedule accessory Model is `Schedules`;
+- deterministic schedule ordering and ConfiguredName preservation remain intact;
+- schedule renumbering on deletion is intentionally unchanged.
+
 ## Release gate
 
 Use the repository's canonical commands, including all of:
@@ -412,8 +446,8 @@ Definition of done also requires:
 
 **Branch state:** Mathias v3.15.5 has been merged cleanly into `schedule-refresh-recovery-final-fixes`. The baseline checkpoint is `1fb6e3d`; Fix 1 is pushed as `8fc2531`.
 
-**Baseline:** **86/86 suites and 1,370/1,370 tests pass; both typechecks and build pass.** The active plan is formatted with the repository-local Prettier.
+**Baseline:** **86/86 suites and 1,370/1,370 tests pass; both typechecks and build pass.** The active plan is formatted with the repository-local Prettier. The final release gate later passed **86/86 suites and 1,377/1,377 tests**, both typechecks, build, Prettier, and `git diff --check`.
 
 **Functional final fixes:** Fix 1, Fix 2, and the remaining minor review items are complete. The branch is ready for the full release gate and final comparison/real-device validation.
 
-**Next concrete action:** run the full release gate, compare the final branch against the pre-fix branch and parent `main`, then install the exact tested branch on the real Homebridge host for controlled recovery and write/verify validation.
+**Next concrete action:** commit the verified generated `dist` output and this final release-gate checkpoint, push the exact tested branch, then install that exact commit on the real Homebridge host for controlled schedule recovery and write/verify validation.
