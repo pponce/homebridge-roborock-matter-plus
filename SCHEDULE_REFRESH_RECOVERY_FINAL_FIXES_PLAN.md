@@ -38,12 +38,28 @@ Do not manually copy unrelated parent-project changes when a normal Git merge ca
 
 ## Mathias's latest review — verified remaining work
 
-Mathias said nine of the eleven larger items were already fixed correctly. The remaining substantive issues are:
+Mathias's new 2026-08-22 comment confirms that the final-fixes plan describes the **correct architecture** for the two substantive fixes. In particular, Fix 1's intended means is to reattach the schedule handlers so `onGet()` / `refreshIfNeeded()` can heal a restored accessory, rather than removing the accessory.
+
+His comment does **not** introduce a new functional code requirement beyond the current Fix 1 / Fix 2 implementation. It does add two important release-process clarifications:
+
+- The validation gate should invoke the **npm scripts**, not the underlying binaries directly. npm supplies `node_modules/.bin` to script processes.
+- After the test suite is green, run `npm run sync:test-count` so the README's documented test total matches the actual suite count. The repository contains an explicit contract test for this.
+
+He also confirmed:
+
+- Fix 1 and Fix 2 describe the right changes and the current implementation direction is correct.
+- The dependency problem that occurred earlier was an execution-environment / `PATH` issue, not a missing dependency. The repository already has `tsc`, `jest`, `prettier`, and `rimraf` in `node_modules/.bin` when dev dependencies are installed.
+- `npm run typecheck` runs both TypeScript projects, including the JSDoc-checked `roborockLib/` tree.
+- `npm run build` owns regeneration of `dist/`; it is `rimraf ./dist && tsc`.
+- The parent-project main gate Mathias ran was **83 suites / 1,335 tests**. The final-fixes branch has additional regression suites/tests, so its current count of **86 suites / 1,377 tests** is expected and is not a disagreement with Mathias's result.
+- The schedule accessory model correction to `Model: "Schedules"` is right because `Manufacturer` already supplies `Roborock` on every surface.
+
+The substantive fixes reviewed by Mathias remain:
 
 1. **Transient refresh failure can delete schedule accessories.**
 2. **`verify()` can join a refresh that started before the user write.**
 
-He also requested three smaller cleanups:
+The smaller cleanups were:
 
 3. **Failure-backoff logging should be `debug`, not `info`.**
 4. **Remove the unused first `verify()` parameter.**
@@ -178,7 +194,7 @@ to:
 Model: "Schedules";
 ```
 
-This keeps the accessory information row consistent with Mathias's current convention.
+This keeps the accessory information row consistent with Mathias's current convention and avoids repeating `Roborock` after the manufacturer field already supplies the brand.
 
 ## Regression coverage
 
@@ -305,6 +321,8 @@ This repository has an automated GitHub Actions workflow that builds and commits
 - [x] Confirmed Mathias's current parent-project version is **v3.15.5**.
 - [x] Confirmed upstream tip is `141beae88b01bcd2433dc142e89fc87465221f91`.
 - [x] Recorded the user's preferred bash-output copy/paste boundary convention in this plan.
+- [x] Reviewed Mathias's 2026-08-22 follow-up comment and confirmed it validates Fixes 1 and 2 rather than introducing another functional fix.
+- [x] Updated this plan with the canonical npm-script release gate and `npm run sync:test-count` requirement.
 
 ### Local completed
 
@@ -317,19 +335,22 @@ This repository has an automated GitHub Actions workflow that builds and commits
 - [x] Verified repository-local toolchain versions.
 - [x] Restored tracked `dist/` after the intentionally failed global-tool build attempt.
 - [x] Ran the real baseline typechecks, Jest suite, Prettier check, and build using repository-local tools.
-- [x] Format the active plan file with repository Prettier and commit the formatting fix.
-- [x] Commit the v3.15.5-generated `dist/` updates produced by the successful baseline build.
-- [x] Apply Fix 1 and its tests.
-- [x] Run focused tests.
-- [x] Apply Fix 2 and its race tests.
-- [x] Run focused tests.
-- [ ] Apply Fixes 3–5 and corresponding contract assertions.
-- [x] Run the full release gate.
-- [x] Push the exact tested branch to GitHub.
-- [x] Compare the final branch against the pre-fix branch and the parent `main`.
-- [ ] Install the exact pushed branch on the real Homebridge host.
+- [x] Formatted the active plan file with repository Prettier and committed the formatting fix.
+- [x] Committed the v3.15.5-generated `dist/` updates produced by the successful baseline build.
+- [x] Applied Fix 1 and its tests.
+- [x] Ran focused tests.
+- [x] Applied Fix 2 and its race tests.
+- [x] Ran focused tests.
+- [x] Applied Fixes 3–5 and corresponding contract assertions.
+- [x] Ran the full release gate for the final source/test branch: **86/86 suites, 1,377/1,377 tests passed; both typechecks, build, Prettier, and `git diff --check` passed**.
+- [x] Pushed the exact tested branch to GitHub.
+- [x] Compared the final branch against the pre-fix branch and the parent `main`.
+- [x] Installed the exact pushed branch on the real Homebridge host with no installation error.
+- [ ] Run `npm run sync:test-count` and verify the README test-count contract before the final release checkpoint. Mathias explicitly requires this after the test suite is green.
+- [ ] Re-run the canonical npm-script release gate after the README count is synchronized.
+- [ ] Push the synchronized README/plan checkpoint.
 - [ ] Run controlled failure/recovery and write/verify tests on the real installation.
-- [ ] Record final test counts and commit SHAs here.
+- [ ] Record final test counts and final synchronized commit SHA(s) here.
 
 ## Fix 1 checkpoint — 2026-08-22
 
@@ -445,15 +466,21 @@ All items from Mathias's latest review are addressed:
 
 ## Release gate
 
-Use the repository's canonical commands, including all of:
+The canonical repository gate is now the **npm-script gate Mathias recommended**. Do not call `tsc`, `jest`, `prettier`, or `rimraf` directly from an interactive shell and interpret a missing command as a dependency failure; those executables are exposed by npm to the duration of the scripts.
+
+Run:
 
 ```bash
-./node_modules/.bin/tsc --noEmit -p tsconfig.json
-./node_modules/.bin/tsc --noEmit -p tsconfig.roborockLib.json
-./node_modules/.bin/rimraf ./dist && ./node_modules/.bin/tsc
-npm test
-./node_modules/.bin/prettier --check .
+npm run lint && npm run typecheck && npm run build && npm test
 ```
+
+Then, once the tests are green:
+
+```bash
+npm run sync:test-count
+```
+
+`npm run typecheck` intentionally checks both `tsconfig.json` and `tsconfig.roborockLib.json`. `npm run build` intentionally regenerates `dist/`. `npm run sync:test-count` updates the README's documented suite/test totals and must be run after the test suite is green and before the final push.
 
 Definition of done also requires:
 
@@ -465,18 +492,32 @@ Definition of done also requires:
 - `verify()` has no unused API parameter.
 - Model is `Schedules`.
 - `dist/` reflects the tested source.
+- README test counts match the real suite after `npm run sync:test-count`.
+- The final canonical npm-script gate passes after test-count synchronization.
 - Real-device recovery behavior is checked where practical.
 
 ### Operational workflow lessons captured
 
 The final-fixes work also established a repeatable synchronization procedure for this repository's automated `dist` build workflow: inspect remote bot commits, rebase rather than force-push, verify generated output independently, and preserve plan checkpoints through generated-build rebases.
 
+### Mathias follow-up release guidance — 2026-08-22
+
+Mathias explicitly confirmed that the blocker seen earlier was **not a dependency problem**. The repository contains the dev tools in `node_modules/.bin`; npm scripts put that directory on `PATH` for the duration of each script. A normal interactive shell does not do so.
+
+The operational implication for this project is:
+
+- Use `npm run lint`, `npm run typecheck`, `npm run build`, and `npm test` for release validation.
+- If those tools are genuinely absent from `node_modules/.bin`, check `NODE_ENV` before reinstalling. `NODE_ENV=production` causes npm to omit dev dependencies; `export NODE_ENV=development` and reinstall is the appropriate recovery.
+- Do not treat Mathias's 83-suite/1,335-test result on parent `main` as the expected count for this branch. The final-fixes branch has its own additional regression coverage and currently totals 86 suites / 1,377 tests.
+- Before the final push, run `npm run sync:test-count`; the README test count is protected by `__tests__/readme-test-count-is-not-invented.test.js` and should never be manually retyped.
+- `npm run build` owns generated `dist/` regeneration; do not hand-edit generated files.
+
 ## Current status — 2026-08-22
 
 **Branch state:** Mathias v3.15.5 has been merged cleanly into `schedule-refresh-recovery-final-fixes`. The baseline checkpoint is `1fb6e3d`; Fix 1 is pushed as `8fc2531`.
 
-**Baseline:** **86/86 suites and 1,370/1,370 tests pass; both typechecks and build pass.** The active plan is formatted with the repository-local Prettier. The final release gate later passed **86/86 suites and 1,377/1,377 tests**, both typechecks, build, Prettier, and `git diff --check`.
+**Code state:** Fix 1, Fix 2, and the remaining minor review items are implemented and verified. The branch passed the final source/test gate at **86/86 suites and 1,377/1,377 tests**, with both typechecks, build, Prettier, and `git diff --check` passing. Mathias's follow-up comment confirms that the implementation direction is correct.
 
-**Functional final fixes:** Fix 1, Fix 2, and the remaining minor review items are complete. The branch is ready for the full release gate and final comparison/real-device validation.
+**Real Homebridge state:** The exact pushed branch has been installed on the live Homebridge host successfully. No installation problem remains.
 
-**Next concrete action:** commit the verified generated `dist` output and this final release-gate checkpoint, push the exact tested branch, then install that exact commit on the real Homebridge host for controlled schedule recovery and write/verify validation.
+**Remaining release work:** The code itself does not need another change based on Mathias's comment. The remaining work is release bookkeeping and real-device behavior validation: synchronize the README test count with the actual 1,377-test suite using `npm run sync:test-count`, rerun the canonical npm-script gate after that documentation change, push the synchronized checkpoint, and then perform the controlled schedule recovery and write/verify tests on the live Homebridge installation.
