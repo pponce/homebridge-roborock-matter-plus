@@ -666,6 +666,15 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
               return;
             }
 
+            if (!result.success) {
+              schedule!.restoreScheduleHandlersFromAccessory();
+
+              this.log.debug(
+                `Unable to refresh Roborock schedules for ${target.vacuumName}; preserving restored schedule accessories.`
+              );
+              return;
+            }
+
             const accessory = this.accessories.find(
               (candidate) =>
                 candidate.UUID ===
@@ -677,15 +686,19 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
             this.removeHapScheduleAccessory(duid, accessory);
           })
           .catch((error: unknown) => {
-            const accessory = this.accessories.find(
-              (candidate) =>
-                candidate.UUID ===
-                  this.api.hap.uuid.generate(
-                    `hap:roborock:schedules:${duid}`
-                  ) && isHapScheduleAccessory(candidate)
-            );
+            const restored = schedule!.restoreScheduleHandlersFromAccessory();
 
-            this.removeHapScheduleAccessory(duid, accessory);
+            if (!restored) {
+              const accessory = this.accessories.find(
+                (candidate) =>
+                  candidate.UUID ===
+                    this.api.hap.uuid.generate(
+                      `hap:roborock:schedules:${duid}`
+                    ) && isHapScheduleAccessory(candidate)
+              );
+
+              this.removeHapScheduleAccessory(duid, accessory);
+            }
 
             this.log.debug(
               `Unable to refresh Roborock schedules for ${target.vacuumName}: ${
@@ -719,7 +732,12 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         .initialize(target.vacuumName)
         .then((result) => {
           if (!result.success) {
-            this.hapScheduleAccessories.delete(duid);
+            const restored = schedule!.restoreScheduleHandlersFromAccessory();
+
+            if (!restored) {
+              this.hapScheduleAccessories.delete(duid);
+            }
+
             return;
           }
 

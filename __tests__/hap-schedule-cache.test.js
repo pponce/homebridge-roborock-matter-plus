@@ -166,6 +166,44 @@ describe("HAP schedule coordinator cache", () => {
     );
   });
 
+  test("failed startup refresh reattaches handlers to restored schedule services", () => {
+    const coordinator = makeCoordinator();
+
+    coordinator.platform.Service = {
+      Switch: {
+        UUID: "switch-uuid",
+      },
+    };
+
+    coordinator.platform.Characteristic = {
+      On: "On",
+    };
+
+    const restoredService = {
+      UUID: "switch-uuid",
+      subtype: "roborock-schedule-timer-2",
+      getCharacteristic: jest.fn().mockReturnValue({
+        value: true,
+      }),
+    };
+
+    coordinator.managerAccessory = {
+      services: [restoredService],
+    };
+
+    coordinator.sync = jest.fn();
+
+    expect(coordinator.restoreScheduleHandlersFromAccessory()).toBe(true);
+
+    expect(coordinator.sync).toHaveBeenCalledWith([
+      {
+        id: "timer-2",
+        enabled: true,
+        timer: ["timer-2", "on"],
+      },
+    ]);
+  });
+
   test("failed refresh backoff suppresses repeated cloud requests and later retries", async () => {
     const coordinator = makeCoordinator();
 

@@ -154,6 +154,64 @@ export default class RoborockHapScheduleAccessory {
     return this.refreshDetailed();
   }
 
+  /**
+   * Rebuild schedule child objects and attach their normal HAP handlers from
+   * Switch services that Homebridge restored from its cached accessory state.
+   *
+   * This is local recovery state only. It is intentionally not written into
+   * cachedSchedules or lastScheduleRefreshAt because the cloud snapshot is
+   * still unknown. A later successful cloud refresh remains authoritative.
+   */
+  restoreScheduleHandlersFromAccessory(): boolean {
+    const restored: RoborockSchedule[] = [];
+    const seen = new Set<string>();
+
+    for (const service of this.managerAccessory.services) {
+      if (service.UUID !== this.platform.Service.Switch.UUID) {
+        continue;
+      }
+
+      const subtype = service.subtype;
+      if (typeof subtype !== "string" || !subtype.startsWith(SERVICE_PREFIX)) {
+        continue;
+      }
+
+      let scheduleId: string;
+      try {
+        scheduleId = decodeURIComponent(subtype.slice(SERVICE_PREFIX.length));
+      } catch {
+        continue;
+      }
+
+      if (!scheduleId || seen.has(scheduleId)) {
+        continue;
+      }
+
+      seen.add(scheduleId);
+
+      const enabled = Boolean(
+        service.getCharacteristic(this.platform.Characteristic.On).value
+      );
+
+      restored.push({
+        id: scheduleId,
+        enabled,
+        timer: [scheduleId, enabled ? "on" : "off"],
+      });
+    }
+
+    if (restored.length === 0) {
+      return false;
+    }
+
+    restored.sort((a, b) =>
+      a.id.localeCompare(b.id, undefined, { numeric: true })
+    );
+
+    this.sync(restored);
+    return true;
+  }
+
   async refreshIfNeeded(): Promise<boolean> {
     const now = Date.now();
 
@@ -492,10 +550,18 @@ class RoborockHapScheduleSwitchAccessory {
     service.addOptionalCharacteristic(
       this.platform.Characteristic.ConfiguredName
     );
-    service.setCharacteristic(
-      this.platform.Characteristic.ConfiguredName,
-      displayName
+
+    const configuredName = service.getCharacteristic(
+      this.platform.Characteristic.ConfiguredName
     );
+    const currentConfiguredName = configuredName.value;
+
+    if (
+      currentConfiguredName == null ||
+      String(currentConfiguredName) === displayName
+    ) {
+      configuredName.setValue(displayName);
+    }
 
     service
       .getCharacteristic(this.platform.Characteristic.On)

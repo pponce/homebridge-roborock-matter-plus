@@ -142,9 +142,9 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).not.toContain("stopPolling");
   });
 
-  test("restored schedule groups are removed when initial refresh fails", () => {
+  test("restored schedule groups preserve accessories when initial refresh fails", () => {
     expect(platformSource).toMatch(
-      /if \(schedule\) \{[\s\S]*?\.initialize\(target\.vacuumName\)[\s\S]*?if \(result\.success && result\.hasSchedules\) \{[\s\S]*?return;[\s\S]*?this\.removeHapScheduleAccessory\(duid, accessory\);/
+      /if \(schedule\) \{[\s\S]*?\.initialize\(target\.vacuumName\)[\s\S]*?if \(!result\.success\) \{[\s\S]*?restoreScheduleHandlersFromAccessory\(\)[\s\S]*?return;/
     );
   });
 
@@ -154,13 +154,20 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
-  test("failed restored schedule discovery unregisters the cached accessory", () => {
-    expect(platformSource).toMatch(
-      /if \(schedule\) \{[\s\S]*?if \(result\.success && result\.hasSchedules\) \{[\s\S]*?this\.removeHapScheduleAccessory\(duid, accessory\);/
+  test("failed restored schedule discovery does not unregister the cached accessory", () => {
+    const start = platformSource.indexOf("if (!result.success) {");
+    const end = platformSource.indexOf(
+      "const accessory = this.accessories.find(",
+      start
     );
+    const failureBlock = platformSource.slice(start, end);
 
-    expect(platformSource).toMatch(
-      /private removeHapScheduleAccessory\([\s\S]*?unregisterPlatformAccessories/
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    expect(failureBlock).toContain("restoreScheduleHandlersFromAccessory()");
+    expect(failureBlock).not.toContain(
+      "removeHapScheduleAccessory(duid, accessory)"
     );
   });
 
@@ -175,6 +182,16 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).toContain(
       "a.id.localeCompare(b.id, undefined, { numeric: true })"
     );
+  });
+
+  test("schedule child initialization does not overwrite a restored ConfiguredName", () => {
+    expect(scheduleSource).toContain(
+      "const currentConfiguredName = configuredName.value;"
+    );
+    expect(scheduleSource).toContain(
+      "String(currentConfiguredName) === displayName"
+    );
+    expect(scheduleSource).toContain("configuredName.setValue(displayName);");
   });
 
   test("schedule refresh preserves a HomeKit ConfiguredName", () => {
