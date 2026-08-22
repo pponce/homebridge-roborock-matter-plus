@@ -521,3 +521,47 @@ The operational implication for this project is:
 **Real Homebridge state:** The exact pushed branch has been installed on the live Homebridge host successfully. No installation problem remains.
 
 **Remaining release work:** The code itself does not need another change based on Mathias's comment. The remaining work is release bookkeeping and real-device behavior validation: synchronize the README test count with the actual 1,377-test suite using `npm run sync:test-count`, rerun the canonical npm-script gate after that documentation change, push the synchronized checkpoint, and then perform the controlled schedule recovery and write/verify tests on the live Homebridge installation.
+
+## Live-test lessons — 2026-08-22
+
+### MQTT broker failover
+
+A live failure test initially blocked the currently observed Roborock MQTT endpoint, but the Roborock client reconnected to a different MQTT broker endpoint. The test therefore did not actually isolate the cloud transport and could not be used to evaluate schedule-refresh recovery.
+
+Required test behavior:
+
+- Do not assume the currently observed MQTT broker endpoint remains fixed.
+- During an induced MQTT failure test, continuously monitor the Roborock process for new MQTT connections.
+- Block each newly discovered MQTT endpoint used by the Roborock process until the intended schedule-refresh failure is observed.
+- Confirm the Homebridge log contains the expected `get_server_timer` timeout/failure before evaluating accessory recovery.
+- Do not treat firewall counters alone as proof that the schedule transport was isolated; confirm the application-level failure in the Homebridge log.
+- Keep the live test implementation generic and do not document environment-specific IP addresses, hostnames, device identifiers, credentials, tokens, or other unique setup details.
+
+### Apple Home observation versus Homebridge state
+
+A live cloud-failure test caused schedule groups to temporarily appear missing or `Not Supported` in Apple Home. After connectivity was restored and Homebridge performed a successful authoritative schedule refresh, the schedule switches returned.
+
+This observation is **not by itself proof that the existing HomeKit accessory was unregistered**.
+
+Before changing accessory identity or unregister/re-register behavior:
+
+- Determine from Homebridge-side diagnostics whether the cached manager accessory still contains its restored Switch services.
+- Record whether the restoration routine found the expected schedule Switch services and reattached handlers.
+- Treat Apple Home presentation as a secondary observation rather than the authoritative indicator of Homebridge accessory lifecycle.
+
+Do not delete and recreate an existing schedule manager accessory as a workaround for this behavior. Preserving the existing accessory identity is required to avoid unnecessary disruption to user automations, scenes, and other HomeKit references.
+
+### Interactive SSH diagnostic safety
+
+Commands intended to be pasted directly into an interactive SSH shell must not terminate the caller shell on an expected diagnostic failure.
+
+Required practice:
+
+- Do not use `exit 1` as the failure path of an inline diagnostic block intended for direct interactive-shell execution.
+- Do not use `set -e` as a substitute for explicit error handling in such blocks.
+- Use explicit status capture, conditional handling, or a child process when a non-zero exit status is expected.
+- A child process may set its own exit status without terminating the user's interactive SSH shell.
+- Every diagnostic block must leave the SSH session usable even when an individual probe fails.
+- Keep the required `START COPY HERE` / `END COPY HERE` output boundaries.
+
+This lesson was confirmed during the final-fixes live investigation: a malformed patch was correctly rejected, but an inline `exit 1` then terminated the interactive SSH session. The command itself made no repository changes.
