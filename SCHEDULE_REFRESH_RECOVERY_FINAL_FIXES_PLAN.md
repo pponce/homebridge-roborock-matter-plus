@@ -565,3 +565,19 @@ Required practice:
 - Keep the required `START COPY HERE` / `END COPY HERE` output boundaries.
 
 This lesson was confirmed during the final-fixes live investigation: a malformed patch was correctly rejected, but an inline `exit 1` then terminated the interactive SSH session. The command itself made no repository changes.
+
+### Live test runner safety
+
+The MQTT failover-aware live test exposed another test-harness failure mode: an inline monitoring loop can fail to parse after the disruptive portion of a diagnostic has already changed network state.
+
+Required practice for future live recovery tests:
+
+- Keep disruptive setup and cleanup in the parent shell.
+- Put non-trivial monitoring logic in a temporary child script.
+- Run `bash -n` against the child script before creating the temporary firewall.
+- Run the child script without allowing its failure to terminate the parent shell.
+- The parent shell must always continue to cleanup logic after child-script failure.
+- Do not rely on inline parser-heavy Bash loops for a test that changes network connectivity.
+- Do not include environment-specific network addresses, credentials, tokens, device identifiers, or other sensitive setup details in this plan.
+
+The test must therefore be structured so a monitor-script syntax error cannot leave the temporary firewall or debug configuration active.
