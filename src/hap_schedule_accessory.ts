@@ -141,10 +141,7 @@ export default class RoborockHapScheduleAccessory {
       this.platform.Characteristic.Manufacturer,
       "Roborock"
     );
-    info.setCharacteristic(
-      this.platform.Characteristic.Model,
-      "Roborock Schedules"
-    );
+    info.setCharacteristic(this.platform.Characteristic.Model, "Schedules");
     info.setCharacteristic(
       this.platform.Characteristic.SerialNumber,
       `${this.duid}:schedules`

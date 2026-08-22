@@ -91,6 +91,11 @@ describe("HomeKit schedule settings contract", () => {
     expect(disabledBlock[1]).not.toContain("hapScheduleAccessories.clear()");
   });
 
+  test("schedule accessory Model is the unbranded name Schedules", () => {
+    expect(scheduleSource).toContain('"Schedules"');
+    expect(scheduleSource).not.toContain('"Roborock Schedules"');
+  });
+
   test("schedule initialization refreshes through the cached coordinator", () => {
     expect(scheduleSource).toContain("async initialize(");
     expect(scheduleSource).toContain(

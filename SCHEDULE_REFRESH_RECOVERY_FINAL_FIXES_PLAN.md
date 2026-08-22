@@ -368,6 +368,22 @@ The race test covers both important directions:
 1. A verification refresh does not join a refresh that started before the write.
 2. The older pre-write refresh cannot overwrite the newer post-write snapshot or reinstate failure-backoff state when it completes later.
 
+## Minor cleanup checkpoint — 2026-08-22
+
+The remaining smaller Mathias review items are complete.
+
+- Failure-backoff logging is debug-level.
+- `verify()` no longer carries the unused API parameter.
+- Schedule accessory `Model` is `Schedules`, matching the parent-project convention.
+- Schedule numbering behavior remains unchanged, as Mathias recommended.
+
+Verification after the combined cleanup:
+
+- Three schedule suites: **42/42 tests passed**.
+- Both TypeScript typechecks: **passed**.
+- Prettier: **passed**.
+- `git diff --check`: **passed**.
+
 ## Release gate
 
 Use the repository's canonical commands, including all of:
@@ -398,6 +414,6 @@ Definition of done also requires:
 
 **Baseline:** **86/86 suites and 1,370/1,370 tests pass; both typechecks and build pass.** The active plan is formatted with the repository-local Prettier.
 
-**Functional final fixes:** Fix 1 and Fix 2 are complete. The remaining minor cleanup is the Model value (`Schedules`), followed by the full release gate and real-device validation.
+**Functional final fixes:** Fix 1, Fix 2, and the remaining minor review items are complete. The branch is ready for the full release gate and final comparison/real-device validation.
 
-**Next concrete action:** apply the remaining small Model cleanup (`Model: "Schedules"`), then run the full release gate. The remaining small review items are intentionally batched where practical. Update this plan after each checkpoint.
+**Next concrete action:** run the full release gate, compare the final branch against the pre-fix branch and parent `main`, then install the exact tested branch on the real Homebridge host for controlled recovery and write/verify validation.
