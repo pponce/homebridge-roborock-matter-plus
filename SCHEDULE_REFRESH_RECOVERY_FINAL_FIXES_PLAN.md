@@ -22,7 +22,7 @@ Repository: `pponce/homebridge-roborock-matter-plus`
 - Final-fixes branch was created from commit `3e68ba7dd0126e01960503edee4a274575c77076`.
 - The fork's `main` remains Mathias `v3.15.3`, commit `02cdd263aa55b703dd45da1ed4967d43b927b896`.
 - Mathias's parent-project `upstream/main` is now **v3.15.5**, commit `141beae88b01bcd2433dc142e89fc87465221f91`.
-- The parent-project merge was completed locally on 2026-08-22 as merge commit `3b2dffd`.
+- The parent-project merge was completed locally on 2026-08-22 as merge commit `3b2dffd`, then rebased onto the updated GitHub plan checkpoint as `72cf81c` and pushed to `origin/schedule-refresh-recovery-final-fixes`.
 - The merge completed cleanly with the `ort` strategy; no manual conflict resolution was required.
 - The merge brought 13 upstream files into the final-fixes branch, including the v3.15.5 version bump, CHANGELOG/README/test updates, and current parent-project library/accessory changes.
 
@@ -223,6 +223,32 @@ A previous remote diagnostic script caused the SSH session to terminate when a c
 
 The final plan should record verified evidence about a future SSH disconnect rather than automatically attributing it to `set -e`.
 
+## Bash command / output-collection convention
+
+For every shell command block provided to the user in this project, use a consistent copy/paste boundary so it is obvious exactly what output should be returned.
+
+Required pattern:
+
+```bash
+echo
+echo "============================================================"
+echo "START COPY HERE"
+echo "============================================================"
+
+# commands and diagnostics
+
+ echo
+echo "============================================================"
+echo "END COPY HERE"
+echo "============================================================"
+```
+
+Do not make the user guess where to start or stop copying. Include a blank line before the start marker and another blank line before the end marker.
+
+Prefer grouped diagnostic sections with clear `echo "===== SECTION NAME ====="` headings. Avoid `set -e` in interactive diagnostic commands unless there is a specific reason and the failure semantics are explicitly intended. When a command may legitimately fail, handle that status explicitly so the user can still return the complete diagnostic output.
+
+This convention applies both to short one-off commands and to longer multi-step scripts.
+
 ## GitHub-first / local-second workflow
 
 ### GitHub completed
@@ -233,6 +259,7 @@ The final plan should record verified evidence about a future SSH disconnect rat
 - [x] Replaced the final-fixes handoff plan with this verified version.
 - [x] Confirmed Mathias's current parent-project version is **v3.15.5**.
 - [x] Confirmed upstream tip is `141beae88b01bcd2433dc142e89fc87465221f91`.
+- [x] Recorded the user's preferred bash-output copy/paste boundary convention in this plan.
 
 ### Local completed
 
@@ -240,8 +267,9 @@ The final plan should record verified evidence about a future SSH disconnect rat
 - [x] Checked out `schedule-refresh-recovery-final-fixes`.
 - [x] Merged Mathias `upstream/main` / v3.15.5 locally.
 - [x] Merge completed cleanly with no conflicts.
-- [x] Merge commit is `3b2dffd`.
-- [ ] Push the v3.15.5 merge commit to the GitHub final-fixes branch.
+- [x] Rebased the local merge onto the updated GitHub plan checkpoint.
+- [x] Pushed synchronized v3.15.5 branch to GitHub as `72cf81c`.
+- [ ] Install/use the repository's Node/npm development dependencies so the baseline gate can actually run.
 - [ ] Run the baseline release gate after the merge.
 - [ ] Apply Fix 1 and its tests.
 - [ ] Run focused tests.
@@ -282,8 +310,10 @@ Definition of done also requires:
 
 ## Current status — 2026-08-22
 
-**Branch state:** Mathias v3.15.5 has now been merged cleanly into `schedule-refresh-recovery-final-fixes` locally as `3b2dffd`.
+**Branch state:** Mathias v3.15.5 has been merged cleanly into `schedule-refresh-recovery-final-fixes` and pushed to GitHub as `72cf81c`.
+
+**Baseline gate:** not yet executed because the current local shell reports `tsc`, `rimraf`, `jest`, and `prettier` as unavailable commands. This is an environment/dependency setup issue, not a source-code test failure.
 
 **Functional final fixes:** not yet applied.
 
-**Next concrete action:** push the clean v3.15.5 merge to GitHub, then run the baseline release gate before changing schedule code. After the baseline is recorded, implement Fix 1 first because it protects existing HomeKit configuration from destructive failure handling. Then implement Fix 2, followed by the three minor cleanups and their focused tests. Update this plan after each checkpoint.
+**Next concrete action:** verify Node/npm and the repository's dependency installation state. Install dependencies with the repository's normal package-manager workflow if needed, then rerun the baseline gate. After the baseline is recorded, implement Fix 1 first because it protects existing HomeKit configuration from destructive failure handling. Then implement Fix 2, followed by the three minor cleanups and their focused tests. Update this plan after each checkpoint.
