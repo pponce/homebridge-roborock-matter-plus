@@ -740,7 +740,15 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         .initialize(target.vacuumName)
         .then((result) => {
           if (!result.success) {
+            this.log.info(
+              `Schedule startup restoration attempt for ${target.vacuumName}: refresh failed; invoking restoreScheduleHandlersFromAccessory().`
+            );
+
             const restored = schedule!.restoreScheduleHandlersFromAccessory();
+
+            this.log.info(
+              `Schedule startup restoration result for ${target.vacuumName}: restored=${restored}.`
+            );
 
             if (!restored) {
               this.hapScheduleAccessories.delete(duid);
