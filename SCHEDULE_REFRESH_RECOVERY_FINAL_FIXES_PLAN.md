@@ -20,26 +20,21 @@ Repository: `pponce/homebridge-roborock-matter-plus`
 - Base follow-up branch: `schedule-refresh-recovery-fixes`
 - Final-fixes branch: `schedule-refresh-recovery-final-fixes`
 - Final-fixes branch was created from commit `3e68ba7dd0126e01960503edee4a274575c77076`.
-- The only existing commit unique to this branch before this plan refresh was the earlier plan commit; no functional final-fix code had been applied yet.
-- The fork's `main` is at Mathias `v3.15.3`, commit `02cdd263aa55b703dd45da1ed4967d43b927b896`.
-- The final-fixes branch is currently not behind the fork `main`.
+- The fork's `main` remains Mathias `v3.15.3`, commit `02cdd263aa55b703dd45da1ed4967d43b927b896`.
+- Mathias's parent-project `upstream/main` is now **v3.15.5**, commit `141beae88b01bcd2433dc142e89fc87465221f91`.
+- The parent-project merge was completed locally on 2026-08-22 as merge commit `3b2dffd`.
+- The merge completed cleanly with the `ort` strategy; no manual conflict resolution was required.
+- The merge brought 13 upstream files into the final-fixes branch, including the v3.15.5 version bump, CHANGELOG/README/test updates, and current parent-project library/accessory changes.
 
 ### Parent-project upstream check
 
-Mathias's current parent-project `main` is `v3.15.4`, commit `141beae88b01bcd2433dc142e89fc87465221f91`.
+Mathias's current parent-project `main` is **v3.15.5**, not v3.15.4.
 
-That upstream commit is **README/test-only**: it updates troubleshooting guidance and the documented automated-test count. It does not change schedule implementation behavior. It should still be merged locally before final functional work so the final branch carries the parent project's current provenance rather than silently copying pieces of the change.
+The current upstream tip is `141beae88b01bcd2433dc142e89fc87465221f91`, and `package.json` reports version `3.15.5`.
 
-The GitHub connector available for this work does not provide a cross-repository merge/cherry-pick operation. Therefore the upstream merge is intentionally a **local Git operation**:
+The prior assumption that v3.15.4 was current was stale. The v3.15.5 upstream changes were therefore merged **before final schedule-fix implementation**, as required.
 
-```bash
-git fetch upstream
-git merge upstream/main
-```
-
-Resolve only genuine conflicts, then run the release gate and push the merge result back to `schedule-refresh-recovery-final-fixes`.
-
-Do not manually copy unrelated parent-project behavior when a normal Git merge can preserve provenance.
+Do not manually copy unrelated parent-project changes when a normal Git merge can preserve provenance.
 
 ## Mathias's latest review — verified remaining work
 
@@ -119,8 +114,6 @@ Preferred implementation direction:
 - Do not unregister the restored accessory.
 - Do not invent an empty cloud snapshot.
 - A first-time accessory with no restored Switch services should remain unregistered until a later successful non-empty refresh.
-
-This preserves HomeKit room/name/automation state and lets a restored switch heal itself on a later successful refresh.
 
 ### Fix 2 — Prevent a pre-write refresh from satisfying verification
 
@@ -236,31 +229,32 @@ The final plan should record verified evidence about a future SSH disconnect rat
 
 - [x] Confirmed `schedule-refresh-recovery-final-fixes` already exists.
 - [x] Confirmed it starts from `schedule-refresh-recovery-fixes`.
-- [x] Confirmed no functional changes had yet been applied on the final-fixes branch.
 - [x] Inspected both historical plan files.
 - [x] Replaced the final-fixes handoff plan with this verified version.
-- [x] Inspected the parent project's `v3.15.4` commit and confirmed it is documentation/tests only.
+- [x] Confirmed Mathias's current parent-project version is **v3.15.5**.
+- [x] Confirmed upstream tip is `141beae88b01bcd2433dc142e89fc87465221f91`.
 
-### Local next steps
+### Local completed
 
-1. Fetch the user's checkout and all upstream refs.
-2. Check out `schedule-refresh-recovery-final-fixes`.
-3. Verify the working tree is clean.
-4. Merge Mathias's current parent-project `upstream/main`.
-5. Resolve only genuine merge conflicts.
-6. Run the baseline release gate.
-7. Apply Fix 1 and its tests.
-8. Run focused tests.
-9. Apply Fix 2 and its race tests.
-10. Run focused tests.
-11. Apply Fixes 3–5 and corresponding contract assertions.
-12. Run the full release gate.
-13. Rebuild/commit `dist/` according to repository conventions.
-14. Push the exact tested branch to GitHub.
-15. Compare the final branch against the pre-fix branch and the parent `main`.
-16. Install the exact pushed branch on the real Homebridge host.
-17. Run controlled failure/recovery and write/verify tests on the real installation.
-18. Record final test counts and commit SHAs here.
+- [x] Fetched `origin` and `upstream`.
+- [x] Checked out `schedule-refresh-recovery-final-fixes`.
+- [x] Merged Mathias `upstream/main` / v3.15.5 locally.
+- [x] Merge completed cleanly with no conflicts.
+- [x] Merge commit is `3b2dffd`.
+- [ ] Push the v3.15.5 merge commit to the GitHub final-fixes branch.
+- [ ] Run the baseline release gate after the merge.
+- [ ] Apply Fix 1 and its tests.
+- [ ] Run focused tests.
+- [ ] Apply Fix 2 and its race tests.
+- [ ] Run focused tests.
+- [ ] Apply Fixes 3–5 and corresponding contract assertions.
+- [ ] Run the full release gate.
+- [ ] Rebuild/commit `dist/` according to repository conventions.
+- [ ] Push the exact tested branch to GitHub.
+- [ ] Compare the final branch against the pre-fix branch and the parent `main`.
+- [ ] Install the exact pushed branch on the real Homebridge host.
+- [ ] Run controlled failure/recovery and write/verify tests on the real installation.
+- [ ] Record final test counts and commit SHAs here.
 
 ## Release gate
 
@@ -288,8 +282,8 @@ Definition of done also requires:
 
 ## Current status — 2026-08-22
 
-**Branch state:** ready for the upstream parent-project merge and final local code fixes.
+**Branch state:** Mathias v3.15.5 has now been merged cleanly into `schedule-refresh-recovery-final-fixes` locally as `3b2dffd`.
 
-**Functional final fixes on GitHub:** not yet applied.
+**Functional final fixes:** not yet applied.
 
-**Next concrete action:** fetch `upstream`, merge Mathias `v3.15.4` locally into `schedule-refresh-recovery-final-fixes`, then implement and test the five fixes above before pushing the final branch.
+**Next concrete action:** push the clean v3.15.5 merge to GitHub, then run the baseline release gate before changing schedule code. After the baseline is recorded, implement Fix 1 first because it protects existing HomeKit configuration from destructive failure handling. Then implement Fix 2, followed by the three minor cleanups and their focused tests. Update this plan after each checkpoint.
