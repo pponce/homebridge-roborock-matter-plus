@@ -89,7 +89,7 @@ class RoborockHapScheduleAccessory {
         const info = this.managerAccessory.getService(this.platform.Service.AccessoryInformation) ||
             this.managerAccessory.addService(this.platform.Service.AccessoryInformation);
         info.setCharacteristic(this.platform.Characteristic.Manufacturer, "Roborock");
-        info.setCharacteristic(this.platform.Characteristic.Model, "Roborock Schedules");
+        info.setCharacteristic(this.platform.Characteristic.Model, "Schedules");
         info.setCharacteristic(this.platform.Characteristic.SerialNumber, `${this.duid}:schedules`);
         info.setCharacteristic(this.platform.Characteristic.Name, displayName);
         // Initial discovery always performs one cloud schedule request.
