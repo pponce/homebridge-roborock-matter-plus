@@ -157,7 +157,7 @@ Reason: during an outage every HomeKit read can hit the backoff branch, so `info
 Change:
 
 ```ts
-verify(_api, enabled)
+verify(_api, enabled);
 ```
 
 to a signature that only accepts the data it actually needs for verification, including the write timestamp needed by Fix 2.
@@ -169,13 +169,13 @@ Update every call site. Let TypeScript catch any missed call.
 Change:
 
 ```ts
-Model: "Roborock Schedules"
+Model: "Roborock Schedules";
 ```
 
 to:
 
 ```ts
-Model: "Schedules"
+Model: "Schedules";
 ```
 
 This keeps the accessory information row consistent with Mathias's current convention.
