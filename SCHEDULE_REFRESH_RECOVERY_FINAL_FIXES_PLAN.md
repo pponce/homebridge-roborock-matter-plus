@@ -581,3 +581,32 @@ Required practice for future live recovery tests:
 - Do not include environment-specific network addresses, credentials, tokens, device identifiers, or other sensitive setup details in this plan.
 
 The test must therefore be structured so a monitor-script syntax error cannot leave the temporary firewall or debug configuration active.
+
+## Final validation findings — 2026-08-22
+
+### Startup recovery branch now has direct end-to-end test coverage
+
+The live investigation identified that the existing tests covered the restoration method itself and the already-instantiated coordinator failure path, but did not directly execute the startup/new-coordinator failure branch in `syncHapSchedules()`.
+
+A dedicated test was added in `__tests__/schedule-startup-recovery.test.js` covering this path:
+
+- a cached HAP schedule manager accessory is present;
+- no in-memory schedule coordinator exists yet;
+- `syncHapSchedules()` creates the coordinator for the known device;
+- initialization fails;
+- `restoreScheduleHandlersFromAccessory()` is invoked;
+- the coordinator remains retained;
+- the cached accessory remains registered;
+- no unregister operation is performed.
+
+This closes the missing automated coverage for Fix 1's startup recovery path without requiring a live cloud or transport failure to reproduce it.
+
+### Live transport-test findings
+
+Several controlled live failure experiments demonstrated that Roborock transport selection can produce different failure modes depending on which network path is interrupted. In particular, blocking LAN connectivity can cause `get_server_timer` to be rejected before the request is sent, while MQTT interruption can also affect local/cloud transport startup behavior.
+
+Therefore, live firewall tests are useful as supplemental validation but are not a reliable substitute for deterministic unit coverage of the schedule lifecycle branch.
+
+The release decision for Fix 1 is therefore based on the implemented code plus direct automated coverage of the startup recovery path, with live testing used to validate preservation behavior and observe real Homebridge/HomeKit presentation.
+
+No environment-specific network addresses, credentials, tokens, device identifiers, broker addresses, or other private setup details are recorded in this plan.
