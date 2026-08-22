@@ -265,6 +265,10 @@ Results:
 
 The baseline therefore shows **no functional/test/typecheck regression attributable to the final-fixes branch**.
 
+### SSH / interactive-shell scripting lesson
+
+For commands intended to run in the user's interactive SSH session, avoid using `set -e` as the primary error-control mechanism. A failing command under `set -e` can terminate the script immediately, and depending on how a script is invoked or sourced that can make the interactive SSH session appear to have been dropped. Prefer explicit exit-code capture, clear conditional continuation, and bounded diagnostic commands. The exact prior disconnect mechanism is not proven, so this is a precautionary workflow rule rather than a confirmed root cause.
+
 ## GitHub-first / local-second workflow
 
 ### GitHub completed
@@ -292,8 +296,8 @@ The baseline therefore shows **no functional/test/typecheck regression attributa
 - [x] Commit the v3.15.5-generated `dist/` updates produced by the successful baseline build.
 - [x] Apply Fix 1 and its tests.
 - [x] Run focused tests.
-- [ ] Apply Fix 2 and its race tests.
-- [ ] Run focused tests.
+- [x] Apply Fix 2 and its race tests.
+- [x] Run focused tests.
 - [ ] Apply Fixes 3–5 and corresponding contract assertions.
 - [ ] Run the full release gate.
 - [ ] Push the exact tested branch to GitHub.
@@ -333,6 +337,37 @@ The first recovery implementation could have overwritten a user's restored `Conf
 - `__tests__/hap-schedule-cache.test.js`
 - `__tests__/schedule-settings-contract.test.js`
 
+## Fix 2 checkpoint — 2026-08-22
+
+Fix 2 is complete in the working tree.
+
+### Behavior fixed
+
+- Normal schedule refresh callers continue to coalesce onto one in-flight refresh.
+- Verification can require a refresh whose start time is at or after the write timestamp.
+- A verification request therefore cannot accept a refresh that started before the write.
+- A newer refresh receives a newer generation and is authoritative over older in-flight refreshes.
+- Older refreshes cannot overwrite a newer cached snapshot.
+- Older refreshes cannot restore failure-backoff state after a newer refresh succeeds.
+- The primary `upd_server_timer` write and `upd_timer` fallback each capture their own write-start timestamp.
+- `verify()` no longer accepts the unused API parameter.
+- Failure-backoff logging is debug-level rather than info-level.
+
+### Verification
+
+- Full schedule test gate: **41/41 passed**.
+- Main TypeScript typecheck: **passed**.
+- Roborock-library TypeScript typecheck: **passed**.
+- Changed schedule source/tests: **Prettier passed**.
+- `git diff --check`: **passed**.
+
+### Regression coverage
+
+The race test covers both important directions:
+
+1. A verification refresh does not join a refresh that started before the write.
+2. The older pre-write refresh cannot overwrite the newer post-write snapshot or reinstate failure-backoff state when it completes later.
+
 ## Release gate
 
 Use the repository's canonical commands, including all of:
@@ -363,6 +398,6 @@ Definition of done also requires:
 
 **Baseline:** **86/86 suites and 1,370/1,370 tests pass; both typechecks and build pass.** The active plan is formatted with the repository-local Prettier.
 
-**Functional final fixes:** Fix 1 is complete. Fix 2 and the three minor cleanup items remain.
+**Functional final fixes:** Fix 1 and Fix 2 are complete. The remaining minor cleanup is the Model value (`Schedules`), followed by the full release gate and real-device validation.
 
-**Next concrete action:** implement Fix 2, the pre-write verification race. Keep normal refresh coalescing, but prevent verification from joining a refresh that started before the write. Add race coverage, then implement Fixes 3–5 and run the full release gate. Update this plan after each checkpoint.
+**Next concrete action:** apply the remaining small Model cleanup (`Model: "Schedules"`), then run the full release gate. The remaining small review items are intentionally batched where practical. Update this plan after each checkpoint.

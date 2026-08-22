@@ -129,7 +129,7 @@ describe("HomeKit schedule settings contract", () => {
     );
 
     expect(scheduleSource).toMatch(
-      /this\.refreshInProgress = this\.performRefresh\(\);/
+      /const refresh = this\.performRefresh\(generation\);[\s\S]*?this\.refreshInProgress = refresh;/
     );
 
     expect(scheduleSource).toMatch(
@@ -206,6 +206,44 @@ describe("HomeKit schedule settings contract", () => {
     );
   });
 
+  test("schedule verification requires a refresh started at or after the write", () => {
+    expect(scheduleSource).toContain("private refreshInProgressStartedAt = 0;");
+    expect(scheduleSource).toContain("private refreshGeneration = 0;");
+    expect(scheduleSource).toContain("minimumRefreshStartedAt = 0");
+    expect(scheduleSource).toContain(
+      "this.refreshInProgressStartedAt >= minimumRefreshStartedAt"
+    );
+    expect(scheduleSource).toContain("generation !== this.refreshGeneration");
+  });
+
+  test("schedule writes capture a timestamp before each actual cloud write", () => {
+    expect(scheduleSource).toContain("const writeStartedAt = Date.now();");
+    expect(scheduleSource).toContain(
+      "const fallbackWriteStartedAt = Date.now();"
+    );
+    expect(scheduleSource).toContain("this.verify(enabled, writeStartedAt)");
+    expect(scheduleSource).toContain(
+      "this.verify(enabled, fallbackWriteStartedAt)"
+    );
+  });
+
+  test("failure backoff is debug-level", () => {
+    const start = scheduleSource.indexOf("this.lastFailedRefreshAt > 0 &&");
+    const end = scheduleSource.indexOf(
+      "this.platform.log.debug(`Schedule refreshIfNeeded: CALLING refresh()`);",
+      start
+    );
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+
+    const block = scheduleSource.slice(start, end);
+
+    expect(block).toContain("this.platform.log.debug(");
+    expect(block).toContain("Schedule refreshIfNeeded: FAILURE BACKOFF;");
+    expect(block).not.toContain("this.platform.log.info(");
+  });
+
   test("schedule verification uses the shared timer utility", () => {
     expect(scheduleSource).toContain(
       'import { scheduleTimer, unrefTimer } from "./timers";'
@@ -257,8 +295,8 @@ describe("HomeKit schedule settings contract", () => {
 
     expect(callRefreshIndex).toBeGreaterThan(0);
 
-    // Failure backoff is intentionally an info-level operational signal.
-    expect(refreshBlock).toContain("this.platform.log.info(");
+    // Failure backoff is intentionally debug-level because every HomeKit read can hit this branch during an outage.
+    expect(refreshBlock).toContain("this.platform.log.debug(");
     expect(refreshBlock).toContain(
       "`Schedule refreshIfNeeded: FAILURE BACKOFF; `"
     );

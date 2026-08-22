@@ -101,6 +101,8 @@ export default class RoborockHapScheduleAccessory {
   private lastScheduleRefreshAt = 0;
   private lastFailedRefreshAt = 0;
   private refreshInProgress: Promise<RoborockScheduleRefreshResult> | undefined;
+  private refreshInProgressStartedAt = 0;
+  private refreshGeneration = 0;
 
   constructor(
     private readonly platform: RoborockPlatform,
@@ -238,7 +240,7 @@ export default class RoborockHapScheduleAccessory {
       this.lastFailedRefreshAt > 0 &&
       now - this.lastFailedRefreshAt < SCHEDULE_FAILURE_BACKOFF_MS
     ) {
-      this.platform.log.info(
+      this.platform.log.debug(
         `Schedule refreshIfNeeded: FAILURE BACKOFF; ` +
           `ageMs=${now - this.lastFailedRefreshAt}; ` +
           `returning=${(this.cachedSchedules?.length ?? 0) > 0}`
@@ -257,9 +259,10 @@ export default class RoborockHapScheduleAccessory {
   }
 
   async refreshAndGetSchedule(
-    scheduleId: string
+    scheduleId: string,
+    minimumRefreshStartedAt = 0
   ): Promise<RoborockSchedule | undefined> {
-    await this.refreshDetailed();
+    await this.refreshDetailed(minimumRefreshStartedAt);
 
     const schedule = this.cachedSchedules?.find(
       (candidate) => candidate.id === scheduleId
@@ -273,7 +276,9 @@ export default class RoborockHapScheduleAccessory {
       : undefined;
   }
 
-  private async refreshDetailed(): Promise<RoborockScheduleRefreshResult> {
+  private async refreshDetailed(
+    minimumRefreshStartedAt = 0
+  ): Promise<RoborockScheduleRefreshResult> {
     if (this.disposed) {
       return {
         success: false,
@@ -281,19 +286,36 @@ export default class RoborockHapScheduleAccessory {
       };
     }
 
-    if (this.refreshInProgress) {
+    if (
+      this.refreshInProgress &&
+      this.refreshInProgressStartedAt >= minimumRefreshStartedAt
+    ) {
       return this.refreshInProgress;
     }
 
-    this.refreshInProgress = this.performRefresh();
+    const startedAt = Date.now();
+    const generation = ++this.refreshGeneration;
+
+    const refresh = this.performRefresh(generation);
+
+    this.refreshInProgress = refresh;
+    this.refreshInProgressStartedAt = startedAt;
+
     try {
-      return await this.refreshInProgress;
+      return await refresh;
     } finally {
-      this.refreshInProgress = undefined;
+      // Only the current refresh is allowed to clear these fields. An older
+      // refresh can finish after a newer verification refresh has started.
+      if (this.refreshInProgress === refresh) {
+        this.refreshInProgress = undefined;
+        this.refreshInProgressStartedAt = 0;
+      }
     }
   }
 
-  private async performRefresh(): Promise<RoborockScheduleRefreshResult> {
+  private async performRefresh(
+    generation: number
+  ): Promise<RoborockScheduleRefreshResult> {
     try {
       const api = this.platform.roborockAPI as any;
       const raw = await getServerTimers(api, this.duid, {
@@ -307,6 +329,13 @@ export default class RoborockHapScheduleAccessory {
       );
 
       if (!Array.isArray(raw)) {
+        if (generation !== this.refreshGeneration || this.disposed) {
+          return {
+            success: false,
+            hasSchedules: this.scheduleAccessories.size > 0,
+          };
+        }
+
         this.lastFailedRefreshAt = Date.now();
         this.platform.log.warn(
           `Unable to reliably read Roborock schedules for ${this.duid}: ` +
@@ -337,11 +366,28 @@ export default class RoborockHapScheduleAccessory {
       // trustworthy empty snapshot. Preserve the previous state instead
       // of deleting every HomeKit schedule switch.
       if (raw.length > 0 && schedules.length === 0) {
+        if (generation !== this.refreshGeneration || this.disposed) {
+          return {
+            success: false,
+            hasSchedules: this.scheduleAccessories.size > 0,
+          };
+        }
+
         this.lastFailedRefreshAt = Date.now();
         this.platform.log.warn(
           `Unable to reliably read Roborock schedules for ${this.duid}: ` +
             `get_server_timer returned a non-empty response that parsed to zero schedules; preserving existing schedules.`
         );
+        return {
+          success: false,
+          hasSchedules: this.scheduleAccessories.size > 0,
+        };
+      }
+
+      // A newer refresh may have started while this request was in flight.
+      // The older request may finish, but it must never overwrite the newer
+      // snapshot or its refresh timestamps.
+      if (generation !== this.refreshGeneration || this.disposed) {
         return {
           success: false,
           hasSchedules: this.scheduleAccessories.size > 0,
@@ -368,6 +414,13 @@ export default class RoborockHapScheduleAccessory {
         hasSchedules: schedules.length > 0,
       };
     } catch (error) {
+      if (generation !== this.refreshGeneration || this.disposed) {
+        return {
+          success: false,
+          hasSchedules: this.scheduleAccessories.size > 0,
+        };
+      }
+
       this.lastFailedRefreshAt = Date.now();
       const message = error instanceof Error ? error.message : String(error);
       this.platform.log.warn(
@@ -404,7 +457,9 @@ export default class RoborockHapScheduleAccessory {
 
   dispose(): void {
     this.disposed = true;
+    this.refreshGeneration++;
     this.refreshInProgress = undefined;
+    this.refreshInProgressStartedAt = 0;
     this.cachedSchedules = undefined;
     this.lastScheduleRefreshAt = 0;
 
@@ -654,20 +709,24 @@ class RoborockHapScheduleSwitchAccessory {
         `Schedule command: ${enabled ? "enabling" : "disabling"} ${this.duid}/${this.scheduleId}; params=[[${JSON.stringify(this.scheduleId)}, ${JSON.stringify(enabled ? "on" : "off")}]].`
       );
 
+      const writeStartedAt = Date.now();
+
       await updateServerTimer(api, this.duid, this.scheduleId, enabled, {
         requestTimeoutMs: 10000,
       });
 
-      if (!(await this.verify(api, enabled))) {
+      if (!(await this.verify(enabled, writeStartedAt))) {
         this.platform.log.warn(
           `Roborock schedule ${this.scheduleId} did not reflect upd_server_timer; trying upd_timer fallback.`
         );
+
+        const fallbackWriteStartedAt = Date.now();
 
         await updateTimer(api, this.duid, this.scheduleId, enabled, {
           requestTimeoutMs: 10000,
         });
 
-        if (!(await this.verify(api, enabled))) {
+        if (!(await this.verify(enabled, fallbackWriteStartedAt))) {
           throw new Error(
             `Roborock did not confirm schedule ${this.scheduleId} as ${enabled ? "enabled" : "disabled"}`
           );
@@ -704,14 +763,18 @@ class RoborockHapScheduleSwitchAccessory {
     }
   }
 
-  private async verify(_api: any, enabled: boolean): Promise<boolean> {
+  private async verify(
+    enabled: boolean,
+    minimumRefreshStartedAt: number
+  ): Promise<boolean> {
     await new Promise<void>((resolve) => {
       const timer = scheduleTimer(resolve, VERIFY_DELAY_MS);
       unrefTimer(timer);
     });
 
     const current = await this.coordinator.refreshAndGetSchedule(
-      this.scheduleId
+      this.scheduleId,
+      minimumRefreshStartedAt
     );
 
     if (!current) {

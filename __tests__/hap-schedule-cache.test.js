@@ -31,6 +31,8 @@ function makeCoordinator() {
   coordinator.lastScheduleRefreshAt = 0;
   coordinator.lastFailedRefreshAt = 0;
   coordinator.refreshInProgress = undefined;
+  coordinator.refreshInProgressStartedAt = 0;
+  coordinator.refreshGeneration = 0;
   coordinator.sync = jest.fn();
 
   return coordinator;
@@ -285,7 +287,7 @@ describe("HAP schedule coordinator cache", () => {
     );
 
     const first = coordinator.refreshIfNeeded();
-    const verification = coordinator.refreshAndGetSchedule("timer-1");
+    const verification = coordinator.refreshAndGetSchedule("timer-1", 0);
 
     expect(getServerTimers).toHaveBeenCalledTimes(1);
 
@@ -301,6 +303,76 @@ describe("HAP schedule coordinator cache", () => {
     ]);
 
     expect(getServerTimers).toHaveBeenCalledTimes(1);
+  });
+
+  test("verification bypasses a pre-write refresh and older completion cannot overwrite it", async () => {
+    const coordinator = makeCoordinator();
+
+    let resolveOld;
+    let resolveNew;
+
+    getServerTimers
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveNew = resolve;
+        })
+      );
+
+    const oldRefresh = coordinator.refresh();
+
+    const oldStartedAt = coordinator.refreshInProgressStartedAt;
+    const oldGeneration = coordinator.refreshGeneration;
+
+    expect(oldStartedAt).toBeGreaterThan(0);
+
+    const verification = coordinator.refreshAndGetSchedule(
+      "timer-1",
+      oldStartedAt + 1
+    );
+
+    expect(getServerTimers).toHaveBeenCalledTimes(2);
+    expect(coordinator.refreshGeneration).toBeGreaterThan(oldGeneration);
+
+    resolveNew([["timer-1", "on"]]);
+
+    await expect(verification).resolves.toEqual({
+      id: "timer-1",
+      enabled: true,
+      timer: ["timer-1", "on"],
+    });
+
+    expect(coordinator.cachedSchedules).toEqual([
+      {
+        id: "timer-1",
+        enabled: true,
+        timer: ["timer-1", "on"],
+      },
+    ]);
+
+    // The old pre-write request completes after the newer verification
+    // refresh and must not overwrite the post-write snapshot.
+    resolveOld([["timer-1", "off"]]);
+
+    await expect(oldRefresh).resolves.toBe(false);
+
+    expect(coordinator.cachedSchedules).toEqual([
+      {
+        id: "timer-1",
+        enabled: true,
+        timer: ["timer-1", "on"],
+      },
+    ]);
+
+    expect(coordinator.sync).toHaveBeenCalledTimes(1);
+
+    // The superseded pre-write request failing later must not poison the
+    // newer successful refresh with failure-backoff state.
+    expect(coordinator.lastFailedRefreshAt).toBe(0);
   });
 
   test("disposed coordinator does not sync when an in-flight refresh completes", async () => {
