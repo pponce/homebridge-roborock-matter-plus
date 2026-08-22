@@ -479,14 +479,22 @@ class RoborockPlatform {
                     if (result.success && result.hasSchedules) {
                         return;
                     }
+                    if (!result.success) {
+                        schedule.restoreScheduleHandlersFromAccessory();
+                        this.log.debug(`Unable to refresh Roborock schedules for ${target.vacuumName}; preserving restored schedule accessories.`);
+                        return;
+                    }
                     const accessory = this.accessories.find((candidate) => candidate.UUID ===
                         this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`) && (0, hap_schedule_accessory_1.isHapScheduleAccessory)(candidate));
                     this.removeHapScheduleAccessory(duid, accessory);
                 })
                     .catch((error) => {
-                    const accessory = this.accessories.find((candidate) => candidate.UUID ===
-                        this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`) && (0, hap_schedule_accessory_1.isHapScheduleAccessory)(candidate));
-                    this.removeHapScheduleAccessory(duid, accessory);
+                    const restored = schedule.restoreScheduleHandlersFromAccessory();
+                    if (!restored) {
+                        const accessory = this.accessories.find((candidate) => candidate.UUID ===
+                            this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`) && (0, hap_schedule_accessory_1.isHapScheduleAccessory)(candidate));
+                        this.removeHapScheduleAccessory(duid, accessory);
+                    }
                     this.log.debug(`Unable to refresh Roborock schedules for ${target.vacuumName}: ${error instanceof Error ? error.message : String(error)}`);
                 });
                 continue;
@@ -503,7 +511,10 @@ class RoborockPlatform {
                 .initialize(target.vacuumName)
                 .then((result) => {
                 if (!result.success) {
-                    this.hapScheduleAccessories.delete(duid);
+                    const restored = schedule.restoreScheduleHandlersFromAccessory();
+                    if (!restored) {
+                        this.hapScheduleAccessories.delete(duid);
+                    }
                     return;
                 }
                 if (!result.hasSchedules) {
