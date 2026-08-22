@@ -480,7 +480,9 @@ class RoborockPlatform {
                         return;
                     }
                     if (!result.success) {
-                        schedule.restoreScheduleHandlersFromAccessory();
+                        this.log.info(`Schedule restoration attempt for ${target.vacuumName}: refresh failed; invoking restoreScheduleHandlersFromAccessory().`);
+                        const restored = schedule.restoreScheduleHandlersFromAccessory();
+                        this.log.info(`Schedule restoration result for ${target.vacuumName}: restored=${restored}.`);
                         this.log.debug(`Unable to refresh Roborock schedules for ${target.vacuumName}; preserving restored schedule accessories.`);
                         return;
                     }
