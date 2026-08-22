@@ -230,14 +230,14 @@ For every shell command block provided to the user in this project, use a consis
 Required pattern:
 
 ```bash
-echo
+
 echo "============================================================"
 echo "START COPY HERE"
 echo "============================================================"
 
 # commands and diagnostics
 
- echo
+echo
 echo "============================================================"
 echo "END COPY HERE"
 echo "============================================================"
@@ -248,6 +248,22 @@ Do not make the user guess where to start or stop copying. Include a blank line 
 Prefer grouped diagnostic sections with clear `echo "===== SECTION NAME ====="` headings. Avoid `set -e` in interactive diagnostic commands unless there is a specific reason and the failure semantics are explicitly intended. When a command may legitimately fail, handle that status explicitly so the user can still return the complete diagnostic output.
 
 This convention applies both to short one-off commands and to longer multi-step scripts.
+
+## Baseline checkpoint — 2026-08-22
+
+The post-v3.15.5-merge baseline is now established using the repository's pinned local toolchain (`TypeScript 5.5.3`, `Jest 30.4.2`, `Prettier 3.3.2`, `Rimraf 6.0.1`).
+
+Results:
+
+- Main TypeScript typecheck: **passed** (`0`).
+- Roborock library TypeScript typecheck: **passed** (`0`).
+- Jest: **86/86 suites passed; 1,370/1,370 tests passed**.
+- Build: **passed** (`0`).
+- Prettier: **failed only because this active plan file itself was not yet formatted**.
+- The failed earlier build attempt using global TypeScript 7 was an environment/tool-version problem, not a project-source failure, and the tracked `dist/` output was restored before the real baseline.
+- The successful baseline build regenerated `dist/matter_vacuum_accessory.js(.map)` and `dist/platform.js(.map)` from the v3.15.5 source merge. These generated changes need to be retained/committed as appropriate for the tested branch.
+
+The baseline therefore shows **no functional/test/typecheck regression attributable to the final-fixes branch**.
 
 ## GitHub-first / local-second workflow
 
@@ -269,15 +285,17 @@ This convention applies both to short one-off commands and to longer multi-step 
 - [x] Merge completed cleanly with no conflicts.
 - [x] Rebased the local merge onto the updated GitHub plan checkpoint.
 - [x] Pushed synchronized v3.15.5 branch to GitHub as `72cf81c`.
-- [ ] Install/use the repository's Node/npm development dependencies so the baseline gate can actually run.
-- [ ] Run the baseline release gate after the merge.
+- [x] Verified repository-local toolchain versions.
+- [x] Restored tracked `dist/` after the intentionally failed global-tool build attempt.
+- [x] Ran the real baseline typechecks, Jest suite, Prettier check, and build using repository-local tools.
+- [ ] Format the active plan file with repository Prettier and commit the formatting fix.
+- [ ] Commit the v3.15.5-generated `dist/` updates produced by the successful baseline build.
 - [ ] Apply Fix 1 and its tests.
 - [ ] Run focused tests.
 - [ ] Apply Fix 2 and its race tests.
 - [ ] Run focused tests.
 - [ ] Apply Fixes 3–5 and corresponding contract assertions.
 - [ ] Run the full release gate.
-- [ ] Rebuild/commit `dist/` according to repository conventions.
 - [ ] Push the exact tested branch to GitHub.
 - [ ] Compare the final branch against the pre-fix branch and the parent `main`.
 - [ ] Install the exact pushed branch on the real Homebridge host.
@@ -289,11 +307,11 @@ This convention applies both to short one-off commands and to longer multi-step 
 Use the repository's canonical commands, including all of:
 
 ```bash
-tsc --noEmit -p tsconfig.json
-tsc -p tsconfig.roborockLib.json
-rimraf ./dist && tsc
-jest
-prettier --check .
+./node_modules/.bin/tsc --noEmit -p tsconfig.json
+./node_modules/.bin/tsc --noEmit -p tsconfig.roborockLib.json
+./node_modules/.bin/rimraf ./dist && ./node_modules/.bin/tsc
+npm test
+./node_modules/.bin/prettier --check .
 ```
 
 Definition of done also requires:
@@ -312,8 +330,6 @@ Definition of done also requires:
 
 **Branch state:** Mathias v3.15.5 has been merged cleanly into `schedule-refresh-recovery-final-fixes` and pushed to GitHub as `72cf81c`.
 
-**Baseline gate:** not yet executed because the current local shell reports `tsc`, `rimraf`, `jest`, and `prettier` as unavailable commands. This is an environment/dependency setup issue, not a source-code test failure.
+**Baseline:** **86/86 suites and 1,370/1,370 tests pass; both typechecks and build pass.** Prettier currently fails only because this active plan file itself needs formatting.
 
-**Functional final fixes:** not yet applied.
-
-**Next concrete action:** verify Node/npm and the repository's dependency installation state. Install dependencies with the repository's normal package-manager workflow if needed, then rerun the baseline gate. After the baseline is recorded, implement Fix 1 first because it protects existing HomeKit configuration from destructive failure handling. Then implement Fix 2, followed by the three minor cleanups and their focused tests. Update this plan after each checkpoint.
+**Next concrete action:** format the plan with the repository-local Prettier and commit the generated v3.15.5 `dist/` changes from the successful baseline build. Then start Fix 1 and its focused regression tests. Fix 1 must address both halves of the review: never unregister an existing schedule accessory on transient failure, and reattach handlers to restored schedule Switch services when initial cloud discovery fails. Update this plan after each checkpoint.
