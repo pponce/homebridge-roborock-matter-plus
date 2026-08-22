@@ -269,6 +269,31 @@ The baseline therefore shows **no functional/test/typecheck regression attributa
 
 For commands intended to run in the user's interactive SSH session, avoid using `set -e` as the primary error-control mechanism. A failing command under `set -e` can terminate the script immediately, and depending on how a script is invoked or sourced that can make the interactive SSH session appear to have been dropped. Prefer explicit exit-code capture, clear conditional continuation, and bounded diagnostic commands. The exact prior disconnect mechanism is not proven, so this is a precautionary workflow rule rather than a confirmed root cause.
 
+### GitHub Actions / generated `dist` lessons
+
+This repository has an automated GitHub Actions workflow that builds and commits generated `dist/` output. The following workflow should be treated as the standard procedure for future branches:
+
+1. **Assume a push may race the build workflow.** A perfectly valid local push can be rejected as non-fast-forward because GitHub Actions has inserted a generated-build commit after the previous remote tip.
+
+2. **Do not force-push.** On a rejection, fetch `origin` and inspect the new remote tip before doing anything else.
+
+3. **Inspect the bot commit itself before rebasing.** Use `git show --stat` and targeted `git diff` commands. Do not infer the contents of a `Build dist from source` commit from the commit message alone.
+
+4. **Rebase local work onto the remote build commit.** The normal sequence is:
+   `git fetch origin` → inspect remote-only commit → `git rebase origin/<branch>` → verify the expected checkpoint survived → `git push`.
+
+5. **Understand two-sided Git diffs correctly.** A command such as `git diff HEAD..origin/<branch>` compares two different tips. It can therefore show files as “reverted” relative to the local commit even when the remote bot commit itself changed only `dist/`. Inspect the bot commit with `git show` before concluding that automation overwrote source, tests, or plan content.
+
+6. **Treat ignored/generated `dist/` as workflow-owned output.** A local build can modify tracked/generated files even though `dist/` is ignored by `.gitignore`; GitHub Actions can stage them explicitly. Before committing local build output, verify the diff is exactly the compiled form of the intended source change.
+
+7. **Expect the local build to create a working-tree diff after a clean release gate.** That is not itself evidence of a source regression. Review the generated diff, then decide whether it belongs in the checkpoint and allow the repository workflow to produce the corresponding remote build commit.
+
+8. **Do not repeatedly rerun the full release gate solely because a rebase changed commit SHAs.** When the rebase only inserts the expected generated-build commit and the tested source/test tree is unchanged, verify the final tree and checkpoint contents rather than treating the new SHA as a new code change.
+
+9. **Keep documentation checkpoints in normal commits.** This makes it possible to rebase over generated-build commits while preserving the verified history of what was tested, which review items were completed, and which real-device checks remain.
+
+10. **When a push race happens near a release checkpoint, separate code correctness from synchronization.** First establish that the code/test tree passed its gate. Then synchronize the Git history with the generated-build commit. Do not mix a history race with a functional code change.
+
 ## GitHub-first / local-second workflow
 
 ### GitHub completed
@@ -441,6 +466,10 @@ Definition of done also requires:
 - Model is `Schedules`.
 - `dist/` reflects the tested source.
 - Real-device recovery behavior is checked where practical.
+
+### Operational workflow lessons captured
+
+The final-fixes work also established a repeatable synchronization procedure for this repository's automated `dist` build workflow: inspect remote bot commits, rebase rather than force-push, verify generated output independently, and preserve plan checkpoints through generated-build rebases.
 
 ## Current status — 2026-08-22
 
