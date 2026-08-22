@@ -61,7 +61,7 @@ function installDeprecationWarningFilter() {
 }
 installDeprecationWarningFilter();
 const Roborock = require("../roborockLib/roborockAPI").Roborock;
-const { getModelMarketingName } = require("../roborockLib/lib/deviceFeatures");
+const { getModelNameWithoutBrand } = require("../roborockLib/lib/deviceFeatures");
 /**
  * Roborock App Platform Plugin for Homebridge
  * Based on https://github.com/homebridge/homebridge-plugin-template
@@ -961,8 +961,11 @@ class RoborockPlatform {
         return this.matterVacuums.get(duid);
     }
     /**
-     * The model as a human should read it: "Roborock Qrevo S", not
+     * The model as a human should read it: "Qrevo S", not
      * "roborock.vacuum.a104" (#10).
+     *
+     * De-branded, because every caller sets `manufacturer = "Roborock"` on the
+     * same accessory — see the note on getModelNameWithoutBrand.
      *
      * Display only — see the note on MODEL_MARKETING_NAMES. Anything that
      * *compares* a model must keep reading `getProductAttribute` directly, and a
@@ -970,7 +973,7 @@ class RoborockPlatform {
      */
     getVacuumModel(duid) {
         const reported = this.roborockAPI.getProductAttribute(duid, "model");
-        return getModelMarketingName(reported) || reported || "Roborock Vacuum";
+        return getModelNameWithoutBrand(reported) || reported || "Roborock Vacuum";
     }
     getVacuumSerialNumber(duid) {
         return this.roborockAPI.getVacuumDeviceInfo(duid, "sn") || duid;

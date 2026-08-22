@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.HOME_SWITCH_SURFACE = exports.MATTER_SURFACE = void 0;
 const live_message_1 = require("./live_message");
 const timers_1 = require("./timers");
-const { getModelMarketingName } = require("../roborockLib/lib/deviceFeatures");
+const { getModelNameWithoutBrand } = require("../roborockLib/lib/deviceFeatures");
 const MATTER_CLEAN_MODE_COMMAND_TIMEOUT_MS = 2000;
 const MATTER_CLEAN_MODE_PREP_TIMEOUT_MS = 2500;
 // Commands reach this class from two places now: the Matter clusters, and the
@@ -870,6 +870,46 @@ class RoborockMatterVacuumAccessory {
      * when a warning is welcome — the plugin was asserting a block that did not
      * exist.
      *
+     * WHERE THE 2-MINUTE REPEAT COMES FROM, AND WHY IT IS NOT FIXABLE HERE.
+     * Measured against matter.js 0.18.0-alpha, the build Homebridge ships:
+     * writing the same `{ errorStateId: 68 }` three times in a row produces one
+     * change event and one attribute report, and the 2nd and 3rd writes are
+     * dropped in the store. The cluster's `OperationalError` event — the more
+     * likely trigger for a phone notification than the attribute — fires on the
+     * change only, for the same reason. This plugin also has no 2-minute timer
+     * anywhere in it; the only periodic write is the 60-second heartbeat above,
+     * which by that same measurement generates no traffic when nothing moved.
+     * So the repeat is Apple re-raising a block that is still standing, and the
+     * only lever on this side is not to assert the block. No timer in this
+     * plugin can produce a 68 → 0 → 68 cycle: the fault is computed from live
+     * data only, and the 2-minute OPTIMISTIC_STATE_TTL_MS is armed by a command,
+     * overlaid on the cluster payload after this has already run, and never
+     * carries operationalError.
+     *
+     * BUT THERE ARE EXACTLY TWO WAYS IT CAN STILL FLAP, and the second one is
+     * easy to miss because it is not in isWaterTankEmpty() at all. First, the
+     * tank reading itself flipping. Second — and this is the one vp-debug12
+     * described in #9 as "changes to ready momentarily and then activates the
+     * water error" — the AUTHORITY below switching. Which branch decides depends
+     * on the robot's live state, so a robot dipping in and out of a run state
+     * hands the decision back and forth between its own report and the user's
+     * selection, and when those two disagree the fault tracks the oscillation.
+     * Neither path is timed; both are the robot's own data moving.
+     *
+     * The log settles which, if any, is happening, but read it knowing that the
+     * "Matter publish for …" line is de-duplicated against the previous rendered
+     * line (lastLoggedMatterPublishLine): a steady fault appears ONCE and then
+     * the log goes quiet, so repeated identical lines are not what a stuck fault
+     * looks like. A flap looks like the `, fault=68 …` segment appearing and
+     * disappearing between lines — a cleared fault renders as no fault segment
+     * rather than as `fault=0`.
+     *
+     * AND DO NOT GATE THIS ON "A RUN WAS REQUESTED" EITHER, however tempting —
+     * in a mopping mode the sentence is still not quite true for a parked robot.
+     * Wazza151's confirmed case in #5 is a docked, idle robot with an empty
+     * tank, which is precisely the case such a gate would silence. Warning about
+     * an empty tank while the robot is parked is the point of the warning.
+     *
      * WHY "VACUUM IS SELECTED" IS NOT THE TEST. `selectedCleanMode` is not
      * persisted: it starts at CLEAN_MODE_VACUUM on every restart (measured 20
      * Aug), so reading it directly would silence the tank warning on every robot
@@ -1106,8 +1146,11 @@ class RoborockMatterVacuumAccessory {
         // model-string lookup made every one of them a mock-shape problem.
         const reportedModel = this.api.getProductAttribute(duid, "model") ||
             this.api.getVacuumDeviceInfo(duid, "model");
+        // De-branded, because `manufacturer` two lines up already says Roborock
+        // (#10). The last-resort string keeps the brand on purpose: it is a
+        // placeholder for "we know nothing", not a model name.
         this.accessory.model =
-            getModelMarketingName(reportedModel) ||
+            getModelNameWithoutBrand(reportedModel) ||
                 reportedModel ||
                 "Roborock Vacuum";
         this.accessory.serialNumber =
