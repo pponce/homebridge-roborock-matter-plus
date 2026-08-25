@@ -434,23 +434,38 @@ Source and regression-test commit: `2459ab5` (`Preserve schedule services across
 - No schedule-specific `setInterval` or permanent polling loop is present.
 - Generated changes are limited to `dist/hap_schedule_accessory.js`, `dist/platform.js`, and their source maps.
 
+## Final live validation
+
+Personal live-install commit: `5680bdff81affd6d49a99d25ef7afc72faba072f`.
+
+- The exact pushed commit was installed as `homebridge-roborock-matter@3.17.5`.
+- Installed generated JavaScript contained the separate `shutdown()`, `stopRuntime()`, and `removeScheduleServices()` paths.
+- After installation, the two schedule groups were repositioned in Home and Downtown Schedule 6 was renamed to `DRSched6`.
+- Homebridge was restarted without removing or re-pairing the HAP child bridge.
+- Both grouped schedule tiles retained their chosen Home-view positions.
+- The custom `DRSched6` name survived the restart and remained stored as the service's `ConfiguredName`.
+- The schedule cache retained both established manager UUID hashes: Downtown `a5df61bfb0` and Uptown `c236321840`.
+- All 15 schedule services remained present with the same previously recorded subtype hashes.
+- `ConfiguredName` coverage remained 15 of 15, including exactly one Home custom name.
+- Downtown remained synchronized at three enabled and four disabled schedules.
+- Uptown remained synchronized at eight enabled schedules.
+- After the fixed-build restart, Downtown Schedule 1 was disabled from Home and immediately became disabled in the Roborock app.
+- Downtown Schedule 1 was then enabled from Home and immediately became enabled in the Roborock app.
+- Logs recorded the primary disable command at 3:00:24 PM and primary enable command at 3:00:30 PM for ID `1652749161749`.
+- No `upd_timer` fallback, verification failure, or enable/disable error was logged for either command.
+
+The naming, state, write, restart, service-identity, custom-name, and Home-layout results are therefore confirmed in live use. The personal live-install branch is ready to remain as the installable branch with tracked generated artifacts.
+
 ## Remaining work
 
-- Commit this plan, the README test-count update, and generated `dist` separately from source/test commit `2459ab5`.
-- Push the personal `schedule-refresh-recovery-live-install` branch without force.
-- Install the exact pushed commit using `hb-service`.
-- Confirm the installed package is v3.17.5 and its generated JavaScript contains the shutdown/removal separation.
-- Rename one schedule through Home and record its service subtype and custom `ConfiguredName`.
-- Record the schedule manager UUID and ordered service subtypes before restart.
-- Restart Homebridge without removing or re-pairing the HAP bridge.
-- Confirm the custom name survives after closing and reopening Home.
-- Confirm the schedule groups retain their Home-view placement.
-- Confirm the manager UUID and ordered service subtypes remain identical after restart.
-- Confirm enabled and disabled schedules still match the Roborock app.
-- Test one intentional schedule toggle and confirm it changes in the Roborock app.
-- Update this plan with the pushed SHA and final live-test results.
+- Commit and push this final live-validation record on the personal `schedule-refresh-recovery-live-install` branch.
 - Create a clean pull-request branch directly from the latest `upstream/main`.
-- Squash the complete upstream-facing schedule change into one commit.
-- Exclude tracked `dist`, the personal generated-build workflow, and all personal working-plan Markdown files from the pull-request branch.
-- Preserve Mathias's upstream `README.md`, `ROADMAP.md`, `CHANGELOG.md`, and documentation tree, applying only the required generated README test-count update.
-- Run the complete canonical gate again after the final squash/rebase.
+- Reproduce only the final upstream-facing schedule changes; exclude the personal branch's historical experiments and reverted full-tuple hypothesis.
+- Squash the complete upstream-facing schedule implementation into one commit.
+- Exclude tracked `dist`, `.github/workflows/build-and-commit-dist.yml`, and all personal working-plan Markdown files.
+- Preserve Mathias's upstream `README.md`, `ROADMAP.md`, `CHANGELOG.md`, and documentation tree.
+- Apply only the required upstream-facing README documentation and generated test-count update.
+- Review the final one-commit diff for unrelated or historical personal changes.
+- Run the full canonical gate after the final squash: Prettier, both TypeScript projects, build, all tests, README test-count synchronization, final Prettier, and whitespace validation.
+- Push the clean branch to the fork without force.
+- Prepare a concise pull-request description following Mathias's preferences from pull request 12.
