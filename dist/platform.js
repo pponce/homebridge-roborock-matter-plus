@@ -149,7 +149,7 @@ class RoborockPlatform {
                 stateSensor.dispose();
             }
             for (const schedule of this.hapScheduleAccessories.values()) {
-                schedule.dispose();
+                schedule.shutdown();
             }
             if (this.roborockAPI) {
                 this.roborockAPI.stopService();
@@ -421,7 +421,7 @@ class RoborockPlatform {
     removeHapScheduleAccessories() {
         const scheduleAccessories = this.accessories.filter((accessory) => (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory));
         for (const schedule of this.hapScheduleAccessories.values()) {
-            schedule.dispose();
+            schedule.removeScheduleServices();
         }
         this.hapScheduleAccessories.clear();
         for (const accessory of scheduleAccessories) {
@@ -448,7 +448,7 @@ class RoborockPlatform {
         // coordinator cached so schedules can be rebuilt when re-enabled.
         if (!exposeSchedules) {
             for (const schedule of this.hapScheduleAccessories.values()) {
-                schedule.dispose();
+                schedule.removeScheduleServices();
             }
             return;
         }
@@ -482,7 +482,7 @@ class RoborockPlatform {
             for (const accessory of obsolete) {
                 const duid = accessory.context.duid;
                 if (duid) {
-                    (_b = this.hapScheduleAccessories.get(duid)) === null || _b === void 0 ? void 0 : _b.dispose();
+                    (_b = this.hapScheduleAccessories.get(duid)) === null || _b === void 0 ? void 0 : _b.removeScheduleServices();
                     this.hapScheduleAccessories.delete(duid);
                 }
                 const index = this.accessories.indexOf(accessory);
@@ -565,7 +565,7 @@ class RoborockPlatform {
     }
     removeHapScheduleAccessory(duid, accessory) {
         var _a;
-        (_a = this.hapScheduleAccessories.get(duid)) === null || _a === void 0 ? void 0 : _a.dispose();
+        (_a = this.hapScheduleAccessories.get(duid)) === null || _a === void 0 ? void 0 : _a.removeScheduleServices();
         this.hapScheduleAccessories.delete(duid);
         if (!accessory) {
             return;

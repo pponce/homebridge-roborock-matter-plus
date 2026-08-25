@@ -376,20 +376,81 @@ Source and regression-test commit: `d517891a124970246064f8c498fbf54ab88bab23` (`
 - Whitespace validation: passed.
 - Generated changes are limited to `dist/hap_schedule_accessory.js`, `dist/hap_schedule_api.js`, and their source maps.
 
+## Shutdown lifecycle correction
+
+### Final live-test finding
+
+The schedule naming metadata itself worked, but the final restart test exposed a separate HAP lifecycle defect.
+
+- A Home custom name of `DRSched6` reverted to `Downtown Rock Schedule 6` after Homebridge restarted.
+- Both vacuum schedule groups moved from their chosen positions in the Home view.
+- The manager accessory UUIDs remained stable, but normal shutdown removed every child Switch service and persisted each manager without schedule services.
+- Startup consequently recreated every schedule service.
+- Recreating those services discarded Home-owned `ConfiguredName` values and caused Home to recalculate the grouped tiles.
+
+### Correct lifecycle semantics
+
+Schedule state and schedule existence are distinct.
+
+- A schedule switched off in Roborock remains present and updates only its HAP `On` state to false.
+- A schedule switched on remains present and updates only its HAP `On` state to true.
+- A newly created Roborock schedule adds a new ID-derived HAP service.
+- A schedule deleted from Roborock is removed only after a successful authoritative snapshot no longer contains its ID.
+- A failed or untrusted refresh never removes a schedule.
+- Removing a robot unregisters its schedule manager.
+- Turning off schedule-switch exposure in plugin configuration intentionally removes the schedule services.
+- Normal Homebridge shutdown preserves the manager and every schedule service unchanged.
+
+### Implemented lifecycle separation
+
+Upstream v3.17.5 was merged into the personal live-install branch in commit `55680a6`.
+
+Source and regression-test commit: `2459ab5` (`Preserve schedule services across shutdown`).
+
+- Normal platform shutdown now calls `shutdown()`.
+- `shutdown()` stops in-memory work, invalidates in-flight refreshes, and clears runtime child objects without removing HAP services or updating the cached accessory topology.
+- Intentional feature or manager removal calls `removeScheduleServices()`.
+- Authoritative synchronization continues to remove only IDs deleted from Roborock.
+- Reinitialization clears the stopped state so a coordinator retained while the plugin setting is off can rebuild correctly when re-enabled.
+- Behavioral coverage proves that normal shutdown retains the same service objects and a Home custom name.
+- Behavioral coverage proves that an off schedule retains its service.
+- Behavioral coverage proves that an authoritative deleted ID removes only its own service.
+- Behavioral coverage proves that intentional schedule-exposure removal still removes Switch services.
+- The in-flight refresh generation guard remains active during shutdown.
+- No polling, cache TTL, failure backoff, request coalescing, verification behavior, or Roborock cloud-call cadence changed.
+
+### Fifth complete validation checkpoint
+
+- Plugin version after upstream merge: 3.17.5.
+- Focused schedule gate: 5 of 5 suites passed.
+- Focused schedule gate: 54 of 54 tests passed.
+- Prettier checks: passed.
+- Both TypeScript projects: passed.
+- Build and generated `dist`: passed.
+- Full Jest gate: 93 of 93 suites passed.
+- Full Jest gate: 1,520 of 1,520 tests passed.
+- README test-count synchronization updated both protected locations to 1,520.
+- Whitespace validation: passed.
+- No schedule-specific `setInterval` or permanent polling loop is present.
+- Generated changes are limited to `dist/hap_schedule_accessory.js`, `dist/platform.js`, and their source maps.
+
 ## Remaining work
 
-- Commit this corrected plan and generated `dist` separately from source/test commit `d517891`.
-- Push without force and inspect any GitHub Actions generated-build commit.
-- Reinstall the exact pushed `schedule-refresh-recovery-live-install` branch using `hb-service`.
-- Confirm the installed JavaScript sends the nested minimal server-timer payload.
-- Identify the two Downtown schedules whose Roborock-app state differs from `get_server_timer`.
-- Use the Roborock app to deliberately toggle each mismatched schedule and confirm the raw server snapshot returns to the intended three-enabled and four-disabled state.
-- Allow one legitimate coordinator refresh, then confirm Home matches the repaired server snapshot.
-- Test one previously nonworking Downtown schedule from Home.
-- Confirm the successful command is followed by one verification read and does not reach the fallback.
-- Restore Downtown Rock to its intended three-enabled and four-disabled state.
-- Restart Homebridge and confirm Home remains synchronized.
-- Confirm all schedule names remain unique after installation and restart.
-- Rename one schedule through Home, restart Homebridge, and confirm the custom name survives.
+- Commit this plan, the README test-count update, and generated `dist` separately from source/test commit `2459ab5`.
+- Push the personal `schedule-refresh-recovery-live-install` branch without force.
+- Install the exact pushed commit using `hb-service`.
+- Confirm the installed package is v3.17.5 and its generated JavaScript contains the shutdown/removal separation.
+- Rename one schedule through Home and record its service subtype and custom `ConfiguredName`.
+- Record the schedule manager UUID and ordered service subtypes before restart.
+- Restart Homebridge without removing or re-pairing the HAP bridge.
+- Confirm the custom name survives after closing and reopening Home.
+- Confirm the schedule groups retain their Home-view placement.
+- Confirm the manager UUID and ordered service subtypes remain identical after restart.
+- Confirm enabled and disabled schedules still match the Roborock app.
+- Test one intentional schedule toggle and confirm it changes in the Roborock app.
 - Update this plan with the pushed SHA and final live-test results.
-- Later create a clean upstream pull-request branch without tracked `dist` or working-plan Markdown files.
+- Create a clean pull-request branch directly from the latest `upstream/main`.
+- Squash the complete upstream-facing schedule change into one commit.
+- Exclude tracked `dist`, the personal generated-build workflow, and all personal working-plan Markdown files from the pull-request branch.
+- Preserve Mathias's upstream `README.md`, `ROADMAP.md`, `CHANGELOG.md`, and documentation tree, applying only the required generated README test-count update.
+- Run the complete canonical gate again after the final squash/rebase.
