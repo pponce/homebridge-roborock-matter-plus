@@ -243,6 +243,98 @@ describe("HAP schedule names and stable group identity", () => {
       ).value
     ).toBe("Weekend Downstairs");
   });
+
+  test("normal shutdown preserves service identity and a Home custom name", () => {
+    const platform = makePlatform();
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+
+    coordinator.sync([schedule("timer-1"), schedule("timer-2", false)]);
+
+    const firstService = switchService(accessory, "timer-1");
+    const secondService = switchService(accessory, "timer-2");
+
+    secondService
+      .getCharacteristic(Characteristic.ConfiguredName)
+      .setValue("Weekend Downstairs");
+
+    const originalServices = [...accessory.services];
+
+    coordinator.shutdown();
+
+    expect(accessory.services).toEqual(originalServices);
+    expect(switchService(accessory, "timer-1")).toBe(firstService);
+    expect(switchService(accessory, "timer-2")).toBe(secondService);
+    expect(platform.api.updatePlatformAccessories).not.toHaveBeenCalled();
+
+    const restoredCoordinator = makeCoordinator(platform, accessory);
+
+    expect(restoredCoordinator.restoreScheduleHandlersFromAccessory()).toBe(
+      true
+    );
+    expect(switchService(accessory, "timer-1")).toBe(firstService);
+    expect(switchService(accessory, "timer-2")).toBe(secondService);
+    expect(
+      secondService.getCharacteristic(Characteristic.ConfiguredName).value
+    ).toBe("Weekend Downstairs");
+  });
+
+  test("switching a schedule off updates state without removing its service", () => {
+    const platform = makePlatform();
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+
+    coordinator.sync([schedule("timer-1", true)]);
+
+    const service = switchService(accessory, "timer-1");
+    platform.api.updatePlatformAccessories.mockClear();
+
+    coordinator.sync([schedule("timer-1", false)]);
+
+    expect(switchService(accessory, "timer-1")).toBe(service);
+    expect(service.getCharacteristic(Characteristic.On).value).toBe(false);
+    expect(platform.api.updatePlatformAccessories).not.toHaveBeenCalled();
+  });
+
+  test("an authoritative deleted schedule removes only its own service", () => {
+    const platform = makePlatform();
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+
+    coordinator.sync([schedule("timer-1"), schedule("timer-2")]);
+
+    const retainedService = switchService(accessory, "timer-2");
+    platform.api.updatePlatformAccessories.mockClear();
+
+    coordinator.sync([schedule("timer-2")]);
+
+    expect(switchService(accessory, "timer-1")).toBeUndefined();
+    expect(switchService(accessory, "timer-2")).toBe(retainedService);
+    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledWith([
+      accessory,
+    ]);
+  });
+
+  test("intentional schedule exposure removal deletes switch services", () => {
+    const platform = makePlatform();
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+
+    coordinator.sync([schedule("timer-1"), schedule("timer-2", false)]);
+    platform.api.updatePlatformAccessories.mockClear();
+
+    coordinator.removeScheduleServices();
+
+    expect(
+      accessory.services.filter(
+        (service) => service.UUID === Service.Switch.UUID
+      )
+    ).toHaveLength(0);
+    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledWith([
+      accessory,
+    ]);
+  });
+
   test("a HAP write uses one minimal server-timer command and one verification read", async () => {
     jest.useFakeTimers();
 

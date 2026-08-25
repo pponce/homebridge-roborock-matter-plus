@@ -120,6 +120,7 @@ export default class RoborockHapScheduleAccessory {
 
   async initialize(vacuumName: string): Promise<RoborockScheduleRefreshResult> {
     this.vacuumName = vacuumName;
+    this.disposed = false;
 
     const displayName = `${vacuumName} Schedules`;
     this.managerAccessory.displayName = displayName;
@@ -479,7 +480,34 @@ export default class RoborockHapScheduleAccessory {
     this.lastScheduleRefreshAt = Date.now();
   }
 
-  dispose(): void {
+  /**
+   * Stop in-memory work without changing the cached HAP service topology.
+   * Normal Homebridge shutdown must preserve the same service instances so
+   * Home custom names, room placement, scenes, and automations survive.
+   */
+  shutdown(): void {
+    this.stopRuntime();
+  }
+
+  /**
+   * Intentionally remove every schedule service while preserving the manager.
+   * This is used only when schedule exposure is disabled or the manager is
+   * about to be unregistered. Individual schedules deleted from Roborock are
+   * removed separately by a successful authoritative sync.
+   */
+  removeScheduleServices(): void {
+    this.stopRuntime();
+
+    for (const service of [...this.managerAccessory.services]) {
+      if (service.UUID === this.platform.Service.Switch.UUID) {
+        this.managerAccessory.removeService(service);
+      }
+    }
+
+    this.platform.api.updatePlatformAccessories([this.managerAccessory]);
+  }
+
+  private stopRuntime(): void {
     this.disposed = true;
     this.refreshGeneration++;
     this.refreshInProgress = undefined;
@@ -492,16 +520,6 @@ export default class RoborockHapScheduleAccessory {
     }
 
     this.scheduleAccessories.clear();
-
-    // Keep the manager accessory registered so it can be rebuilt
-    // when schedules are enabled again.
-    for (const service of [...this.managerAccessory.services]) {
-      if (service.UUID === this.platform.Service.Switch.UUID) {
-        this.managerAccessory.removeService(service);
-      }
-    }
-
-    this.platform.api.updatePlatformAccessories([this.managerAccessory]);
   }
 
   private sync(schedules: RoborockSchedule[]): void {
