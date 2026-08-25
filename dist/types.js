@@ -17,6 +17,7 @@ exports.isHomeKitStateSensorKey = isHomeKitStateSensorKey;
 exports.HOMEKIT_ACTION_KEYS = [
     "clean",
     "dock",
+    "empty",
     "pause",
     "locate",
 ];

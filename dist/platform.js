@@ -214,6 +214,10 @@ class RoborockPlatform {
         if (typeof this.roborockAPI.recordRoborockDiagnosticMessage === "function") {
             this.roborockAPI.recordRoborockDiagnosticMessage(id, homeData);
         }
+        if (id === "DeviceCapabilities") {
+            this.reconcileActionSwitchesAfterCapabilityUpdate(homeData);
+            return;
+        }
         const scopedDuid = this.getScopedLiveMessageDuid(id, homeData);
         if (scopedDuid) {
             this.notifyVacuumByDuid(scopedDuid, id, homeData);
@@ -227,6 +231,24 @@ class RoborockPlatform {
         for (const vacuum of this.matterVacuums.values()) {
             this.notifyMatter(vacuum, id, homeData);
         }
+    }
+    /**
+     * Re-run the existing action-switch reconciliation after a live status poll
+     * has finished applying model capabilities such as an S7's auto-empty dock.
+     */
+    reconcileActionSwitchesAfterCapabilityUpdate(data) {
+        var _a;
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+            return;
+        }
+        const duid = String((_a = data.duid) !== null && _a !== void 0 ? _a : "");
+        if (!duid || !this.matterVacuums.has(duid)) {
+            return;
+        }
+        const devices = typeof this.roborockAPI.getVacuumList === "function"
+            ? this.roborockAPI.getVacuumList()
+            : [];
+        this.syncActionSwitches(Array.isArray(devices) ? devices : []);
     }
     notifyVacuumByDuid(duid, id, homeData) {
         const matterVacuum = this.matterVacuums.get(duid);

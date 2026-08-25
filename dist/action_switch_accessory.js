@@ -21,7 +21,7 @@ const SWITCH_AUTO_RESET_MS = 1500;
 /**
  * Every action a switch can expose.
  *
- * The table is the extension point. A fourth action is a row here plus an arm
+ * The table is the extension point. A new action is a row here plus an arm
  * in runHomeKitAction — no new class, no new registration path, no second
  * partition rule in the platform's accessory sweep.
  */
@@ -35,6 +35,11 @@ exports.ACTION_SWITCH_DEFINITIONS = [
         key: "dock",
         nameSuffix: "Return to Dock",
         summary: "sends the robot back to its dock",
+    },
+    {
+        key: "empty",
+        nameSuffix: "Empty Bin",
+        summary: "starts the auto-empty dock while the robot is docked",
     },
     {
         key: "pause",

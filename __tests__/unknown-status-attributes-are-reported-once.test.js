@@ -3,7 +3,7 @@
 // A robot with no per-model profile in `deviceFeatures.js` runs on the
 // capability-derived path, which works — but every `get_status` attribute the
 // profile does not name was warned about on *every* poll, one `log.warn` per
-// attribute. skmzwanke's Saros 10 (#8) produces eight of them, so at one poll
+// attribute. skmzwanke's Saros 10 (#8) produced eight of them, so at one poll
 // a minute that is ~11,500 warnings a day telling him to contact the dev about
 // the same eight fields. Both #6 and #8 were promised this would be quietened.
 //
@@ -16,20 +16,25 @@
 
 const { vacuum } = require("../roborockLib/lib/vacuum");
 
-// The fields the Saros 10 in #8 reports that no profile names, with the values
-// from the log in that issue.
+// The eight fields the Saros 10 in #8 reported have since all been added to
+// `deviceStates`, so they no longer answer the question this suite asks — a
+// mapped field is not warned about at all any more, which is the point of
+// `a-known-field-is-not-called-unmapped.test.js` and asserted there. What is
+// pinned here is the once-per-(robot, attribute) rule, so the fixture needs
+// fields that really are unknown to every table. These three are: they are the
+// genuine remainder of jcoz00's eighteen in #6, with his values.
 const UNMAPPED_SAROS_ATTRIBUTES = {
-  home_sec_status: 0,
-  home_sec_enable_password: 1,
-  extra_time: 286,
-  sterilize_status: 0,
-  rst: 0,
-  cleaning_info: { total: 1 },
-  exit_dock: 0,
-  seq_type: 0,
+  dtof_status: 0,
+  pet_reminding: 0,
+  sub_error_code: 0,
 };
 
-const MAPPED_ATTRIBUTES = { state: 8, battery: 100, charge_status: 1 };
+const MAPPED_ATTRIBUTES = {
+  state: 8,
+  battery: 100,
+  charge_status: 1,
+  dock_type: 1,
+};
 
 /**
  * An adapter whose profile knows only `MAPPED_ATTRIBUTES`, and which has a
@@ -69,6 +74,7 @@ function createAdapter(status, names = {}) {
     setStateChangedAsync: jest.fn(),
     isCleaning: () => false,
     manageDeviceIntervals: jest.fn(),
+    deviceNotify: jest.fn(),
     describeDevice: (duid) => names[duid] || String(duid),
     catchError: jest.fn((error) => {
       throw error;
@@ -91,6 +97,113 @@ function unmappedWarnings(adapter) {
 }
 
 describe("unmapped get_status attributes are reported once per robot", () => {
+  test("dock capability detection receives the dock type value", async () => {
+    const adapter = createAdapter(() => ({ ...MAPPED_ATTRIBUTES }));
+    // The Homebridge adapter deliberately has no ioBroker object database.
+    // Capability detection must happen even when this lookup returns nothing.
+    adapter.getObjectAsync.mockResolvedValue(undefined);
+    const robot = new vacuum(adapter, "roborock.vacuum.a08");
+
+    await poll(robot, "s7-duid");
+
+    expect(
+      adapter.vacuums["s7-duid"].features.processDockType
+    ).toHaveBeenCalledWith(1);
+    expect(adapter.deviceNotify).toHaveBeenCalledWith("DeviceCapabilities", {
+      duid: "s7-duid",
+    });
+    expect(
+      adapter.vacuums["s7-duid"].features.processDockType.mock
+        .invocationCallOrder[0]
+    ).toBeLessThan(adapter.deviceNotify.mock.invocationCallOrder[0]);
+  });
+
+  // The same rule as the unmapped-attribute warning above, applied to the
+  // other thing this loop emits per poll. `dock_type` rides along in nearly
+  // every `get_status`, so notifying the platform on each sighting re-ran
+  // `syncActionSwitches` about once a minute per robot. Harmless at default
+  // settings, because that sync returns early when no action switches are
+  // configured — but a user who had switched the Empty Bin action on for a
+  // robot whose dock cannot auto-empty got a debug line every minute per
+  // robot for it, which is the shape that once shrank the debug ring buffer
+  // to ninety minutes. Announce the dock type when it says something new.
+  describe("dock capability is announced on change, not on every poll", () => {
+    test("the first poll announces it", async () => {
+      const adapter = createAdapter(() => ({ ...MAPPED_ATTRIBUTES }));
+      adapter.getObjectAsync.mockResolvedValue(undefined);
+      const robot = new vacuum(adapter, "roborock.vacuum.a08");
+
+      await poll(robot, "s7-duid");
+
+      expect(adapter.deviceNotify).toHaveBeenCalledTimes(1);
+    });
+
+    test("twenty more polls of an unchanged dock announce nothing further", async () => {
+      const adapter = createAdapter(() => ({ ...MAPPED_ATTRIBUTES }));
+      adapter.getObjectAsync.mockResolvedValue(undefined);
+      const robot = new vacuum(adapter, "roborock.vacuum.a08");
+
+      for (let i = 0; i < 21; i++) {
+        await poll(robot, "s7-duid");
+      }
+
+      expect(adapter.deviceNotify).toHaveBeenCalledTimes(1);
+    });
+
+    test("detection itself still runs on every poll", async () => {
+      // Quietening the announcement must not quieten the detection behind it:
+      // `processDockType()` installs the robot's command table, and that has
+      // to survive whatever else re-derives features between polls.
+      const adapter = createAdapter(() => ({ ...MAPPED_ATTRIBUTES }));
+      adapter.getObjectAsync.mockResolvedValue(undefined);
+      const robot = new vacuum(adapter, "roborock.vacuum.a08");
+
+      for (let i = 0; i < 5; i++) {
+        await poll(robot, "s7-duid");
+      }
+
+      expect(
+        adapter.vacuums["s7-duid"].features.processDockType
+      ).toHaveBeenCalledTimes(5);
+    });
+
+    test("a dock that actually changes is announced again", async () => {
+      // Docking stations are swapped, and the S7 family reports the attached
+      // one from live status. A real change is the one thing the platform
+      // must never miss.
+      let dockType = 0;
+      const adapter = createAdapter(() => ({
+        ...MAPPED_ATTRIBUTES,
+        dock_type: dockType,
+      }));
+      adapter.getObjectAsync.mockResolvedValue(undefined);
+      const robot = new vacuum(adapter, "roborock.vacuum.a08");
+
+      await poll(robot, "s7-duid");
+      await poll(robot, "s7-duid");
+      expect(adapter.deviceNotify).toHaveBeenCalledTimes(1);
+
+      dockType = 1;
+      await poll(robot, "s7-duid");
+
+      expect(adapter.deviceNotify).toHaveBeenCalledTimes(2);
+    });
+
+    test("each robot is tracked separately", async () => {
+      const adapter = createAdapter(() => ({ ...MAPPED_ATTRIBUTES }));
+      adapter.getObjectAsync.mockResolvedValue(undefined);
+      const robot = new vacuum(adapter, "roborock.vacuum.a08");
+
+      await poll(robot, "robot-a");
+      await poll(robot, "robot-a");
+      await poll(robot, "robot-b");
+
+      expect(
+        adapter.deviceNotify.mock.calls.map((call) => call[1].duid)
+      ).toEqual(["robot-a", "robot-b"]);
+    });
+  });
+
   test("the first poll reports the unmapped attributes, naming the robot", async () => {
     const adapter = createAdapter(() => ({
       ...MAPPED_ATTRIBUTES,

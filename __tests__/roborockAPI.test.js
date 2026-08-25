@@ -2,6 +2,7 @@ const { Roborock } = require("../roborockLib/roborockAPI");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { deviceFeatures } = require("../roborockLib/lib/deviceFeatures");
 
 function createLog() {
   return {
@@ -21,6 +22,91 @@ function createRoborock(options = {}) {
 }
 
 describe("Roborock API model and diagnostics helpers", () => {
+  test("detects dust collection from either the dock type or robot features", () => {
+    const api = createRoborock();
+    api.getVacuumDeviceStatus = jest.fn(() => 1);
+    api.hasVacuumFeature = jest.fn(() => false);
+
+    expect(api.supportsDustCollection("device-1")).toBe(true);
+
+    api.getVacuumDeviceStatus.mockReturnValue(0);
+    api.hasVacuumFeature.mockReturnValue(true);
+    expect(api.supportsDustCollection("device-1")).toBe(true);
+
+    api.hasVacuumFeature.mockReturnValue(false);
+    expect(api.supportsDustCollection("device-1")).toBe(false);
+  });
+
+  test("the API dock list matches the dock types that install dust collection commands", () => {
+    const api = createRoborock();
+    api.hasVacuumFeature = jest.fn(() => false);
+    const adapter = {
+      config: { hostname_ip: "127.0.0.1" },
+      translations: {},
+      log: createLog(),
+      getVacuumDeviceInfo: jest.fn(() => "1.0"),
+      getProductAttribute: jest.fn(() => "roborock.vacuum.a15"),
+    };
+    const commandDockTypes = [];
+    const apiDockTypes = [];
+
+    for (let dockType = 0; dockType <= 9; dockType += 1) {
+      const features = new deviceFeatures(adapter, 0, "0", `dock-${dockType}`);
+      features.processDockType(dockType);
+      if (typeof features.commands.app_start_collect_dust !== "undefined") {
+        commandDockTypes.push(dockType);
+      }
+
+      api.getVacuumDeviceStatus = jest.fn(() => dockType);
+      if (api.supportsDustCollection("device-1")) {
+        apiDockTypes.push(dockType);
+      }
+    }
+
+    expect(apiDockTypes).toEqual(commandDockTypes);
+  });
+
+  test("detects an S7 auto-empty dock from cached named status when the schema omits dock_type", async () => {
+    const api = createRoborock();
+    await api.setStateAsync("HomeData", {
+      val: JSON.stringify({
+        products: [{ id: "product-1", schema: [{ id: 121, code: "state" }] }],
+        devices: [
+          {
+            duid: "device-1",
+            productId: "product-1",
+            deviceStatus: { 121: 8, dock_type: 1 },
+          },
+        ],
+        receivedDevices: [],
+      }),
+      ack: true,
+    });
+
+    expect(api.getVacuumDeviceStatus("device-1", "dock_type")).toBe(1);
+    expect(api.supportsDustCollection("device-1")).toBe(true);
+  });
+
+  test("forwards the auto-empty command through the normal vacuum command path", async () => {
+    const api = createRoborock();
+    api.bInited = true;
+    api.vacuums["device-1"] = {
+      command: jest.fn().mockResolvedValue(["ok"]),
+    };
+
+    await api.app_start_collect_dust("device-1", {
+      waitForResult: true,
+      throwOnError: true,
+    });
+
+    expect(api.vacuums["device-1"].command).toHaveBeenCalledWith(
+      "device-1",
+      "app_start_collect_dust",
+      null,
+      { waitForResult: true, throwOnError: true }
+    );
+  });
+
   test("prefers device-level model metadata when product metadata is incomplete", async () => {
     const api = createRoborock();
     await api.setStateAsync("HomeData", {

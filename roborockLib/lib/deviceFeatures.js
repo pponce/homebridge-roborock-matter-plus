@@ -68,6 +68,12 @@ const dockTypes = {
   7: "Empty Wash Fill Dry Dock (S8 Pro Ultra)",
   8: "Empty Wash Fill Dry Dock (Q Revo)",
   9: "Empty Wash Fill Dry Dock (Q Revo Pro)",
+  // Upstream python-roborock calls 20 `k1s_dock`. It reached this project as a
+  // diagnostics export from an a185 (Qrevo CurvX) owner in issue #6 — the
+  // first dock code ever seen here above 9 — and he confirmed the auto-empty
+  // by hand. Named for the capability he reported, not for the ones upstream's
+  // codename might imply: nobody has confirmed wash or dry on this dock.
+  20: "Auto-Empty Dock (K1S — Qrevo CurvX)",
 };
 
 const firmwareFeatures = {
@@ -175,6 +181,80 @@ const deviceStates = {
   // non-scalar.
   cleaning_info: "string",
 };
+
+// Every `get_status` field name a capability path can install into a robot's
+// own `deviceStates`. A per-model table starts as a copy of the pristine
+// baseline above and capability detection adds to it, so "absent from this
+// robot's table" and "unknown to this plugin" are two different questions.
+// `hasDeviceStatusAttribute()` only ever answered the first, and the unmapped-
+// field warning in vacuum.js asked it the second: jcoz00's Qrevo CurvX (#6)
+// was told the plugin has no mapping for eighteen fields and that a model
+// report is how they get added, when fifteen of the eighteen are named right
+// here and there was nothing for a report to add.
+//
+// This is a hand-written list, which is the defect shape the note at
+// matter_vacuum_accessory.ts:185 warns about. It is held shut from outside:
+// __tests__/a-known-field-is-not-called-unmapped.test.js scans this file for
+// `deviceStates.<field> =` writers and fails if one of them is missing below,
+// so a new capability cannot quietly reintroduce the wrong warning.
+const CAPABILITY_STATUS_ATTRIBUTES = new Set([
+  "avoid_count",
+  "back_type",
+  "camera_status",
+  "carpet_clean_mode",
+  "carpet_mode",
+  "charge_status",
+  "clean_fluid",
+  "clean_percent",
+  "collision_avoid_status",
+  "common_status",
+  "corner_clean_mode",
+  "distance_off",
+  "dry_status",
+  "dss",
+  "home_sec_enable_password",
+  "home_sec_status",
+  "in_warmup",
+  "kct",
+  "last_clean_t",
+  "map_flag",
+  "monitor_status",
+  "mop_forbidden_enable",
+  "mop_mode",
+  "rdt",
+  "repeat",
+  "replenish_mode",
+  "rss",
+  "switch_map_mode",
+  "switch_status",
+  "voice_chat_status",
+  "wash_phase",
+  "wash_ready",
+  "wash_status",
+  "water_box_carriage_status",
+  "water_box_custom_mode",
+  "water_box_mode",
+  "water_box_status",
+  "water_shortage_status",
+]);
+
+/**
+ * Whether this plugin knows the named `get_status` field at all — in the
+ * pristine baseline table or behind any capability gate.
+ *
+ * Deliberately not a method on `deviceFeatures`: the question is about the
+ * plugin, not about one robot's instance, and asking an instance is what
+ * produced the wrong warning in the first place.
+ *
+ * @param {string} attribute
+ * @returns {boolean}
+ */
+function isKnownStatusAttribute(attribute) {
+  return (
+    Object.prototype.hasOwnProperty.call(deviceStates, attribute) ||
+    CAPABILITY_STATUS_ATTRIBUTES.has(attribute)
+  );
+}
 
 // Shared shape for the work-time consumables that both consumablesInt and
 // consumablesString track identically.
@@ -732,7 +812,14 @@ class deviceFeatures {
     return {
       isWashThenChargeCmdSupported:
         ((this.features / Math.pow(2, 32)) >> 5) & 1,
-      isDustCollectionSettingSupported: !!(33554432 & this.features),
+      // Some classic robots (including the S7) omit the dock capability bit
+      // from HomeData and report the attached dock only in live get_status.
+      // processDockType() enables the dust-collection commands from that
+      // verified runtime value, so the public feature report must reflect the
+      // same per-robot command table rather than continuing to say "false".
+      isDustCollectionSettingSupported:
+        !!(33554432 & this.features) ||
+        Boolean(this.commands.app_start_collect_dust),
       isSupportedDrying: ((this.features / Math.pow(2, 32)) >> 15) & 1,
       isShakeMopSetSupported: !!(262144 & this.features),
       isVideoMonitorSupported: !!(8 & this.features), // I tested this for S7 MaxV, S8 MaxV
@@ -1386,6 +1473,15 @@ class deviceFeatures {
         this.isWashThenChargeCmdSupported();
         this.isSupportedDrying();
         break;
+      // K1S: a185 Qrevo CurvX. Auto-empty only, and deliberately so — its
+      // owner confirmed the dock empties the robot's bin (issue #6, 23 Aug
+      // 2026), which is the whole of what was asked and the whole of what is
+      // granted. Wash and dry are unconfirmed on this dock, and the a104
+      // suction level in issue #10 is what a capability granted on a table
+      // alone costs. Add them here on an owner's word, not on a codename's.
+      case 20:
+        this.isDustCollectionSettingSupported();
+        break;
       default:
         break;
     }
@@ -1561,6 +1657,7 @@ function getModelNameWithoutBrand(model) {
 module.exports = {
   deviceFeatures,
   errorCodes,
+  isKnownStatusAttribute,
   supportsMaxPlusFanPower,
   getModelMarketingName,
   getModelNameWithoutBrand,

@@ -325,6 +325,7 @@ const SIMPLE_VACUUM_COMMANDS = new Set([
   "stop_zoned_clean",
   "app_pause",
   "app_charge",
+  "app_start_collect_dust",
   "find_me",
   "app_segment_clean_by_ids",
   "load_multi_map",
@@ -981,9 +982,7 @@ class Roborock {
   }
 
   getRoomMappingsForDevice(duid) {
-    if (
-      this.getVacuumDeviceInfo(duid, "pv") === b01Q7Adapter.B01_PROTOCOL_VERSION
-    ) {
+    if (this.isB01Device(duid)) {
       return this.getB01RoomCache(duid).map((room) => ({
         segmentId: room.roomId,
         mapId: 0,
@@ -1024,9 +1023,7 @@ class Roborock {
     // the canonical mapId 0. Reporting 0 here keeps the Matter room-clean
     // flow from attempting a map switch (load_multi_map has no Q7
     // equivalent) before sending the segment command.
-    if (
-      this.getVacuumDeviceInfo(duid, "pv") === b01Q7Adapter.B01_PROTOCOL_VERSION
-    ) {
+    if (this.isB01Device(duid)) {
       return 0;
     }
 
@@ -2307,10 +2304,7 @@ class Roborock {
       this.vacuums[duid].getStatusIntervall = () => {
         // B01/Q7 status is owned by the dedicated 15s loop; the per-device
         // tick would only burn cycles hitting the attempt throttle.
-        if (
-          this.getVacuumDeviceInfo(duid, "pv") ===
-          b01Q7Adapter.B01_PROTOCOL_VERSION
-        ) {
+        if (this.isB01Device(duid)) {
           return null;
         }
         this.clearInterval(this.vacuums[duid].getStatusIntervalHandle);
@@ -2395,9 +2389,7 @@ class Roborock {
     // with no electronic mop/water control, so Matter must never expose mop
     // modes for them regardless of what the generic cloud schema claims.
     // Suction (Q7 "wind") is controllable via the B01 adapter.
-    if (
-      this.getVacuumDeviceInfo(duid, "pv") === b01Q7Adapter.B01_PROTOCOL_VERSION
-    ) {
+    if (this.isB01Device(duid)) {
       return {
         // Q7 robots mop with a manually filled tank: expose the mop/vacuum
         // mode switch, but never water-level status or control.
@@ -2451,6 +2443,22 @@ class Roborock {
           "isShakeMopStrengthSupported",
         ]),
     };
+  }
+
+  supportsDustCollection(duid) {
+    const dockType = Number(this.getVacuumDeviceStatus(duid, "dock_type"));
+    // 20 (upstream `k1s_dock`, the a185 Qrevo CurvX) is here because its owner
+    // confirmed the auto-empty in issue #6, not because upstream names the
+    // code. Upstream also names 10, 11, 13-19, 21-24 and 26; none of those has
+    // an owner report, so none of them is here. Keep this set and
+    // `processDockType()` in step — a code in one but not the other is a dock
+    // that either offers a switch it cannot drive or hides one it can.
+    const autoEmptyDockTypes = new Set([1, 3, 5, 6, 7, 8, 9, 20]);
+
+    return (
+      autoEmptyDockTypes.has(dockType) ||
+      this.hasVacuumFeature(duid, "isDustCollectionSettingSupported")
+    );
   }
 
   buildCommandOptions(options, extraDefaults = {}) {
@@ -4171,6 +4179,10 @@ class Roborock {
     await this.startCommand(duid, "app_charge", null, options);
   }
 
+  async app_start_collect_dust(duid, options) {
+    await this.startCommand(duid, "app_start_collect_dust", null, options);
+  }
+
   async find_me(duid, options) {
     await this.startCommand(duid, "find_me", null, options);
   }
@@ -5050,6 +5062,22 @@ class Roborock {
   }
 
   /**
+   * True when this robot speaks the B01/Q7 dialect rather than classic v1.
+   *
+   * Four places wrote this comparison out by hand before it had a name, and
+   * `vacuum.js` was about to need a fifth. It decides which wire protocol a
+   * robot speaks, so it gets one spelling.
+   *
+   * @param {string} duid
+   * @returns {boolean}
+   */
+  isB01Device(duid) {
+    return (
+      this.getVacuumDeviceInfo(duid, "pv") === b01Q7Adapter.B01_PROTOCOL_VERSION
+    );
+  }
+
+  /**
    * A device's name for log messages, falling back to the duid.
    *
    * The live-room success line already used the friendly name while the
@@ -5069,10 +5097,6 @@ class Roborock {
 
   getVacuumDeviceStatus(duid, property) {
     const propertyID = this.getVacuumSchemaId(duid, property);
-
-    if (propertyID == null) {
-      return "";
-    }
 
     // The device can disappear from HomeData between the schema lookup above
     // and this read (account changes, first start before HomeData persists).
@@ -5104,6 +5128,10 @@ class Roborock {
         return device.deviceStatus[propertyID];
       }
 
+      // get_status can contain useful named fields that are absent from a
+      // product's cloud schema. The S7's auto-empty dock is one measured case:
+      // it reports dock_type=1, but its schema has no dock_type entry. Let a
+      // missing schema ID fall through to this existing named-key lookup.
       if (device.deviceStatus[property] != undefined) {
         return device.deviceStatus[property];
       }

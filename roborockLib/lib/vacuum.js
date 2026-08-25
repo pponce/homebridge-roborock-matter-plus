@@ -5,6 +5,7 @@ const RRMapParser = require("./RRMapParser");
 const fs = require("fs");
 const zlib = require("zlib");
 const { describeDevice } = require("./describeDevice");
+const { isKnownStatusAttribute } = require("./deviceFeatures");
 
 // Minimum spacing between periodic (non-forced) get_status polls per robot.
 // MQTT push remains the primary live channel; this is the safety net that
@@ -137,6 +138,41 @@ class vacuum {
      * @type {Map<string, Set<string>>}
      */
     this.reportedUnmappedStatusAttributes = new Map();
+
+    /**
+     * The dock type last seen from a robot's live `get_status`, per duid.
+     *
+     * `processDockType()` is idempotent and cheap, so it keeps running on
+     * every poll. Telling the platform about it does not: the notification
+     * re-runs the HomeKit action-switch sync behind it. A robot that reports
+     * `dock_type` in every `get_status` — which is most of them — therefore
+     * re-announced unchanged capabilities roughly once a minute per robot,
+     * and a user who had opted the Empty Bin switch on for a robot without an
+     * auto-empty dock collected the "Not publishing the Empty Bin switch"
+     * debug line at that same rate. A dock type is worth announcing when it
+     * is new or has actually changed; a repeat of the same value cannot tell
+     * the platform anything it did not already act on.
+     *
+     * @type {Map<string, unknown>}
+     */
+    this.lastSeenDockType = new Map();
+  }
+
+  /**
+   * Record the dock type a robot just reported, and say whether it is news.
+   *
+   * @param {string} duid
+   * @param {unknown} dockType
+   * @returns {boolean} true on the first sighting, and on every real change
+   */
+  rememberDockType(duid, dockType) {
+    const isNews =
+      !this.lastSeenDockType.has(duid) ||
+      this.lastSeenDockType.get(duid) !== dockType;
+
+    this.lastSeenDockType.set(duid, dockType);
+
+    return isNews;
   }
 
   /**
@@ -559,18 +595,38 @@ class vacuum {
           // day to contact the dev about the same eight fields (#8).
           /** @type {string[]} */
           const newlyUnmappedAttributes = [];
+          let dockCapabilityUpdated = false;
 
           for (const attribute in deviceStatus[0]) {
             const isCleaning = this.adapter.isCleaning(
               deviceStatus[0]["state"]
             );
 
+            // Homebridge has no ioBroker object database, so getObjectAsync()
+            // below intentionally returns nothing and the inherited loop skips
+            // its state-writing path. Dock capability is runtime metadata, not
+            // an ioBroker state: apply it before that compatibility gate.
+            if (attribute === "dock_type") {
+              this.adapter.vacuums[duid].features.processDockType(
+                deviceStatus[0][attribute]
+              );
+              dockCapabilityUpdated = this.rememberDockType(
+                duid,
+                deviceStatus[0][attribute]
+              );
+            }
+
             if (
               !(await this.adapter.getObjectAsync(
                 `Devices.${duid}.deviceStatus.${attribute}`
               ))
             ) {
-              const isKnownStatusAttribute =
+              // Renamed from `isKnownStatusAttribute` on purpose: it is not
+              // what it used to be called. The feature profile answers "is
+              // this field switched on for THIS robot", which is a narrower
+              // question than "does this plugin know the field", and the old
+              // name invited the loop below to confuse the two.
+              const isEnabledForThisRobot =
                 typeof this.adapter.vacuums[duid].features
                   .hasDeviceStatusAttribute === "function" &&
                 this.adapter.vacuums[duid].features.hasDeviceStatusAttribute(
@@ -586,20 +642,45 @@ class vacuum {
               // on: fifty lines a minute, and the log ring — the thing you
               // need when something real goes wrong — held ninety minutes.
               //
-              // The distinction below is the part that carries information
-              // and it is untouched: an attribute nobody has mapped yet is
-              // still reported once, by name and value.
-              if (
-                !isKnownStatusAttribute &&
-                this.rememberUnmappedStatusAttribute(duid, attribute)
-              ) {
-                newlyUnmappedAttributes.push(
-                  `${attribute}=${describeStatusValue(deviceStatus[0][attribute])}`
+              // The distinction below is the part that carries information,
+              // and it now has three cases rather than two. Asking only the
+              // per-robot question is what sent jcoz00 (#6) after a model
+              // report for fifteen fields that were already mapped: his Qrevo
+              // CurvX sends them, his robot's capability detection never
+              // switched them on, and the warning read that as "this plugin
+              // has no mapping for them". A warning that says "no mapping"
+              // and points at GitHub is only true of a field no table
+              // anywhere names — which for his robot was three of eighteen.
+              const isKnownToPlugin = isKnownStatusAttribute(attribute);
+
+              if (!isEnabledForThisRobot) {
+                const isFirstSighting = this.rememberUnmappedStatusAttribute(
+                  duid,
+                  attribute
                 );
-              } else if (!isKnownStatusAttribute) {
-                this.adapter.log.debug(
-                  `Unmapped get_status attribute ${attribute}=${describeStatusValue(deviceStatus[0][attribute])} for ${describeDevice(this.adapter, duid)}; already reported, not repeating.`
-                );
+
+                if (isKnownToPlugin) {
+                  // Worth seeing once when we go looking — a gate that did not
+                  // fire for a field the robot demonstrably sends is a lead —
+                  // but not worth waking a user for, and nothing they can act
+                  // on. Repeats are silent rather than a debug line: the field
+                  // is mapped and the gate is not going to change mid-run, so
+                  // a per-poll line would be fifteen of them a minute on a
+                  // Qrevo CurvX saying nothing the first one did not.
+                  if (isFirstSighting) {
+                    this.adapter.log.debug(
+                      `get_status attribute ${attribute}=${describeStatusValue(deviceStatus[0][attribute])} arrived from ${describeDevice(this.adapter, duid)}, but this robot's capability detection did not switch it on. This plugin maps the field, so there is nothing to report.`
+                    );
+                  }
+                } else if (isFirstSighting) {
+                  newlyUnmappedAttributes.push(
+                    `${attribute}=${describeStatusValue(deviceStatus[0][attribute])}`
+                  );
+                } else {
+                  this.adapter.log.debug(
+                    `Unmapped get_status attribute ${attribute}=${describeStatusValue(deviceStatus[0][attribute])} for ${describeDevice(this.adapter, duid)}; already reported, not repeating.`
+                  );
+                }
               }
               continue; // skip unsupported attributes
             }
@@ -620,7 +701,7 @@ class vacuum {
 
             switch (attribute) {
               case "dock_type":
-                this.adapter.vacuums[duid].features.processDockType(attribute);
+                // Applied above, before the ioBroker object-compatibility gate.
                 break;
               case "dss":
                 await this.adapter.createDockingStationObject(duid);
@@ -702,9 +783,32 @@ class vacuum {
             );
           }
 
+          // Classic S7-family robots report their dock type in the first live
+          // get_status response, after HomeData discovery has already built
+          // the Matter accessory and run the initial HomeKit switch sync. Tell
+          // the platform only after processDockType() has applied the feature,
+          // so an opt-in Empty Bin switch can be reconciled from verified live
+          // capability instead of a timer or a model-name guess.
+          if (dockCapabilityUpdated && this.adapter.deviceNotify) {
+            this.adapter.deviceNotify("DeviceCapabilities", { duid });
+          }
+
           this.adapter.manageDeviceIntervals(duid);
         }
       } else if (parameter == "get_room_mapping") {
+        // Room data on B01/Q7 robots travels over the protobuf map channel,
+        // and `get_room_mapping` itself is answered from the dialect's neutral
+        // table without touching the network — so this branch looked free.
+        // It is not: it opens by fetching `get_status` to read `map_status`,
+        // a v1-only field that Q7 status dictionaries have never carried, and
+        // on B01 `get_status` translates to a real `prop.get`. That is one
+        // cloud round-trip per poll cycle per robot spent on an answer this
+        // code cannot read — reported under the caller's label, which is why
+        // #14's log line names `get_room_mapping` but times out on `prop.get`.
+        if (this.adapter.isB01Device?.(duid)) {
+          return;
+        }
+
         const deviceStatus = await sendParameterRequest("get_status", []);
         const mapStatus = Array.isArray(deviceStatus)
           ? deviceStatus[0]?.["map_status"]

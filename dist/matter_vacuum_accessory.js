@@ -696,6 +696,11 @@ class RoborockMatterVacuumAccessory {
      * published in the first place.
      */
     supportsHomeKitAction(action) {
+        if (action === "empty") {
+            return (typeof this.api.app_start_collect_dust === "function" &&
+                typeof this.api.supportsDustCollection === "function" &&
+                this.api.supportsDustCollection(this.getDuid()));
+        }
         if (action === "locate") {
             return typeof this.api.find_me === "function";
         }
@@ -1082,6 +1087,9 @@ class RoborockMatterVacuumAccessory {
                 return;
             case "dock":
                 await this.returnToDock(exports.HOME_SWITCH_SURFACE);
+                return;
+            case "empty":
+                await this.emptyDustBin(exports.HOME_SWITCH_SURFACE);
                 return;
             case "pause":
                 await this.pauseCleaning(exports.HOME_SWITCH_SURFACE);
@@ -1519,6 +1527,20 @@ class RoborockMatterVacuumAccessory {
         };
         this.setAndScheduleOptimisticState(state, "return to dock");
         this.dispatchRoborockMatterCommand("return to dock", () => this.api.app_charge(this.getDuid(), this.getMatterCommandOptions()), { retryReturnToDockIfStillActive: true, surface });
+    }
+    async emptyDustBin(surface) {
+        if (!this.isDockedOrChargingNow()) {
+            this.platform.log.info(`Emptying ${this.getVacuumName()}'s dust bin from ${surfacePhrase(surface)} despite a snapshot that does not show it docked; the cached state may be stale.`);
+        }
+        else {
+            this.platform.log.info(`Emptying ${this.getVacuumName()}'s dust bin from ${surfacePhrase(surface)}.`);
+        }
+        const startDustCollection = this.api.app_start_collect_dust;
+        if (typeof startDustCollection !== "function") {
+            this.platform.log.warn(`Not emptying ${this.getVacuumName()} from ${surfacePhrase(surface)} because the auto-empty command is unavailable.`);
+            return;
+        }
+        this.dispatchRoborockMatterCommand("empty dust bin", () => startDustCollection.call(this.api, this.getDuid(), this.getMatterCommandOptions()), { surface });
     }
     scheduleMatterStateUpdate(reason, optimisticGeneration) {
         if (!this.registered) {

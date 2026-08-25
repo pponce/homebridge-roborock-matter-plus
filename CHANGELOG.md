@@ -1,5 +1,69 @@
 # Changelog
 
+## 3.17.4
+
+**The "no mapping for these fields" warning no longer asks you to report fields this plugin already maps.** Raised by the log [@jcoz00](https://github.com/jcoz00) posted in [#6](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/6), whose Qrevo CurvX was told the plugin has no mapping for **eighteen** `get_status` fields and that a GitHub model report quoting the line is how they get added. Fifteen of those eighteen are named in `deviceFeatures.js` already. There was nothing for a report to add, and the three fields that genuinely were news sat buried in a list of fifteen that were not.
+
+The message was asking the wrong question. A robot's status table starts as a copy of the plugin's baseline and capability detection adds to it, so "this field is not switched on for **this robot**" and "this plugin has never heard of this field" are different questions — and only the second one is worth a user's time. The warning asked the first and reported the answer as the second.
+
+Each case now says what it means. A field no table anywhere names is still warned about once, by name and value, and still worth a model report; for the CurvX that is three fields rather than eighteen. A field the plugin maps but this robot's capability gate did not switch on is a debug line that says so, once per field per robot, and does not point anyone at GitHub. The repeat line that followed it on every subsequent poll is gone for that case — fifteen lines a minute saying nothing the first one did not.
+
+**This quietens [#8](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/8) entirely as a side effect.** All nine fields [@skmzwanke](https://github.com/skmzwanke)'s Saros 10 was warned about have since been added, so that warning had been asking for work that was already done. It now says nothing at all.
+
+Nothing about which fields are read, published or acted on changed — this release changes only what the log claims. The declared set of capability-installable fields is derived from the source by a test that scans for every writer, so a new capability cannot reintroduce the wrong warning without the suite failing.
+
+## 3.17.3
+
+**Q7- and Q10-series robots no longer spend a cloud request per poll on an answer the plugin cannot read.** Reported with a diagnostics export by [@niclasreich](https://github.com/niclasreich) in [#14](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/14), whose Q10 S5 (`roborock.vacuum.ss07`) logged `Failed to execute get_room_mapping … method prop.get timed out after 10 seconds` while the MQTT connection was reported as up.
+
+The two method names in that line disagree, and that was the clue. `get_room_mapping` is the caller's label; `prop.get` is what actually went on the wire. The classic room-mapping routine opens by fetching `get_status` in order to read `map_status` and derive a floor number — and on these robots `get_status` translates to a real `prop.get`. `map_status` is a v1-only field that a Q7/Q10 status dictionary has never carried, so the reply could not have been used whatever it said. The request itself was already answered locally from the dialect's neutral table without touching the network, which is exactly why the existing skip did not catch this: the harmless call was making a second, expensive one.
+
+The classic flow is now skipped outright for these robots, which is where their room data was never coming from in the first place — it arrives over the protobuf map channel. That removes one cloud round-trip per poll cycle per robot, along with the `No room mappings returned` notice and the empty room-list announcement that repeated at the same rate. Robots on the classic protocol are unaffected and still read `map_status` exactly as before.
+
+**This does not by itself explain a robot that ignores commands from Apple Home**, which is the other half of that report; it removes a wasted request and the misleading error line it produced.
+
+## 3.17.2
+
+**The Qrevo CurvX's dock can now offer the Empty Bin switch.** Reported with a diagnostics export, and then settled by hand, by [@jcoz00](https://github.com/jcoz00) in [#6](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/6). His a185 reports `dock_type: 20`, and the dock table this plugin inherited stops at 9 — so the CurvX fell through to "unknown dock" and was treated as having no auto-empty capability, which kept the optional Empty Bin switch added in 3.17.0 from ever being offered for it. Dock type 20 is now a named, recognised auto-empty dock.
+
+The switch is still opt-in and still off by default, so nothing changes for anyone who has not asked for it.
+
+**Only the auto-empty is granted, and only because its owner confirmed it.** Upstream also names a dozen dock codes above 9 that this project has had no report for, and none of those was added — a capability granted on a table alone is what cost a Q Revo S owner a suction level its robot does not have in [#10](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/10). Wash and dry are unconfirmed on this dock and stay unclaimed. A test now pins both halves: dock type 20 is in the set because an owner said so, and the codes nobody has reported stay out until one does.
+
+## 3.17.1
+
+**Closing the plugin's settings page could print a Node crash dump into your Homebridge log.** Reported with the log to prove it by [@jcoz00](https://github.com/jcoz00) in [#6](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/6). The Homebridge UI runs the settings-page server as a child process and closes its IPC channel the moment the page goes away; every reply that server sends is a `process.send()`, including the `ready()` handshake it fires before serving a single request. A send that loses the race against that close is reported asynchronously as an unhandled `'error'` event, which is fatal — so a closed settings page ended in `Error: write EPIPE`, a stack trace and a `Node.js v24.19.0` banner in the log. Nothing was broken and nothing in the log said so. A dead channel now ends that child process quietly; every other error stays exactly as loud as it was.
+
+**A robot's dock capability is announced when it changes, instead of on every poll.** `dock_type` rides along in nearly every `get_status`, and 3.17.0 told the platform about it each time, re-running the HomeKit action-switch sync roughly once a minute per robot. At default settings that sync returns immediately, but anyone who had switched the Empty Bin action on for a robot whose dock cannot auto-empty collected a `Not publishing the Empty Bin switch…` debug line every minute per robot — enough to shorten the useful reach of the debug log. Detection itself still runs on every poll; only the announcement is gated, and a dock type that genuinely changes is still announced.
+
+## 3.17.0
+
+**Compatible auto-empty docks can now expose an optional Empty Bin action switch in Apple Home.** Contributed by [@jbyhb](https://github.com/jbyhb) in [#13](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/13). It uses the same opt-in HomeKit action-switch bridge as Start, Dock, Pause and Find, appears only when the robot reports dust-collection support, and sends the dock's native `app_start_collect_dust` command through the normal confirmed command path. A cached status that does not show the robot docked is advisory rather than a hard gate: the robot is the authoritative judge and its refusal follows the existing command-error path.
+
+**Live dock-type capability detection is fixed.** Found and fixed by [@jbyhb](https://github.com/jbyhb). The inherited status handler passed the literal field name `"dock_type"` to `processDockType()` instead of the numeric value reported by the robot, so that path never enabled any dock capability. Worse, under Homebridge the surrounding loop never reached the call at all: the branch sits behind an ioBroker object-database check that can only fail here, so it was dead code on top of a wrong argument. The live value now reaches the feature detector before that compatibility gate, allowing classic robots such as the S7 to expose capabilities their HomeData feature bits omit. A cross-layer test pins the auto-empty dock types so the API's early-discovery list and the command table cannot drift apart.
+
+## 3.16.0
+
+**The schedules you built in the Roborock app are now switches in Apple Home — the project's first feature from an outside contributor.** Contributed by [@pponce](https://github.com/pponce) over four review rounds, requested in [#3](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/3).
+
+A Roborock schedule has always been invisible to Apple Home. You could build a weekday morning clean in the Roborock app, but nothing in the Home app could see it, so no automation could suspend it while you were away — the only way to pause a schedule was to open the Roborock app and do it by hand.
+
+Turn on **Add Home app schedule switches** and each robot gains a grouped `<robot> Schedules` accessory holding one switch per schedule on your account. Off disables that schedule on the Roborock side; on enables it again. Unlike the action switches these are not momentary — each one reports whether its schedule is currently active, so "is the weekday clean on?" is answerable from the Home app.
+
+- **They enable and disable; they do not author.** Days, times, rooms and clean modes stay in the Roborock app, because that is where those settings live. A schedule deleted there takes its switch with it on the next refresh, and a new one gains a switch the same way.
+- **Switches are named positionally** — `<robot> Schedule 1`, `Schedule 2` — because the Roborock cloud does not give schedules names to borrow. Rename them in the Home app if the order is not enough.
+- **Off by default,** because turning it on adds accessories to your Home app. Like the action switches, these are HomeKit accessories on the plugin's child bridge and need their own pairing — not the robot's Matter code.
+
+**A failed schedule refresh no longer deletes the tiles.** This is the part worth reading even if you never turn the feature on, because it is the failure mode the review rounds were spent on. An earlier revision unregistered the schedule accessory whenever the cloud request failed, and a transient Roborock timeout is not evidence that your schedules are gone. An accessory that disappears takes its room assignment, its name and every automation pointing at it with it, and none of that comes back when the next refresh succeeds. Three outcomes are now told apart:
+
+- **The cloud answered and reported schedules** — sync them, nothing else.
+- **The cloud answered and reported no schedules** — the account genuinely has none, so removing the accessory is correct.
+- **The request failed** — keep the switches Homebridge restored from its cache and reattach their handlers, so they heal themselves on the next successful read instead of being torn down.
+
+**A verification read can no longer join a refresh that started before the write it is verifying.** Writes are coalesced against in-flight refreshes, and a `verify()` that attached to an older request could observe pre-write state and roll a successful write back. The refresh now records when it started, and a verification only joins one started at or after its own write.
+
+**Also in this release:** the plugin's own settings schema documented every one of its 26 options except the new one; that description now exists, and the feature is documented in the README alongside the action switches and sensors rather than only in the changelog.
+
 ## 3.15.5
 
 **B01 is two protocol families, and this plugin treated them as one.**
