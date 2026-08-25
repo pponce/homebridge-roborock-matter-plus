@@ -311,16 +311,66 @@ Follow-up source/test commit: `dc54094` (`Initialize empty schedule configured n
 - The build changed only `dist/hap_schedule_accessory.js` and its source map.
 - The generated JavaScript contains exactly the two empty or whitespace-only `ConfiguredName` checks compiled from the TypeScript source.
 
+## Full timer-tuple schedule write correction
+
+### Confirmed naming result
+
+- After force-closing and reopening Apple Home, all 15 schedule services displayed unique vacuum-specific names.
+- The Homebridge cache contained a non-empty deterministic `ConfiguredName` for all 15 services.
+- After a Homebridge restart, the unique schedule names remained intact.
+- The schedule manager UUID hashes remained stable across restart.
+- The schedule naming and identity correction is therefore confirmed in live HomeKit use.
+
+### Separate Downtown schedule-write defect
+
+Downtown Rock exposed seven schedules. The Roborock app showed three enabled and four disabled, while the server timer snapshot and Home showed five enabled and two disabled.
+
+- Schedule 2, ID `1652749234966`, could be disabled and enabled from Home and changed correctly in the Roborock app.
+- Schedule 6, ID `1652975049275`, appeared to accept the same commands and verification refreshes but did not change in the Roborock app.
+- The verification read used the same server timer snapshot that had accepted the incomplete write, so it could report success without proving that the complete Roborock schedule was updated.
+
+### Root cause
+
+The schedule parser retained the complete timer tuple in `schedule.timer`, but the write path discarded every field except the timer ID and status. It sent only `[[timerId, status]]` to `upd_server_timer`.
+
+Earlier implementation history explicitly required the complete timer tuple with only its status field changed. Reducing a complex schedule to its ID and status could update the server snapshot while failing to apply the complete schedule in the Roborock app.
+
+### Implemented correction
+
+Source and regression-test commit: `b1aaa0df25e397b88faa336cb3d3c38cadddb34d` (`Preserve complete schedule timer tuples`).
+
+- The HAP write handler now passes its complete stored `schedule.timer` tuple.
+- `updateServerTimer` copies the tuple without mutating the cached source.
+- Only tuple index 1 is changed to `on` or `off`.
+- The complete updated tuple is sent as the sole `upd_server_timer` command parameter.
+- The command log reports `timerTupleLength` without exposing the full schedule contents.
+- API-level coverage verifies tuple preservation and input immutability.
+- HAP-level coverage verifies that the actual switch write handler sends the complete stored tuple.
+- No polling, refresh cadence, cache lifetime, failure backoff, or cloud-call frequency was changed.
+
+### Third complete validation checkpoint
+
+- Source and regression-test commit: `b1aaa0d`.
+- Prettier checks: passed.
+- TypeScript checks: passed.
+- Build and generated `dist`: passed.
+- Full Jest gate: 92 of 92 suites passed.
+- Full Jest gate: 1,512 of 1,512 tests passed.
+- README test-count synchronization updated both locations from 1,510 to 1,512.
+- Whitespace validation: passed.
+- Generated changes are limited to `dist/hap_schedule_accessory.js`, `dist/hap_schedule_api.js`, and their source maps.
+
 ## Remaining work
 
-- Commit the live-install plan and generated `dist` checkpoint separately from source/test commit `dc54094`.
+- Commit this plan, the README test-count update, and generated `dist` separately from source/test commit `b1aaa0d`.
 - Push without force and inspect any GitHub Actions generated-build commit.
 - Reinstall the exact pushed `schedule-refresh-recovery-live-install` branch using `hb-service`.
-- Test the currently paired HAP bridge before considering another removal and re-pair.
-- Confirm the Homebridge cache now persists a unique non-empty `ConfiguredName` for every schedule service.
-- Confirm Home displays unique vacuum-specific schedule names after startup and after another Homebridge restart.
+- Test one previously nonworking Downtown schedule, preferably Schedule 6 with ID `1652975049275`.
+- Confirm its command log reports a complete tuple length greater than two.
+- Confirm the Roborock app now reflects the intentional Home switch change.
+- Restore Downtown Rock to its intended three-enabled and four-disabled schedule state.
+- Restart Homebridge and confirm Home remains synchronized with that intended state.
+- Confirm all schedule names remain unique after the new installation and restart.
 - Rename one schedule through Home, restart Homebridge, and confirm the custom name survives.
-- Avoid incidental tile taps while inspecting names; use long-press to open accessory details.
-- Restore and verify the intended Downtown Rock schedule states independently from naming validation.
 - Update this plan with the pushed SHA and final live-test results.
 - Later create a clean upstream pull-request branch without tracked `dist` or working-plan Markdown files.

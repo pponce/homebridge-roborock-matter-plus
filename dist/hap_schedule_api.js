@@ -29,23 +29,25 @@ async function updateServerTimer(api, duid, timer, enabled, options = {}) {
     if (typeof timerId !== "string" && typeof timerId !== "number") {
         throw new Error(`Invalid Roborock schedule ID: ${String(timerId)}`);
     }
+    const updatedTimer = Array.isArray(timer)
+        ? [...timer]
+        : [timerId, enabled ? "on" : "off"];
+    updatedTimer[1] = enabled ? "on" : "off";
     const requestOptions = scheduleRequestOptions({
         ...options,
         waitForResult: true,
         throwOnError: true,
     });
-    // Roborock's `upd_server_timer` contract expects the timer tuple as the
-    // first (and only) command parameter: [[timerId, "on"|"off"]]. The shared
-    // vacuum API's historical updateServerTimer helper flattened that tuple to
-    // [timerId, status], which is accepted by some paths but does not update the
-    // schedule in the Roborock app. Keep the HAP schedule integration isolated
-    // from that upstream helper and send the exact cloud command shape here.
+    // Roborock's `upd_server_timer` contract expects the complete timer tuple
+    // as its first and only command parameter. A minimal [timerId, status] tuple
+    // can update the server snapshot without applying every schedule family in
+    // the Roborock app. Preserve every returned field and change only status.
     const vacuum = (_a = api.vacuums) === null || _a === void 0 ? void 0 : _a[duid];
     if (typeof (vacuum === null || vacuum === void 0 ? void 0 : vacuum.command) === "function") {
-        return vacuum.command(duid, "upd_server_timer", [[timerId, enabled ? "on" : "off"]], requestOptions);
+        return vacuum.command(duid, "upd_server_timer", [updatedTimer], requestOptions);
     }
     if (typeof api.startCommand === "function") {
-        return api.startCommand(duid, "upd_server_timer", [[timerId, enabled ? "on" : "off"]], requestOptions);
+        return api.startCommand(duid, "upd_server_timer", [updatedTimer], requestOptions);
     }
     if (typeof api.updateServerTimer === "function") {
         return api.updateServerTimer(duid, timerId, enabled, requestOptions);
