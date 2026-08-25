@@ -184,9 +184,7 @@ describe("HAP schedule names and stable group identity", () => {
 
     secondService.displayName = "Switch 1";
     secondService.setCharacteristic(Characteristic.Name, "Switch 1");
-    secondService
-      .getCharacteristic(Characteristic.ConfiguredName)
-      .setValue("Switch 1");
+    secondService.getCharacteristic(Characteristic.ConfiguredName).setValue("");
 
     firstService
       .getCharacteristic(Characteristic.ConfiguredName)

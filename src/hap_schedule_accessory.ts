@@ -631,6 +631,7 @@ class RoborockHapScheduleSwitchAccessory {
 
     if (
       currentConfiguredName == null ||
+      String(currentConfiguredName).trim().length === 0 ||
       String(currentConfiguredName) === displayName
     ) {
       configuredName.setValue(displayName);
@@ -676,6 +677,7 @@ class RoborockHapScheduleSwitchAccessory {
       const currentConfiguredName = configuredName.value;
       if (
         currentConfiguredName == null ||
+        String(currentConfiguredName).trim().length === 0 ||
         String(currentConfiguredName) === String(previousServiceName)
       ) {
         configuredName.setValue(displayName);
