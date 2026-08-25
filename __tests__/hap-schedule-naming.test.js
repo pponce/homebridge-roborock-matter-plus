@@ -243,7 +243,7 @@ describe("HAP schedule names and stable group identity", () => {
       ).value
     ).toBe("Weekend Downstairs");
   });
-  test("a HAP write sends the complete stored timer tuple", async () => {
+  test("a HAP write uses one minimal server-timer command and one verification read", async () => {
     jest.useFakeTimers();
 
     try {
@@ -257,13 +257,7 @@ describe("HAP schedule names and stable group identity", () => {
 
       const accessory = new FakeAccessory("Test Vacuum Schedules");
       const coordinator = makeCoordinator(platform, accessory);
-      const timer = [
-        "timer-complex",
-        "off",
-        "0 30 9 * * 1",
-        ["app_segment_clean", [16, 17]],
-        { repeat: 2 },
-      ];
+      const timer = ["timer-complex", "off", 1];
 
       coordinator.sync([
         {
@@ -275,7 +269,7 @@ describe("HAP schedule names and stable group identity", () => {
       coordinator.refreshAndGetSchedule = jest.fn().mockResolvedValue({
         id: "timer-complex",
         enabled: true,
-        timer: [timer[0], "on", ...timer.slice(2)],
+        timer: ["timer-complex", "on", 1],
       });
 
       const onCharacteristic = switchService(
@@ -287,18 +281,11 @@ describe("HAP schedule names and stable group identity", () => {
       await jest.advanceTimersByTimeAsync(3000);
       await writePromise;
 
+      expect(command).toHaveBeenCalledTimes(1);
       expect(command).toHaveBeenCalledWith(
         "device-1",
         "upd_server_timer",
-        [
-          [
-            "timer-complex",
-            "on",
-            "0 30 9 * * 1",
-            ["app_segment_clean", [16, 17]],
-            { repeat: 2 },
-          ],
-        ],
+        [["timer-complex", "on"]],
         {
           requestTimeoutMs: 10000,
           preferCloud: true,
@@ -306,7 +293,12 @@ describe("HAP schedule names and stable group identity", () => {
           throwOnError: true,
         }
       );
-      expect(timer[1]).toBe("off");
+      expect(coordinator.refreshAndGetSchedule).toHaveBeenCalledTimes(1);
+      expect(coordinator.refreshAndGetSchedule).toHaveBeenCalledWith(
+        "timer-complex",
+        expect.any(Number)
+      );
+      expect(timer).toEqual(["timer-complex", "off", 1]);
     } finally {
       jest.useRealTimers();
     }

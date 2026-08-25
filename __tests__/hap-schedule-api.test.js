@@ -30,48 +30,6 @@ describe("HAP schedule API", () => {
     );
   });
 
-  test("preserves every field in a full server timer tuple", async () => {
-    const command = jest.fn().mockResolvedValue("ok");
-    const api = {
-      vacuums: {
-        "device-1": { command },
-      },
-      getServerTimers: jest.fn(),
-    };
-
-    const timer = [
-      "timer-complex",
-      "off",
-      "0 30 9 * * 1",
-      ["app_segment_clean", [16, 17]],
-      { repeat: 2 },
-    ];
-
-    await updateServerTimer(api, "device-1", timer, true, {
-      requestTimeoutMs: 10000,
-    });
-
-    expect(command).toHaveBeenCalledWith(
-      "device-1",
-      "upd_server_timer",
-      [
-        [
-          "timer-complex",
-          "on",
-          "0 30 9 * * 1",
-          ["app_segment_clean", [16, 17]],
-          { repeat: 2 },
-        ],
-      ],
-      {
-        requestTimeoutMs: 10000,
-        preferCloud: true,
-        waitForResult: true,
-        throwOnError: true,
-      }
-    );
-    expect(timer[1]).toBe("off");
-  });
   test("sends upd_timer through vacuum.command before startCommand", async () => {
     const command = jest.fn().mockResolvedValue("ok");
     const startCommand = jest.fn().mockResolvedValue("unexpected");
@@ -101,5 +59,33 @@ describe("HAP schedule API", () => {
     );
 
     expect(startCommand).not.toHaveBeenCalled();
+  });
+  test("drops server timer metadata from the write payload", async () => {
+    const command = jest.fn().mockResolvedValue("ok");
+    const api = {
+      vacuums: {
+        "device-1": { command },
+      },
+      getServerTimers: jest.fn(),
+    };
+    const timer = ["timer-complex", "off", 1];
+
+    await updateServerTimer(api, "device-1", timer, true, {
+      requestTimeoutMs: 10000,
+    });
+
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(command).toHaveBeenCalledWith(
+      "device-1",
+      "upd_server_timer",
+      [["timer-complex", "on"]],
+      {
+        requestTimeoutMs: 10000,
+        preferCloud: true,
+        waitForResult: true,
+        throwOnError: true,
+      }
+    );
+    expect(timer).toEqual(["timer-complex", "off", 1]);
   });
 });
