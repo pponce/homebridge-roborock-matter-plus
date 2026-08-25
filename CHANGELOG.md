@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.17.5
+
+**A network outage no longer takes the Roborock account offline until Homebridge is restarted.** Found on the maintainer's own server, which lost DNS for about 75 minutes on 25 August 2026. Every other plugin on that bridge recovered by itself — the Tado platform was making successful API calls again 35 minutes after its last name-resolution error. This one did not. It logged `B01 status has failed 1070 times in a row … the Roborock cloud connection is not available` continuously for **1 hour and 44 minutes after the network was healthy again**, through three scheduled hourly reconnects, and came back only when a plugin update restarted the child bridge — instantly, on the very same saved session, which is what ruled out the credentials and pointed at the reconnect itself.
+
+The reconnect tore the client down without forcing it. An unforced teardown waits for the MQTT client's outgoing queue to drain first, and a link that has just died still holds messages nobody will ever acknowledge, so that wait never ends. The teardown therefore never completed, the client stayed permanently marked as disconnecting, and a reconnect declines to act on a client in that state. The latch also fed itself: each later teardown returned early on the same flag, so every hourly retry after the first was a silent no-op. That is why three hours of log carried no MQTT error, no close and no connect — nothing was happening at all.
+
+Reconnects are now forced, which is the only correct behaviour on the single path that calls them: there is no reason to wait for a queue to drain over a connection already concluded to be dead. The upstream detail the fix depends on is pinned by a test, so if the MQTT library ever changes that contract the suite reports it rather than the field doing so.
+
 ## 3.17.4
 
 **The "no mapping for these fields" warning no longer asks you to report fields this plugin already maps.** Raised by the log [@jcoz00](https://github.com/jcoz00) posted in [#6](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/6), whose Qrevo CurvX was told the plugin has no mapping for **eighteen** `get_status` fields and that a GitHub model report quoting the line is how they get added. Fifteen of those eighteen are named in `deviceFeatures.js` already. There was nothing for a report to add, and the three fields that genuinely were news sat buried in a list of fifteen that were not.
@@ -8,7 +16,7 @@ The message was asking the wrong question. A robot's status table starts as a co
 
 Each case now says what it means. A field no table anywhere names is still warned about once, by name and value, and still worth a model report; for the CurvX that is three fields rather than eighteen. A field the plugin maps but this robot's capability gate did not switch on is a debug line that says so, once per field per robot, and does not point anyone at GitHub. The repeat line that followed it on every subsequent poll is gone for that case — fifteen lines a minute saying nothing the first one did not.
 
-**This quietens [#8](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/8) entirely as a side effect.** All nine fields [@skmzwanke](https://github.com/skmzwanke)'s Saros 10 was warned about have since been added, so that warning had been asking for work that was already done. It now says nothing at all.
+**No change for [#8](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/8), and the first draft of this entry said otherwise.** The nine fields [@skmzwanke](https://github.com/skmzwanke)'s Saros 10 reported went into the baseline table in 3.4.4, which means they have been recognised for every robot ever since and that warning has been quiet for months. What made them look outstanding was a test fixture that mocked them as unmapped — a fiction the old code could not detect and the new code can. The fixture is corrected; the shipped behaviour for that robot is unchanged.
 
 Nothing about which fields are read, published or acted on changed — this release changes only what the log claims. The declared set of capability-installable fields is derived from the source by a test that scans for every writer, so a new capability cannot reintroduce the wrong warning without the suite failing.
 
