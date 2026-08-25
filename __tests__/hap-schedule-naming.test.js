@@ -243,4 +243,72 @@ describe("HAP schedule names and stable group identity", () => {
       ).value
     ).toBe("Weekend Downstairs");
   });
+  test("a HAP write sends the complete stored timer tuple", async () => {
+    jest.useFakeTimers();
+
+    try {
+      const platform = makePlatform();
+      const command = jest.fn().mockResolvedValue("ok");
+      platform.roborockAPI = {
+        vacuums: {
+          "device-1": { command },
+        },
+      };
+
+      const accessory = new FakeAccessory("Test Vacuum Schedules");
+      const coordinator = makeCoordinator(platform, accessory);
+      const timer = [
+        "timer-complex",
+        "off",
+        "0 30 9 * * 1",
+        ["app_segment_clean", [16, 17]],
+        { repeat: 2 },
+      ];
+
+      coordinator.sync([
+        {
+          id: "timer-complex",
+          enabled: false,
+          timer,
+        },
+      ]);
+      coordinator.refreshAndGetSchedule = jest.fn().mockResolvedValue({
+        id: "timer-complex",
+        enabled: true,
+        timer: [timer[0], "on", ...timer.slice(2)],
+      });
+
+      const onCharacteristic = switchService(
+        accessory,
+        "timer-complex"
+      ).getCharacteristic(Characteristic.On);
+      const writePromise = onCharacteristic.setHandler(true);
+
+      await jest.advanceTimersByTimeAsync(3000);
+      await writePromise;
+
+      expect(command).toHaveBeenCalledWith(
+        "device-1",
+        "upd_server_timer",
+        [
+          [
+            "timer-complex",
+            "on",
+            "0 30 9 * * 1",
+            ["app_segment_clean", [16, 17]],
+            { repeat: 2 },
+          ],
+        ],
+        {
+          requestTimeoutMs: 10000,
+          preferCloud: true,
+          waitForResult: true,
+          throwOnError: true,
+        }
+      );
+      expect(timer[1]).toBe("off");
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

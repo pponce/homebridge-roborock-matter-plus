@@ -730,12 +730,12 @@ class RoborockHapScheduleSwitchAccessory {
       const api = this.platform.roborockAPI as any;
 
       this.platform.log.info(
-        `Schedule command: ${enabled ? "enabling" : "disabling"} ${this.duid}/${this.scheduleId}; params=[[${JSON.stringify(this.scheduleId)}, ${JSON.stringify(enabled ? "on" : "off")}]].`
+        `Schedule command: ${enabled ? "enabling" : "disabling"} ${this.duid}/${this.scheduleId}; timerTupleLength=${this.schedule.timer.length}.`
       );
 
       const writeStartedAt = Date.now();
 
-      await updateServerTimer(api, this.duid, this.scheduleId, enabled, {
+      await updateServerTimer(api, this.duid, this.schedule.timer, enabled, {
         requestTimeoutMs: 10000,
       });
 
