@@ -311,7 +311,7 @@ Follow-up source/test commit: `dc54094` (`Initialize empty schedule configured n
 - The build changed only `dist/hap_schedule_accessory.js` and its source map.
 - The generated JavaScript contains exactly the two empty or whitespace-only `ConfiguredName` checks compiled from the TypeScript source.
 
-## Full timer-tuple schedule write correction
+## Server-timer payload correction
 
 ### Confirmed naming result
 
@@ -321,56 +321,75 @@ Follow-up source/test commit: `dc54094` (`Initialize empty schedule configured n
 - The schedule manager UUID hashes remained stable across restart.
 - The schedule naming and identity correction is therefore confirmed in live HomeKit use.
 
-### Separate Downtown schedule-write defect
+### Separate Downtown schedule-state defect
 
-Downtown Rock exposed seven schedules. The Roborock app showed three enabled and four disabled, while the server timer snapshot and Home showed five enabled and two disabled.
+Downtown Rock exposed seven schedules. The Roborock app showed three enabled and four disabled, while `get_server_timer` and Home showed five enabled and two disabled.
 
 - Schedule 2, ID `1652749234966`, could be disabled and enabled from Home and changed correctly in the Roborock app.
-- Schedule 6, ID `1652975049275`, appeared to accept the same commands and verification refreshes but did not change in the Roborock app.
-- The verification read used the same server timer snapshot that had accepted the incomplete write, so it could report success without proving that the complete Roborock schedule was updated.
+- Schedule 6, ID `1652975049275`, did not change in the Roborock app when controlled from Home.
+- The authoritative verification endpoint itself contained the five-enabled snapshot, so repeated startup or stale-cache refreshes could only reproduce that state.
+- Additional polling would not repair a divergence already present in the endpoint response.
 
-### Root cause
+### Evidence from the original working implementation
 
-The schedule parser retained the complete timer tuple in `schedule.timer`, but the write path discarded every field except the timer ID and status. It sent only `[[timerId, status]]` to `upd_server_timer`.
+The earlier `homebridge-roborock-vacuum2` branch `fix-schedule-functionality` established the successful Roborock server-timer command shape through live testing.
 
-Earlier implementation history explicitly required the complete timer tuple with only its status field changed. Reducing a complex schedule to its ID and status could update the server snapshot while failing to apply the complete schedule in the Roborock app.
+- The accessory retained the complete timer tuple locally.
+- The API extracted only the timer ID.
+- `upd_server_timer` received one nested minimal tuple: `[[timerId, "on"|"off"]]`.
+- The third field remained local schedule metadata and was not transmitted.
+- A successful user write was followed by one authoritative `get_server_timer` verification read.
+- The final original implementation did not contain a permanent schedule-specific polling timer.
+
+### Retracted full-tuple hypothesis
+
+Commits `b1aaa0d` and `1aae52e` tested the hypothesis that `upd_server_timer` required the complete returned tuple. Live testing disproved that hypothesis.
+
+- The installed build sent a tuple whose reported length was three.
+- The previously nonworking Downtown schedule still did not change in the Roborock app.
+- The primary verification failed and the existing `upd_timer` fallback also failed to confirm the requested state.
+- The earlier plan language claiming that the complete tuple was required is superseded by this section.
 
 ### Implemented correction
 
-Source and regression-test commit: `b1aaa0df25e397b88faa336cb3d3c38cadddb34d` (`Preserve complete schedule timer tuples`).
+Source and regression-test commit: `d517891a124970246064f8c498fbf54ab88bab23` (`Restore minimal server timer payloads`).
 
-- The HAP write handler now passes its complete stored `schedule.timer` tuple.
-- `updateServerTimer` copies the tuple without mutating the cached source.
-- Only tuple index 1 is changed to `on` or `off`.
-- The complete updated tuple is sent as the sole `upd_server_timer` command parameter.
-- The command log reports `timerTupleLength` without exposing the full schedule contents.
-- API-level coverage verifies tuple preservation and input immutability.
-- HAP-level coverage verifies that the actual switch write handler sends the complete stored tuple.
-- No polling, refresh cadence, cache lifetime, failure backoff, or cloud-call frequency was changed.
+- `updateServerTimer` accepts either an ID or stored timer tuple but extracts the ID for transmission.
+- The Roborock wire payload is exactly `[[timerId, "on"|"off"]]`.
+- Extra server-timer metadata, including the observed third field, is not sent.
+- The supplied cached timer tuple is not mutated.
+- HAP-level coverage proves the successful path performs exactly one `upd_server_timer` command and one delayed coordinator verification read.
+- Mathias's reviewed `upd_timer` fallback remains intact and is reached only after a user-initiated primary write fails verification.
+- No polling, refresh cadence, cache lifetime, failure backoff, coalescing, or cloud-call frequency was changed.
 
-### Third complete validation checkpoint
+### Fourth complete validation checkpoint
 
-- Source and regression-test commit: `b1aaa0d`.
+- Source and regression-test commit: `d517891`.
+- Focused schedule gate: 5 of 5 suites passed.
+- Focused schedule gate: 49 of 49 tests passed.
 - Prettier checks: passed.
-- TypeScript checks: passed.
+- Both TypeScript projects: passed.
 - Build and generated `dist`: passed.
 - Full Jest gate: 92 of 92 suites passed.
 - Full Jest gate: 1,512 of 1,512 tests passed.
-- README test-count synchronization updated both locations from 1,510 to 1,512.
+- README already stated 1,512 tests in both protected locations.
 - Whitespace validation: passed.
 - Generated changes are limited to `dist/hap_schedule_accessory.js`, `dist/hap_schedule_api.js`, and their source maps.
 
 ## Remaining work
 
-- Commit this plan, the README test-count update, and generated `dist` separately from source/test commit `b1aaa0d`.
+- Commit this corrected plan and generated `dist` separately from source/test commit `d517891`.
 - Push without force and inspect any GitHub Actions generated-build commit.
 - Reinstall the exact pushed `schedule-refresh-recovery-live-install` branch using `hb-service`.
-- Test one previously nonworking Downtown schedule, preferably Schedule 6 with ID `1652975049275`.
-- Confirm its command log reports a complete tuple length greater than two.
-- Confirm the Roborock app now reflects the intentional Home switch change.
-- Restore Downtown Rock to its intended three-enabled and four-disabled schedule state.
-- Restart Homebridge and confirm Home remains synchronized with that intended state.
-- Confirm all schedule names remain unique after the new installation and restart.
+- Confirm the installed JavaScript sends the nested minimal server-timer payload.
+- Identify the two Downtown schedules whose Roborock-app state differs from `get_server_timer`.
+- Use the Roborock app to deliberately toggle each mismatched schedule and confirm the raw server snapshot returns to the intended three-enabled and four-disabled state.
+- Allow one legitimate coordinator refresh, then confirm Home matches the repaired server snapshot.
+- Test one previously nonworking Downtown schedule from Home.
+- Confirm the successful command is followed by one verification read and does not reach the fallback.
+- Restore Downtown Rock to its intended three-enabled and four-disabled state.
+- Restart Homebridge and confirm Home remains synchronized.
+- Confirm all schedule names remain unique after installation and restart.
 - Rename one schedule through Home, restart Homebridge, and confirm the custom name survives.
 - Update this plan with the pushed SHA and final live-test results.
 - Later create a clean upstream pull-request branch without tracked `dist` or working-plan Markdown files.
