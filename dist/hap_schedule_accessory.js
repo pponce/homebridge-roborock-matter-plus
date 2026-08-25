@@ -425,6 +425,7 @@ class RoborockHapScheduleSwitchAccessory {
         const configuredName = service.getCharacteristic(this.platform.Characteristic.ConfiguredName);
         const currentConfiguredName = configuredName.value;
         if (currentConfiguredName == null ||
+            String(currentConfiguredName).trim().length === 0 ||
             String(currentConfiguredName) === displayName) {
             configuredName.setValue(displayName);
         }
@@ -448,6 +449,7 @@ class RoborockHapScheduleSwitchAccessory {
             const configuredName = switchService.getCharacteristic(this.platform.Characteristic.ConfiguredName);
             const currentConfiguredName = configuredName.value;
             if (currentConfiguredName == null ||
+                String(currentConfiguredName).trim().length === 0 ||
                 String(currentConfiguredName) === String(previousServiceName)) {
                 configuredName.setValue(displayName);
             }

@@ -261,14 +261,66 @@ For each vacuum:
 
 If a clean pairing test is later authorized, verify that the first recommended labels are vacuum-specific rather than generic `Switch` labels. Do not remove the working bridge merely to perform this optional test.
 
+## Live findings from the first paired build
+
+The first pushed build was installed from commit `d169933` and tested with a freshly removed and re-paired HAP child bridge.
+
+- Initial Home pairing suggested generic names such as `Switch`, `Switch 2`, and `Switch 3`.
+- Waiting and reopening Home did not immediately change those generic names.
+- After a Homebridge restart, Home displayed every schedule switch with the shared schedule-group name.
+- The grouped tiles reordered, but cache inspection showed stable manager UUIDs, so reordering was not evidence that the manager accessories were recreated.
+- The Homebridge cache contained unique service `displayName` and `Name` values such as `Downtown Rock Schedule 1`.
+- Every optional `ConfiguredName` value was an empty string.
+- HAP therefore treated an empty optional characteristic differently from a missing or null characteristic, and the first naming correction did not initialize it.
+- Follow-up commit `dc54094` treats a null, empty, or whitespace-only `ConfiguredName` as uninitialized and writes the deterministic generated schedule name.
+- A non-empty Home custom name remains protected and is not replaced by refresh or restart synchronization.
+
+The Downtown Rock 5-enabled and 2-disabled observation was investigated separately. Homebridge logs contained two explicit HomeKit schedule-enable commands, each followed by a successful authoritative schedule refresh. This was not passive state drift and does not justify additional polling.
+
+## Conservative schedule-cloud request constraints
+
+The naming correction is HAP metadata handling only. It must not change schedule refresh cadence or add cloud traffic.
+
+- Do not add a permanent schedule-specific polling loop.
+- Do not add an independent reachability polling loop or an exponential-backoff timer that acts as polling.
+- Retain one cached schedule snapshot and at most one ordinary in-flight refresh per vacuum.
+- HomeKit GET returns cached state immediately and may asynchronously refresh only when the shared snapshot is stale.
+- Concurrent refresh triggers must coalesce into one cloud request.
+- Failed or untrusted refreshes preserve the prior snapshot and use the existing failure backoff.
+- User-initiated writes may retain their delayed verification read through the shared coordinator.
+- If an existing general Roborock poll already obtains schedule data, a future change may feed that result into the coordinator, but it must not create another schedule timer.
+
+## Reliable multiline pasting through SSH
+
+Long assistant-provided Bash blocks should be enclosed in `{ ...; }`. Bash parses the complete compound command before executing its first child command. This prevents the remainder of a paste from being delivered to Jest, npm, or another foreground process.
+
+The iTerm2 option `Wait for shell prompt before pasting each line` was confirmed disabled, so it was not the cause of the observed paste behavior. Compound-command grouping remains the standard defensive format for future commands.
+
+## Second complete validation checkpoint
+
+Follow-up source/test commit: `dc54094` (`Initialize empty schedule configured names`).
+
+- Focused schedule tests: 4 of 4 suites passed.
+- Focused schedule tests: 45 of 45 tests passed.
+- TypeScript checks: passed.
+- Prettier checks: passed.
+- Full Jest gate: 92 of 92 suites passed.
+- Full Jest gate: 1,510 of 1,510 tests passed.
+- README test-count synchronization: already stated 1,510 in both locations.
+- Whitespace validation: passed.
+- The build changed only `dist/hap_schedule_accessory.js` and its source map.
+- The generated JavaScript contains exactly the two empty or whitespace-only `ConfiguredName` checks compiled from the TypeScript source.
+
 ## Remaining work
 
-- Finish and format this plan document.
-- Review the README and generated `dist` diffs.
-- Run the final canonical gate after documentation and test-count synchronization.
-- Commit the live-install documentation, README, and generated `dist` checkpoint separately from `8a146eb`.
+- Commit the live-install plan and generated `dist` checkpoint separately from source/test commit `dc54094`.
 - Push without force and inspect any GitHub Actions generated-build commit.
-- Install the exact pushed branch using `hb-service`.
-- Complete the real HomeKit refresh/restart naming matrix.
-- Update this document with the pushed SHA and live-test results.
-- Later create a clean pull-request branch without `dist` or working-plan Markdown files.
+- Reinstall the exact pushed `schedule-refresh-recovery-live-install` branch using `hb-service`.
+- Test the currently paired HAP bridge before considering another removal and re-pair.
+- Confirm the Homebridge cache now persists a unique non-empty `ConfiguredName` for every schedule service.
+- Confirm Home displays unique vacuum-specific schedule names after startup and after another Homebridge restart.
+- Rename one schedule through Home, restart Homebridge, and confirm the custom name survives.
+- Avoid incidental tile taps while inspecting names; use long-press to open accessory details.
+- Restore and verify the intended Downtown Rock schedule states independently from naming validation.
+- Update this plan with the pushed SHA and final live-test results.
+- Later create a clean upstream pull-request branch without tracked `dist` or working-plan Markdown files.
