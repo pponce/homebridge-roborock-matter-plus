@@ -1,0 +1,248 @@
+"use strict";
+
+const RoborockHapScheduleAccessory =
+  require("../src/hap_schedule_accessory.ts").default;
+
+const Characteristic = {
+  Name: "Name",
+  ConfiguredName: "ConfiguredName",
+  On: "On",
+};
+
+const Service = {
+  Switch: {
+    UUID: "switch-uuid",
+  },
+};
+
+class FakeCharacteristic {
+  constructor(value) {
+    this.value = value;
+  }
+
+  setValue(value) {
+    this.value = value;
+    return this;
+  }
+
+  onSet(handler) {
+    this.setHandler = handler;
+    return this;
+  }
+
+  onGet(handler) {
+    this.getHandler = handler;
+    return this;
+  }
+}
+
+class FakeService {
+  constructor(serviceType, displayName, subtype) {
+    this.UUID = serviceType.UUID;
+    this.subtype = subtype;
+    this.displayName = displayName;
+    this.characteristics = new Map();
+    this.setCharacteristic(Characteristic.Name, displayName);
+  }
+
+  getCharacteristic(type) {
+    if (!this.characteristics.has(type)) {
+      this.characteristics.set(type, new FakeCharacteristic());
+    }
+
+    return this.characteristics.get(type);
+  }
+
+  setCharacteristic(type, value) {
+    this.getCharacteristic(type).setValue(value);
+    return this;
+  }
+
+  addOptionalCharacteristic(type) {
+    this.getCharacteristic(type);
+    return this;
+  }
+
+  updateCharacteristic(type, value) {
+    this.getCharacteristic(type).setValue(value);
+    return this;
+  }
+}
+
+class FakeAccessory {
+  constructor(displayName) {
+    this.displayName = displayName;
+    this.context = {};
+    this.services = [];
+  }
+
+  getServiceById(serviceType, subtype) {
+    return this.services.find(
+      (service) =>
+        service.UUID === serviceType.UUID && service.subtype === subtype
+    );
+  }
+
+  addService(serviceType, displayName, subtype) {
+    const service = new FakeService(serviceType, displayName, subtype);
+    this.services.push(service);
+    return service;
+  }
+
+  removeService(service) {
+    this.services = this.services.filter((candidate) => candidate !== service);
+  }
+}
+
+function makePlatform() {
+  return {
+    Service,
+    Characteristic,
+    roborockAPI: {},
+    api: {
+      updatePlatformAccessories: jest.fn(),
+    },
+    log: {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+    },
+  };
+}
+
+function makeCoordinator(platform, accessory) {
+  const coordinator = new RoborockHapScheduleAccessory(
+    platform,
+    accessory,
+    "device-1"
+  );
+
+  coordinator.vacuumName = "Test Vacuum";
+  accessory.displayName = "Test Vacuum Schedules";
+  return coordinator;
+}
+
+function schedule(id, enabled = true) {
+  return {
+    id,
+    enabled,
+    timer: [id, enabled ? "on" : "off"],
+  };
+}
+
+function switchService(accessory, id) {
+  return accessory.getServiceById(
+    Service.Switch,
+    "roborock-schedule-" + encodeURIComponent(id)
+  );
+}
+
+describe("HAP schedule names and stable group identity", () => {
+  test("multiple schedules cannot overwrite their shared group identity", () => {
+    const platform = makePlatform();
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+
+    coordinator.sync([schedule("timer-1"), schedule("timer-2", false)]);
+
+    expect(switchService(accessory, "timer-1").displayName).toBe(
+      "Test Vacuum Schedule 1"
+    );
+    expect(switchService(accessory, "timer-2").displayName).toBe(
+      "Test Vacuum Schedule 2"
+    );
+
+    expect(accessory.displayName).toBe("Test Vacuum Schedules");
+    expect(accessory.context).toEqual({
+      kind: "hapExtension",
+      extension: "schedules",
+      duid: "device-1",
+    });
+
+    expect(
+      switchService(accessory, "timer-1").getCharacteristic(Characteristic.Name)
+        .value
+    ).toBe("Test Vacuum Schedule 1");
+    expect(
+      switchService(accessory, "timer-2").getCharacteristic(Characteristic.Name)
+        .value
+    ).toBe("Test Vacuum Schedule 2");
+  });
+
+  test("generic labels are repaired while a Home custom name survives restart sync", () => {
+    const platform = makePlatform();
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const firstCoordinator = makeCoordinator(platform, accessory);
+
+    firstCoordinator.sync([schedule("timer-1"), schedule("timer-2")]);
+
+    const firstService = switchService(accessory, "timer-1");
+    const secondService = switchService(accessory, "timer-2");
+
+    firstService.displayName = "Switch";
+    firstService.setCharacteristic(Characteristic.Name, "Switch");
+
+    secondService.displayName = "Switch 1";
+    secondService.setCharacteristic(Characteristic.Name, "Switch 1");
+    secondService
+      .getCharacteristic(Characteristic.ConfiguredName)
+      .setValue("Switch 1");
+
+    firstService
+      .getCharacteristic(Characteristic.ConfiguredName)
+      .setValue("Weekday Upstairs");
+
+    const restoredCoordinator = makeCoordinator(platform, accessory);
+    restoredCoordinator.sync([schedule("timer-1"), schedule("timer-2")]);
+
+    expect(firstService.displayName).toBe("Test Vacuum Schedule 1");
+    expect(secondService.displayName).toBe("Test Vacuum Schedule 2");
+    expect(accessory.displayName).toBe("Test Vacuum Schedules");
+    expect(
+      switchService(accessory, "timer-1").getCharacteristic(
+        Characteristic.ConfiguredName
+      ).value
+    ).toBe("Weekday Upstairs");
+    expect(
+      switchService(accessory, "timer-2").getCharacteristic(
+        Characteristic.ConfiguredName
+      ).value
+    ).toBe("Test Vacuum Schedule 2");
+  });
+
+  test("a generated name follows deterministic renumbering", () => {
+    const platform = makePlatform();
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+
+    coordinator.sync([schedule("timer-1"), schedule("timer-2")]);
+    coordinator.sync([schedule("timer-2")]);
+
+    expect(accessory.displayName).toBe("Test Vacuum Schedules");
+    expect(
+      switchService(accessory, "timer-2").getCharacteristic(
+        Characteristic.ConfiguredName
+      ).value
+    ).toBe("Test Vacuum Schedule 1");
+  });
+
+  test("a custom name survives deterministic renumbering", () => {
+    const platform = makePlatform();
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+
+    coordinator.sync([schedule("timer-1"), schedule("timer-2")]);
+
+    switchService(accessory, "timer-2")
+      .getCharacteristic(Characteristic.ConfiguredName)
+      .setValue("Weekend Downstairs");
+
+    coordinator.sync([schedule("timer-2")]);
+
+    expect(
+      switchService(accessory, "timer-2").getCharacteristic(
+        Characteristic.ConfiguredName
+      ).value
+    ).toBe("Weekend Downstairs");
+  });
+});

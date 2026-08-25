@@ -199,15 +199,18 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).toContain("configuredName.setValue(displayName);");
   });
 
-  test("schedule refresh preserves a HomeKit ConfiguredName", () => {
+  test("schedule refresh preserves a custom HomeKit ConfiguredName", () => {
     expect(scheduleSource).toContain(
-      "const previousAccessoryName = this.accessory.displayName;"
+      "const previousServiceName = switchService.getCharacteristic("
     );
     expect(scheduleSource).toContain(
       "const currentConfiguredName = configuredName.value;"
     );
     expect(scheduleSource).toContain(
-      "String(currentConfiguredName) === previousAccessoryName"
+      "String(currentConfiguredName) === String(previousServiceName)"
+    );
+    expect(scheduleSource).not.toContain(
+      "this.accessory.displayName = displayName;"
     );
   });
 
