@@ -45,9 +45,10 @@ function isHapScheduleAccessory(accessory) {
 }
 /**
  * The platform owns one schedule coordinator per vacuum.
- * Each Roborock timer is exposed as its own HAP switch accessory.
+ * Each vacuum has one cached HAP PlatformAccessory, and each Roborock timer
+ * is exposed as a Switch service within that shared accessory.
  *
- * Schedule accessories are intentionally named from the vacuum name so the
+ * Schedule services are intentionally named from the vacuum name so the
  * Home app presents the schedules together under the vacuum's schedule
  * grouping:
  *
@@ -55,8 +56,9 @@ function isHapScheduleAccessory(accessory) {
  *   <vacuum> Schedule 2
  *   ...
  *
- * The schedule ID remains part of the accessory UUID/context and is therefore
- * stable even if the displayed name changes.
+ * The manager UUID/context is derived from the vacuum duid. Each Switch
+ * service subtype is derived from the schedule ID. Display names are not
+ * identity and must never overwrite the shared manager accessory identity.
  */
 class RoborockHapScheduleAccessory {
     constructor(platform, accessory, duid) {
@@ -409,12 +411,6 @@ class RoborockHapScheduleSwitchAccessory {
             enabled: false,
             timer: [scheduleId, "off"],
         };
-        accessory.context = {
-            kind: exports.HAP_EXTENSION_KIND,
-            extension: exports.HAP_SCHEDULE_EXTENSION,
-            duid,
-            scheduleId,
-        };
     }
     initialize(displayName, schedule) {
         this.updateIdentity(displayName, schedule);
@@ -423,6 +419,7 @@ class RoborockHapScheduleSwitchAccessory {
         if (!service) {
             service = this.accessory.addService(this.platform.Service.Switch, displayName, subtype);
         }
+        service.displayName = displayName;
         service.setCharacteristic(this.platform.Characteristic.Name, displayName);
         service.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
         const configuredName = service.getCharacteristic(this.platform.Characteristic.ConfiguredName);
@@ -441,17 +438,17 @@ class RoborockHapScheduleSwitchAccessory {
         service.updateCharacteristic(this.platform.Characteristic.On, schedule.enabled);
     }
     updateIdentity(displayName, schedule) {
-        const previousAccessoryName = this.accessory.displayName;
         this.schedule = { ...schedule, timer: [...schedule.timer] };
-        this.accessory.displayName = displayName;
         const switchService = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
         if (switchService) {
+            const previousServiceName = switchService.getCharacteristic(this.platform.Characteristic.Name).value;
+            switchService.displayName = displayName;
             switchService.setCharacteristic(this.platform.Characteristic.Name, displayName);
             switchService.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
             const configuredName = switchService.getCharacteristic(this.platform.Characteristic.ConfiguredName);
             const currentConfiguredName = configuredName.value;
             if (currentConfiguredName == null ||
-                String(currentConfiguredName) === previousAccessoryName) {
+                String(currentConfiguredName) === String(previousServiceName)) {
                 configuredName.setValue(displayName);
             }
             switchService.updateCharacteristic(this.platform.Characteristic.On, schedule.enabled);
