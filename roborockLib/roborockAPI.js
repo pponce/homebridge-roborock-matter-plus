@@ -117,6 +117,45 @@ function liveRoomFetchGapMs(consecutiveFailures) {
   );
 }
 
+// Rooms rarely change, so a successful room-list refresh is good for 6 hours.
+const B01_ROOM_REFRESH_GAP_MS = 6 * 60 * 60 * 1000;
+
+// The same reasoning as the live-room backoff above, one loop further out. The
+// 6-hour stamp is written only on success, so a robot whose map channel is down
+// falls through to the periodic poller's own cadence — 180 s by default — and
+// spends a real `get_map_list` plus a map read that waits out its full 20 s
+// timeout, 480 times a day, for a room list that is not going to arrive.
+//
+// The first failure is deliberately NOT slowed: a single lost frame on a
+// healthy channel must not cost a room list, the same rule the live-room gap
+// follows. Past that the gap doubles from two poll cycles — a gap equal to the
+// cadence that produced the failure would delay nothing — and the cap stays far
+// below the 6-hour success cadence so a channel that comes back is picked up in
+// the same half hour rather than at the next scheduled refresh.
+const ROOM_REFRESH_BACKOFF_AFTER = 1;
+const B01_ROOM_REFRESH_RETRY_BASE_MS = 180000; // one periodic poll
+const B01_ROOM_REFRESH_RETRY_MAX_MS = 1800000; // 30 min
+
+/**
+ * Required gap before the next room-list refresh attempt, given how many
+ * attempts in a row have already failed.
+ * @param {number} [consecutiveFailures]
+ * @returns {number}
+ */
+function roomRefreshRetryGapMs(consecutiveFailures) {
+  const over = Number(consecutiveFailures) - ROOM_REFRESH_BACKOFF_AFTER;
+  if (!Number.isFinite(over) || over <= 0) {
+    return 0;
+  }
+  // Doubling starts at two poll cycles, not one: a gap equal to the cadence
+  // that produced the failure delays nothing, so the first widened step has to
+  // clear it to be a step at all.
+  return Math.min(
+    B01_ROOM_REFRESH_RETRY_BASE_MS * 2 ** over,
+    B01_ROOM_REFRESH_RETRY_MAX_MS
+  );
+}
+
 /**
  * Zero the counters that describe THIS run. clearLiveRoomForDevice runs at
  * every run boundary and its stated job is to stop state leaking into the next
@@ -1282,6 +1321,71 @@ class Roborock {
     return /token|localkey|local_key|password|secret|rriot|key/i.test(
       String(key)
     );
+  }
+
+  /**
+   * Count a decoded MQTT message against the robot it came from.
+   *
+   * Called for every message the receiver could attribute AND decrypt, so the
+   * counter means "the link delivered something real from this robot" — not
+   * "a packet arrived". Undecodable messages log at error on their own and are
+   * deliberately not counted: they would make a broken link look alive.
+   *
+   * The only reader is the cloud timeout text, which needs to tell silence
+   * from an answer it could not match (#14). Keep it that cheap.
+   *
+   * @param {string} duid
+   */
+  noteCloudMessageReceived(duid) {
+    if (!duid) {
+      return;
+    }
+
+    if (!this._cloudMessageReceipts) {
+      /** @type {Map<string, number>} */
+      this._cloudMessageReceipts = new Map();
+    }
+
+    this._cloudMessageReceipts.set(
+      duid,
+      (this._cloudMessageReceipts.get(duid) || 0) + 1
+    );
+  }
+
+  /**
+   * @param {string} duid
+   * @returns {number} Decoded MQTT messages seen from this robot since startup.
+   */
+  getCloudMessageReceiptCount(duid) {
+    if (!duid || !this._cloudMessageReceipts) {
+      return 0;
+    }
+
+    return this._cloudMessageReceipts.get(duid) || 0;
+  }
+
+  /**
+   * Count an inbound MQTT frame that matched no known robot.
+   *
+   * Account-wide on purpose: attribution is what failed, so there is no robot
+   * to file it under. The reader is the cloud timeout text, which needs this
+   * to avoid concluding "the robot never answered" when the truth may be "the
+   * robot answered on a topic we did not recognise" (#14).
+   *
+   * @param {string} [topic] The unmatched topic, accepted for callers that
+   *   have it; deliberately not retained, as it can carry account identifiers.
+   */
+  noteUnattributedCloudMessage(topic) {
+    this._unattributedCloudMessages =
+      (this._unattributedCloudMessages || 0) + 1;
+  }
+
+  /**
+   * @returns {number} Inbound MQTT frames since startup that matched no known
+   *   robot.
+   */
+  getUnattributedCloudMessageCount() {
+    return this._unattributedCloudMessages || 0;
   }
 
   async updateTransportDiagnostics(duid, patch) {
@@ -3206,8 +3310,6 @@ class Roborock {
 
       await this.pollParameter(duid, vacuum, "get_timer", isB01);
 
-      await this.checkForNewFirmware(duid);
-
       switch (robotModel) {
         case "roborock.vacuum.s4":
         case "roborock.vacuum.s5":
@@ -3591,53 +3693,6 @@ class Roborock {
             "Devices." + duid + ".deviceInfo." + deviceAttribute,
             { val: devices[device][deviceAttribute], ack: true }
           );
-        }
-      }
-    }
-  }
-
-  async checkForNewFirmware(duid) {
-    const isLocalDevice = !this.isRemoteDevice(duid);
-
-    if (isLocalDevice) {
-      this.log.debug(`getting firmware status`);
-      if (this.api) {
-        try {
-          const update = await this.api.get(`ota/firmware/${duid}/updatev2`);
-
-          await this.setObjectNotExistsAsync(
-            "Devices." + duid + ".updateStatus",
-            {
-              type: "folder",
-              common: {
-                name: "Update status",
-              },
-              native: {},
-            }
-          );
-
-          for (const state in update.data.result) {
-            await this.setObjectNotExistsAsync(
-              "Devices." + duid + ".updateStatus." + state,
-              {
-                type: "state",
-                common: {
-                  name: state,
-                  type: this.getType(update.data.result[state]),
-                  role: "value",
-                  read: true,
-                  write: false,
-                },
-                native: {},
-              }
-            );
-            this.setStateAsync("Devices." + duid + ".updateStatus." + state, {
-              val: update.data.result[state],
-              ack: true,
-            });
-          }
-        } catch (error) {
-          this.catchError(error, "checkForNewFirmware()", duid);
         }
       }
     }
@@ -4288,7 +4343,56 @@ class Roborock {
     return this._b01StatusState?.get(duid)?.lastV1Status || null;
   }
 
+  /**
+   * Say once per Q10 robot that its status does not come from this loop.
+   *
+   * Once per robot rather than once per poll: at the idle cadence the loop
+   * reaches this 144 times an hour, and a line repeated that often stops
+   * being read. The reader's question is not "was a request skipped" but
+   * "why is my tile not updating and where does its state come from" — so the
+   * notice answers that and points at the issue tracking the remaining half.
+   *
+   * @param {string} duid
+   * @returns {void}
+   */
+  noteB01Q10StatusPollNotAttempted(duid) {
+    if (!this._b01Q10StatusNoticed) {
+      this._b01Q10StatusNoticed = new Set();
+    }
+    if (this._b01Q10StatusNoticed.has(duid)) {
+      return;
+    }
+    this._b01Q10StatusNoticed.add(duid);
+    this.log.info(
+      `${this.describeDevice(duid)} speaks the B01 Q10 dialect, which sends no reply to a status read, so the dedicated B01 status loop does not poll it. Its state comes from the home data snapshot over HTTPS instead. This is a property of the dialect and not a fault; reading state from the datapoint updates the robot pushes is tracked in issue #19.`
+    );
+  }
+
   async refreshB01Status(duid, options = {}) {
+    // A Q10 (`ss*`) IS NOT POLLED AT ALL, and that gate belongs here rather
+    // than at the send choke point. The choke point already refuses
+    // `get_status` for a Q10 by name — correctly, since a fire-and-forget
+    // dialect cannot answer a read — but a request refused is still a request
+    // counted: the catch below incremented `consecutiveFailures` on every one
+    // and warned "B01 status has failed N times in a row" every tenth. At the
+    // 25-second idle cadence that is a warning every four minutes about a
+    // robot that is working exactly as designed, which is the same false alarm
+    // #14 spent three rounds chasing. Asking a question whose refusal is
+    // certain before it is asked is not a diagnostic.
+    //
+    // Returning null is what the throttle below already returns, so every
+    // caller handles it; no state entry is allocated either, and
+    // `getLastKnownLiveStatus` answers null for a Q10 as it does for a classic
+    // robot — "nothing known", never a value.
+    if (
+      b01Q7Adapter.b01FamilyForModel(
+        this.getProductAttribute(duid, "model")
+      ) === b01Q7Adapter.B01_FAMILY.Q10
+    ) {
+      this.noteB01Q10StatusPollNotAttempted(duid);
+      return null;
+    }
+
     // Q7/B01 status snapshot via prop.get, mapped to v1-shaped fields and
     // dispatched on the existing live-message path so the Matter accessory
     // updates exactly like it does for classic robots.
@@ -4549,40 +4653,98 @@ class Roborock {
    * service.upload_by_mapid -> MAP_RESPONSE (protocol 301) -> AES-ECB/zlib
    * decode -> SCMap protobuf -> {roomId, roomName}. Rooms rarely change, so
    * refreshes are throttled to once per 6 hours unless forced.
+   *
+   * The 6-hour stamp is written only on SUCCESS, which is right for the happy
+   * path and was the whole story for a refresh that cannot succeed: a robot
+   * that never completes one never closes the throttle either, so it is asked
+   * again by every periodic poll. Both cases below exist to bound that.
+   * @param {string} duid
+   * @param {{force?: boolean}} [options]
+   * @returns {Promise<any[]>}
    */
   async refreshB01Rooms(duid, options = {}) {
+    // A Q10 (`ss*`) IS NOT FETCHED AT ALL — the third loop of this shape, after
+    // the status loop (3.19.0) and the live-room loop (3.19.1). `get_map_list`
+    // is not in NEUTRAL_RESPONSES and has no Q10 translation, so the send choke
+    // point refuses it by name and throws B01_METHOD_UNSUPPORTED. The caller
+    // catches that at debug level, so it is quiet — but the refusal is certain
+    // before the request is asked, and because it never succeeds the 6-hour
+    // throttle below is never stamped. A Q10 therefore repeats a designed
+    // refusal on every poll for as long as the plugin runs.
+    //
+    // Gated at the entry rather than at the two call sites for the same reason
+    // `refreshB01LiveRoom` is: both of them reach here through
+    // `refreshMatterServiceAreaRoomMappings`, which gates on `isB01Protocol` —
+    // and that is BOTH dialects, the premise of #19. Returning the cache is
+    // what the throttled path above already returns, so every caller handles
+    // it, and no failure state is allocated for a request never made.
+    if (
+      b01Q7Adapter.b01FamilyForModel(
+        this.getProductAttribute(duid, "model")
+      ) === b01Q7Adapter.B01_FAMILY.Q10
+    ) {
+      return this.getB01RoomCache(duid);
+    }
+
     if (!this._b01RoomRefreshAt) {
       this._b01RoomRefreshAt = new Map();
     }
     const lastAt = this._b01RoomRefreshAt.get(duid) || 0;
-    if (!options.force && Date.now() - lastAt < 6 * 60 * 60 * 1000) {
+    if (!options.force && Date.now() - lastAt < B01_ROOM_REFRESH_GAP_MS) {
       return this.getB01RoomCache(duid);
     }
 
-    const mapListData = await this.messageQueueHandler.sendRequest(
-      duid,
-      "get_map_list",
-      {}
-    );
-    const mapId = b01Q7Adapter.findCurrentMapId(mapListData);
-    if (mapId === null) {
-      this.log.debug(`No B01 map available yet for ${duid}; rooms deferred.`);
+    if (!this._b01RoomRefreshFailures) {
+      this._b01RoomRefreshFailures = new Map();
+    }
+    const failureState = this._b01RoomRefreshFailures.get(duid);
+    if (
+      !options.force &&
+      failureState &&
+      Date.now() - failureState.lastAttemptAt <
+        roomRefreshRetryGapMs(failureState.consecutiveFailures)
+    ) {
       return this.getB01RoomCache(duid);
     }
 
-    const rawPayload = await this.sendB01MapRequest(duid, mapId);
-    const serial = this.getVacuumDeviceInfo(duid, "sn");
-    const model = this.getProductAttribute(duid, "model");
-    const mapKey = b01Q7Adapter.createMapKey(serial, model);
-    const scMap = b01Q7Adapter.decodeMapPayload(rawPayload, mapKey);
-    const rooms = b01Q7Adapter.parseRoomsFromScMap(scMap);
+    try {
+      const mapListData = await this.messageQueueHandler.sendRequest(
+        duid,
+        "get_map_list",
+        {}
+      );
+      const mapId = b01Q7Adapter.findCurrentMapId(mapListData);
+      if (mapId === null) {
+        // A reply arrived, so the channel is up; there is simply no map yet.
+        // That is not a failure and must not accrue a backoff, or a robot
+        // still building its first map would be asked ever more rarely
+        // precisely while the answer is about to become available.
+        this._b01RoomRefreshFailures.delete(duid);
+        this.log.debug(`No B01 map available yet for ${duid}; rooms deferred.`);
+        return this.getB01RoomCache(duid);
+      }
 
-    this._b01RoomRefreshAt.set(duid, Date.now());
-    await this.setB01RoomCache(duid, rooms);
-    this.log.info(
-      `B01 rooms for ${this.describeDevice(duid)}: ${rooms.length ? rooms.map((room) => `${room.roomName || "?"} (${room.roomId})`).join(", ") : "none reported"}.`
-    );
-    return rooms;
+      const rawPayload = await this.sendB01MapRequest(duid, mapId);
+      const serial = this.getVacuumDeviceInfo(duid, "sn");
+      const model = this.getProductAttribute(duid, "model");
+      const mapKey = b01Q7Adapter.createMapKey(serial, model);
+      const scMap = b01Q7Adapter.decodeMapPayload(rawPayload, mapKey);
+      const rooms = b01Q7Adapter.parseRoomsFromScMap(scMap);
+
+      this._b01RoomRefreshFailures.delete(duid);
+      this._b01RoomRefreshAt.set(duid, Date.now());
+      await this.setB01RoomCache(duid, rooms);
+      this.log.info(
+        `B01 rooms for ${this.describeDevice(duid)}: ${rooms.length ? rooms.map((room) => `${room.roomName || "?"} (${room.roomId})`).join(", ") : "none reported"}.`
+      );
+      return rooms;
+    } catch (error) {
+      this._b01RoomRefreshFailures.set(duid, {
+        lastAttemptAt: Date.now(),
+        consecutiveFailures: (failureState?.consecutiveFailures || 0) + 1,
+      });
+      throw error;
+    }
   }
 
   async sendB01MapRequest(duid, mapId) {
@@ -4639,6 +4801,29 @@ class Roborock {
   }
 
   /**
+   * Say once per Q10 robot that its live room does not come from this loop.
+   *
+   * Once per robot for the same reason the status loop says it once: during a
+   * clean this is reached every ten seconds, and a line repeated that often
+   * stops being read.
+   *
+   * @param {string} duid
+   * @returns {void}
+   */
+  noteB01Q10LiveRoomNotAttempted(duid) {
+    if (!this._b01Q10LiveRoomNoticed) {
+      this._b01Q10LiveRoomNoticed = new Set();
+    }
+    if (this._b01Q10LiveRoomNoticed.has(duid)) {
+      return;
+    }
+    this._b01Q10LiveRoomNoticed.add(duid);
+    this.log.info(
+      `${this.describeDevice(duid)} speaks the B01 Q10 dialect, which sends no reply to a map read, so its live-room position is not fetched and no room is reported during a clean. This is a property of the dialect and not a fault; reading state from the datapoint updates the robot pushes is tracked in issue #19.`
+    );
+  }
+
+  /**
    * Fetch the current SCMap and derive which room the robot is physically
    * inside (currentPose ray-cast against the per-room boundary chains).
    * Called from the B01 status loop while the robot is actively cleaning;
@@ -4658,6 +4843,37 @@ class Roborock {
     if (this.config.enableLiveRoomTracking === false) {
       return null;
     }
+
+    // A Q10 (`ss*`) IS NOT FETCHED AT ALL, for the same reason the status loop
+    // does not poll one — and this is the second loop with that shape, missed
+    // when the first was fixed in 3.19.0.
+    //
+    // `get_map_list` is not in NEUTRAL_RESPONSES and has no Q10 translation,
+    // so the send choke point refuses it by name and throws. The catch below
+    // then counts that refusal as a failure and warns "Live-room map fetch has
+    // failed N times in a row" every fifth one. The refusal is correct; the
+    // failure count is not, because a request whose refusal is certain before
+    // it is asked is not a diagnostic.
+    //
+    // It matters more here than the cadence alone suggests: the live-room loop
+    // runs only while the robot is actively cleaning, so the warning lands in
+    // the log precisely during the operation #14's reporter confirmed working
+    // on the only Q10 in the field.
+    //
+    // Gated at the entry rather than at the call sites because there are two
+    // of them, and the one in `refreshLiveRoomForDevice` gates on `pv ===
+    // "B01"` — which is BOTH dialects, the premise of #19. Returning null is
+    // what the disabled-tracking branch above already returns, so every caller
+    // handles it, and no state entry is allocated.
+    if (
+      b01Q7Adapter.b01FamilyForModel(
+        this.getProductAttribute(duid, "model")
+      ) === b01Q7Adapter.B01_FAMILY.Q10
+    ) {
+      this.noteB01Q10LiveRoomNotAttempted(duid);
+      return null;
+    }
+
     if (!this._b01LiveRoomState) {
       this._b01LiveRoomState = new Map();
     }
