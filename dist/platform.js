@@ -248,7 +248,7 @@ class RoborockPlatform {
         const devices = typeof this.roborockAPI.getVacuumList === "function"
             ? this.roborockAPI.getVacuumList()
             : [];
-        this.syncActionSwitches(Array.isArray(devices) ? devices : []);
+        this.syncActionSwitches(Array.isArray(devices) ? devices : [], duid);
     }
     notifyVacuumByDuid(duid, id, homeData) {
         const matterVacuum = this.matterVacuums.get(duid);
@@ -645,7 +645,7 @@ class RoborockPlatform {
      * Bring the registered action switches in line with the config and the
      * account, adding what is missing and removing what is no longer wanted.
      */
-    syncActionSwitches(devices) {
+    syncActionSwitches(devices, capabilityConfirmedForDuid) {
         var _a;
         const enabled = this.getEnabledActionSwitchKeys();
         // Only this kind. The shared this.accessories list also carries the state
@@ -656,6 +656,15 @@ class RoborockPlatform {
         if (enabled.length === 0 && mine.length === 0) {
             return;
         }
+        // A cached switch has already acquired HomeKit identity outside this
+        // process: its custom name, room, Home View choice and automations all
+        // belong to that accessory UUID. Some S7 HomeData payloads omit dock
+        // capability until the first live status poll, so absence here is not yet
+        // proof that an existing Empty Bin switch is obsolete.
+        const cachedKeys = new Set(mine.map((accessory) => {
+            const context = accessory.context;
+            return `${context === null || context === void 0 ? void 0 : context.duid}:${context === null || context === void 0 ? void 0 : context.action}`;
+        }));
         const wanted = new Map();
         for (const device of devices) {
             const duid = String((_a = device === null || device === void 0 ? void 0 : device.duid) !== null && _a !== void 0 ? _a : "");
@@ -669,11 +678,18 @@ class RoborockPlatform {
                 if (!definition) {
                     continue;
                 }
+                const key = `${duid}:${action}`;
                 if (vacuum && !vacuum.supportsHomeKitAction(action)) {
-                    this.log.debug(`Not publishing the ${definition.nameSuffix} switch for ${vacuumName}: the robot does not support that command.`);
-                    continue;
+                    const preservePendingEmptyBin = action === "empty" &&
+                        capabilityConfirmedForDuid !== duid &&
+                        cachedKeys.has(key);
+                    if (!preservePendingEmptyBin) {
+                        this.log.debug(`Not publishing the ${definition.nameSuffix} switch for ${vacuumName}: the robot does not support that command.`);
+                        continue;
+                    }
+                    this.log.debug(`Preserving the cached ${definition.nameSuffix} switch for ${vacuumName} until live dock capability is known.`);
                 }
-                wanted.set(`${duid}:${action}`, { duid, action, vacuumName });
+                wanted.set(key, { duid, action, vacuumName });
             }
         }
         // An empty device list is almost always a temporary cloud or network
