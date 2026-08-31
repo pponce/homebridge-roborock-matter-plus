@@ -26,6 +26,8 @@ import RoborockStateSensorAccessory, {
 } from "./state_sensor_accessory";
 import RoborockHapScheduleAccessory, {
   isHapScheduleAccessory,
+  normalizeSchedulePolicyValue,
+  ScheduleAccountCoordinator,
 } from "./hap_schedule_accessory";
 
 import RoborockPlatformLogger from "./logger";
@@ -117,6 +119,8 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
     string,
     RoborockHapScheduleAccessory
   > = new Map();
+  private readonly scheduleAccountCoordinator: ScheduleAccountCoordinator;
+  private schedulePolicyLogged = false;
   private matterUnavailableLogged = false;
   private hapPairingHintLogged = false;
 
@@ -148,6 +152,38 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       homebridgeLogger,
       this.platformConfig.debugMode
     );
+    this.scheduleAccountCoordinator = new ScheduleAccountCoordinator({
+      cacheTtlMs:
+        normalizeSchedulePolicyValue(
+          this.platformConfig.scheduleRefreshIntervalMinutes,
+          5,
+          1,
+          1440
+        ) *
+        60 *
+        1000,
+      batchWindowMs: normalizeSchedulePolicyValue(
+        this.platformConfig.scheduleBatchWindowMilliseconds,
+        500,
+        100,
+        5000
+      ),
+      writeSpacingMs: normalizeSchedulePolicyValue(
+        this.platformConfig.scheduleWriteSpacingMilliseconds,
+        500,
+        250,
+        10000
+      ),
+      throttleCooldownMs:
+        normalizeSchedulePolicyValue(
+          this.platformConfig.scheduleRateLimitCooldownMinutes,
+          65,
+          60,
+          1440
+        ) *
+        60 *
+        1000,
+    });
     // Create Roborock App communication module
 
     const username = this.platformConfig.email;
@@ -627,6 +663,11 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       return;
     }
 
+    if (!this.schedulePolicyLogged) {
+      this.schedulePolicyLogged = true;
+      this.log.info(this.scheduleAccountCoordinator.policyDescription());
+    }
+
     // An empty device list is normally a temporary Roborock/cloud failure.
     // Never remove schedule accessories because discovery temporarily
     // returned no devices.
@@ -758,7 +799,12 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
         );
       }
 
-      schedule = new RoborockHapScheduleAccessory(this, accessory, duid);
+      schedule = new RoborockHapScheduleAccessory(
+        this,
+        accessory,
+        duid,
+        this.scheduleAccountCoordinator
+      );
 
       this.hapScheduleAccessories.set(duid, schedule);
 

@@ -33,6 +33,18 @@ const elements = {
     "homekit-state-water-tank-empty"
   ),
   homeKitActionSchedules: document.getElementById("homekit-action-schedules"),
+  scheduleRefreshIntervalMinutes: document.getElementById(
+    "schedule-refresh-interval-minutes"
+  ),
+  scheduleBatchWindowMilliseconds: document.getElementById(
+    "schedule-batch-window-milliseconds"
+  ),
+  scheduleWriteSpacingMilliseconds: document.getElementById(
+    "schedule-write-spacing-milliseconds"
+  ),
+  scheduleRateLimitCooldownMinutes: document.getElementById(
+    "schedule-rate-limit-cooldown-minutes"
+  ),
   matterChargedBatteryThreshold: document.getElementById(
     "matter-charged-battery-threshold"
   ),
@@ -198,6 +210,14 @@ async function loadConfig() {
         config.enableHomeKitScheduleSwitches
       );
     }
+    elements.scheduleRefreshIntervalMinutes.value =
+      config.scheduleRefreshIntervalMinutes ?? 5;
+    elements.scheduleBatchWindowMilliseconds.value =
+      config.scheduleBatchWindowMilliseconds ?? 500;
+    elements.scheduleWriteSpacingMilliseconds.value =
+      config.scheduleWriteSpacingMilliseconds ?? 500;
+    elements.scheduleRateLimitCooldownMinutes.value =
+      config.scheduleRateLimitCooldownMinutes ?? 65;
     syncActionSwitchAvailability();
     syncFeatureDependencies();
     if (elements.matterChargedBatteryThreshold) {
@@ -598,6 +618,13 @@ function getTransientWarningThrottleHours() {
   return parsed;
 }
 
+function getBoundedNumber(element, defaultValue, minimum, maximum) {
+  const parsed = Number(element?.value);
+  return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum
+    ? parsed
+    : defaultValue;
+}
+
 function getCode() {
   return elements.code.value.trim();
 }
@@ -663,6 +690,30 @@ function getFormValues() {
     homeKitStateSensors: getSavedStateSensorSelection(),
     enableHomeKitScheduleSwitches: Boolean(
       elements.homeKitActionSchedules?.checked
+    ),
+    scheduleRefreshIntervalMinutes: getBoundedNumber(
+      elements.scheduleRefreshIntervalMinutes,
+      5,
+      1,
+      1440
+    ),
+    scheduleBatchWindowMilliseconds: getBoundedNumber(
+      elements.scheduleBatchWindowMilliseconds,
+      500,
+      100,
+      5000
+    ),
+    scheduleWriteSpacingMilliseconds: getBoundedNumber(
+      elements.scheduleWriteSpacingMilliseconds,
+      500,
+      250,
+      10000
+    ),
+    scheduleRateLimitCooldownMinutes: getBoundedNumber(
+      elements.scheduleRateLimitCooldownMinutes,
+      65,
+      60,
+      1440
     ),
     matterChargedBatteryThreshold: getMatterChargedBatteryThreshold(),
     preferCloudForMatterCommands: getPreferCloudForMatterCommands(),
