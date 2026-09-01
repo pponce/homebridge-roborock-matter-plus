@@ -66,6 +66,15 @@ Example shape:
 - Do not claim that `set -e` alone caused an SSH disconnect without evidence. Check how the script
   was invoked and whether it contained an explicit session-termination path.
 
+### Command availability on Pedro's Mint development machine
+
+- Do not assume `rg`/ripgrep is installed. It was absent during the PR #4 integration conflict
+  inspection.
+- Paste-ready diagnostic blocks must either use standard `grep` for small, targeted searches or
+  check `command -v rg` first and provide a `grep` fallback.
+- A missing optional inspection command must not cause a block to claim that conflict resolution,
+  staging, or verification succeeded. Capture and report the command's exit status explicitly.
+
 ## Branch roles
 
 ### Personal live-install branch
@@ -188,3 +197,7 @@ it on the Homebridge Linux host with:
   `git diff --name-only --diff-filter=U`, and `git diff --check` in one brace-grouped output block.
 - Do not expose credentials, Roborock tokens, LAN keys, pairing codes, or other secrets in returned
   logs.
+- Never collect complete process command lines with `pgrep -a`, `ps ... args`, `/proc/*/cmdline`, or
+  similar commands on Pedro's Homebridge host. Other plugins may place credentials directly in
+  their command arguments. For process checks, report only PID and executable/command name, and
+  inspect any additional field against a strict allowlist before printing it.

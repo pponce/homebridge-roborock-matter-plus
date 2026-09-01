@@ -93,11 +93,22 @@ class RoborockPlatform {
         this.stateSensors = new Map();
         /** Optional HAP schedule accessories, keyed by vacuum duid. */
         this.hapScheduleAccessories = new Map();
+        this.schedulePolicyLogged = false;
         this.matterUnavailableLogged = false;
         this.hapPairingHintLogged = false;
         this.platformConfig = config;
         // Initialise logging utility
         this.log = new logger_1.default(homebridgeLogger, this.platformConfig.debugMode);
+        this.scheduleAccountCoordinator = new hap_schedule_accessory_1.ScheduleAccountCoordinator({
+            cacheTtlMs: (0, hap_schedule_accessory_1.normalizeSchedulePolicyValue)(this.platformConfig.scheduleRefreshIntervalMinutes, 5, 1, 1440) *
+                60 *
+                1000,
+            batchWindowMs: (0, hap_schedule_accessory_1.normalizeSchedulePolicyValue)(this.platformConfig.scheduleBatchWindowMilliseconds, 500, 100, 5000),
+            writeSpacingMs: (0, hap_schedule_accessory_1.normalizeSchedulePolicyValue)(this.platformConfig.scheduleWriteSpacingMilliseconds, 500, 250, 10000),
+            throttleCooldownMs: (0, hap_schedule_accessory_1.normalizeSchedulePolicyValue)(this.platformConfig.scheduleRateLimitCooldownMinutes, 65, 60, 1440) *
+                60 *
+                1000,
+        });
         // Create Roborock App communication module
         const username = this.platformConfig.email;
         const password = this.platformConfig.password;
@@ -452,6 +463,10 @@ class RoborockPlatform {
             }
             return;
         }
+        if (!this.schedulePolicyLogged) {
+            this.schedulePolicyLogged = true;
+            this.log.info(this.scheduleAccountCoordinator.policyDescription());
+        }
         // An empty device list is normally a temporary Roborock/cloud failure.
         // Never remove schedule accessories because discovery temporarily
         // returned no devices.
@@ -529,7 +544,7 @@ class RoborockPlatform {
             if (!accessory) {
                 accessory = new this.api.platformAccessory(`${target.vacuumName} schedules`, uuid);
             }
-            schedule = new hap_schedule_accessory_1.default(this, accessory, duid);
+            schedule = new hap_schedule_accessory_1.default(this, accessory, duid, this.scheduleAccountCoordinator);
             this.hapScheduleAccessories.set(duid, schedule);
             void schedule
                 .initialize(target.vacuumName)
