@@ -6,6 +6,7 @@ const timers_1 = require("./timers");
 const { getModelNameWithoutBrand } = require("../roborockLib/lib/deviceFeatures");
 const MATTER_CLEAN_MODE_COMMAND_TIMEOUT_MS = 2000;
 const MATTER_CLEAN_MODE_PREP_TIMEOUT_MS = 2500;
+const MATTER_CLEAN_MODE_LIVE_CONFIRMATION_TIMEOUT_MS = 150 * 1000;
 // Commands reach this class from two places now: the Matter clusters, and the
 // optional HAP action switches. The surface is threaded through the command
 // path rather than inferred, because the only way a user can tell a dropped
@@ -121,6 +122,12 @@ const ROBOROCK_FAN_POWER_BALANCED = 102;
 const ROBOROCK_WATER_BOX_OFF = 200;
 const ROBOROCK_WATER_BOX_MILD = 201;
 // Matter Service Area OperationalStatusEnum (progress list entries).
+/**
+ * How many consecutive live-room readings a room needs before the plugin will
+ * call it visited. See `liveRoomVisitAreaId` for why 2, and why erring low is
+ * the safe direction.
+ */
+const LIVE_ROOM_READINGS_TO_CONFIRM = 2;
 const SERVICE_AREA_PROGRESS = {
     PENDING: 0,
     OPERATING: 1,
@@ -579,6 +586,27 @@ class RoborockMatterVacuumAccessory {
         // have happened. In-memory only: after a mid-run restart the worst case is
         // one pending-instead-of-completed entry until the run ends.
         this.liveConfirmedServiceAreaIds = new Set();
+        /**
+         * Driving through a room is not cleaning it.
+         *
+         * A room reached `liveConfirmedServiceAreaIds` on its FIRST detection, and
+         * a confirmed room is reported Completed the moment the robot moves on. So
+         * a robot crossing the hall to reach the bedroom marked the hall cleaned on
+         * the way past — reported by vp-debug12 in #9, and exactly right.
+         *
+         * The fix is a dwell: a room counts as visited only once the robot has been
+         * detected in it on 2 consecutive live-room readings. Readings are at least
+         * 10 seconds apart, so this asks the robot to still be there next time —
+         * true of a room being cleaned, false of a room being crossed.
+         *
+         * Under-confirming is the safe direction and is why 2 is enough rather than
+         * some larger number tuned by guesswork: a room that really was cleaned but
+         * missed its second reading falls back to Pending mid-run, and the run's
+         * own end marks everything Completed anyway. Over-confirming is the one
+         * that lies, and it lies about work the robot has not done.
+         */
+        this.liveRoomVisitAreaId = null;
+        this.liveRoomVisitReadings = 0;
         // Per-cluster JSON of the last CONFIRMED publish. Used to skip republishing
         // identical cluster payloads on every poll/heartbeat. Safe against the
         // historical "Updating..." desync (see updateMatterState comment) because
@@ -590,6 +618,7 @@ class RoborockMatterVacuumAccessory {
         this.serviceAreaProgress = [];
         this.selectedCleanMode = CLEAN_MODE_VACUUM;
         this.selectedCleanModeNeedsApply = false;
+        this.selectedCleanModeLiveConfirmationExpiresAt = 0;
         /**
          * Whether `selectedCleanMode` holds a choice or merely its initial value.
          *
@@ -680,6 +709,12 @@ class RoborockMatterVacuumAccessory {
             // cannot drift apart: whatever window this class enforces is the window
             // the protocol layer budgets its commands inside.
             prepWindowMs: MATTER_CLEAN_MODE_PREP_TIMEOUT_MS,
+        };
+    }
+    getMatterCleanModeLiveCommandOptions() {
+        return {
+            ...this.getMatterCleanModePrepCommandOptions(),
+            context: "during cleaning",
         };
     }
     /** The robot's name exactly as the log lines and Apple Home spell it. */
@@ -927,14 +962,11 @@ class RoborockMatterVacuumAccessory {
      * the sort.
      *
      * WHERE THIS DELIBERATELY DIFFERS FROM getCurrentCleanMode(), because the
-     * difference looks like an oversight and is not: there, a Matter selection
-     * that has not been applied yet outranks the robot's live report, so the
-     * mode picker keeps showing what the user just asked for instead of
-     * flickering back. Here it does not. A selection made mid-run is not applied
-     * mid-run — the prep only runs before a start — so the robot carries on with
-     * the water it already had, and a robot physically mopping with an empty
-     * tank is blocked no matter what the picker shows. The picker reports
-     * intent; this reports what is happening to the floor.
+     * difference looks like an oversight and is not: there, an acknowledged
+     * Matter selection stays visible while the robot's status catches up. Here
+     * the applied-type pin below is the authority during that same window, so a
+     * stale water report cannot invent a tank warning for water the robot has
+     * already acknowledged turning off.
      *
      * The derived type goes through acceptLiveCleanType() like every other
      * consumer of it, and that gate is right here for the same reason it is
@@ -1462,25 +1494,52 @@ class RoborockMatterVacuumAccessory {
     async changeCleanMode(newMode) {
         const name = this.getVacuumName();
         this.platform.log.info(`Matter clean mode request for ${name}: ${newMode !== null && newMode !== void 0 ? newMode : "unknown"}.`);
-        if (this.isSupportedCleanMode(newMode)) {
-            this.rememberCurrentRoborockCleanModeSettings();
-            this.selectedCleanMode = newMode;
-            this.selectedCleanModeNeedsApply = true;
-            this.userSelectedCleanMode = true;
-            // Discard the level remembered from the robot: from here on the user
-            // has said what they want, and an unreadable fan power must fall back
-            // to their choice rather than to what the robot said before it. The
-            // applied-type pin goes for the same reason — it records an older
-            // intent, and this selection supersedes it.
-            this.lastResolvedFanPowerCleanMode = null;
-            this.appliedCleanTypePin = null;
-            const state = {
-                rvcCleanMode: { currentMode: newMode },
-            };
-            this.setAndScheduleOptimisticState(state, "clean mode change");
+        if (!this.isSupportedCleanMode(newMode)) {
+            this.platform.log.warn(`Ignoring unsupported Matter clean mode '${newMode}' for ${name}.`);
             return;
         }
-        this.platform.log.warn(`Ignoring unsupported Matter clean mode '${newMode}' for ${name}.`);
+        const previousSelection = {
+            selectedCleanMode: this.selectedCleanMode,
+            selectedCleanModeNeedsApply: this.selectedCleanModeNeedsApply,
+            selectedCleanModeLiveConfirmationExpiresAt: this.selectedCleanModeLiveConfirmationExpiresAt,
+            userSelectedCleanMode: this.userSelectedCleanMode,
+            lastResolvedFanPowerCleanMode: this.lastResolvedFanPowerCleanMode,
+            appliedCleanTypePin: this.appliedCleanTypePin,
+        };
+        // These are robot-reported preferences, not speculative selection
+        // bookkeeping. If the command fails they remain valid pre-command truth,
+        // so the rollback below intentionally does not restore them.
+        this.rememberCurrentRoborockCleanModeSettings();
+        this.selectedCleanMode = newMode;
+        this.selectedCleanModeNeedsApply = true;
+        this.selectedCleanModeLiveConfirmationExpiresAt = 0;
+        this.userSelectedCleanMode = true;
+        // Discard the level remembered from the robot: from here on the user has
+        // said what they want, and an unreadable fan power must fall back to their
+        // choice rather than to what the robot said before it.
+        this.lastResolvedFanPowerCleanMode = null;
+        this.appliedCleanTypePin = null;
+        const operationalState = this.getOperationalState();
+        const canApplyLive = operationalState === RVC_OPERATIONAL_STATE.RUNNING ||
+            operationalState === RVC_OPERATIONAL_STATE.PAUSED;
+        try {
+            if (canApplyLive) {
+                await this.applyCleanModeDuringRun(newMode);
+            }
+        }
+        catch (error) {
+            this.selectedCleanMode = previousSelection.selectedCleanMode;
+            this.selectedCleanModeNeedsApply =
+                previousSelection.selectedCleanModeNeedsApply;
+            this.selectedCleanModeLiveConfirmationExpiresAt =
+                previousSelection.selectedCleanModeLiveConfirmationExpiresAt;
+            this.userSelectedCleanMode = previousSelection.userSelectedCleanMode;
+            this.lastResolvedFanPowerCleanMode =
+                previousSelection.lastResolvedFanPowerCleanMode;
+            this.appliedCleanTypePin = previousSelection.appliedCleanTypePin;
+            throw error;
+        }
+        this.setAndScheduleOptimisticState({ rvcCleanMode: { currentMode: newMode } }, "clean mode change");
     }
     async pauseCleaning(surface = exports.MATTER_SURFACE) {
         const roborockState = this.getNumberStatus("state");
@@ -2070,6 +2129,25 @@ class RoborockMatterVacuumAccessory {
         }
         return ((_a = FAN_POWER_CLEAN_MODES.find((powerMode) => powerMode.mode === cleanMode)) !== null && _a !== void 0 ? _a : null);
     }
+    doesLiveCleanModeMatch(cleanMode) {
+        const expectedBaseType = this.getBaseCleanType(cleanMode);
+        const liveType = this.getLiveCleanType();
+        if (liveType !== null && !this.acceptLiveCleanType(liveType)) {
+            return false;
+        }
+        if (liveType !== null &&
+            this.getBaseCleanType(liveType) !== expectedBaseType) {
+            return false;
+        }
+        const fanPowerMode = this.getFanPowerCleanMode(cleanMode);
+        if (fanPowerMode) {
+            // Some robots omit a live clean type, but fan power independently
+            // confirms a suction variant. Base clean-type changes have no equivalent
+            // independent signal and still require the robot to report a live type.
+            return this.getNumberStatus("fan_power") === fanPowerMode.fanPower;
+        }
+        return liveType !== null;
+    }
     getCurrentCleanMode() {
         let selected = this.isSupportedCleanMode(this.selectedCleanMode)
             ? this.selectedCleanMode
@@ -2083,6 +2161,24 @@ class RoborockMatterVacuumAccessory {
         // selection wins until it has been applied, and outside an active run
         // the (sticky) robot-side setting must not shadow the user's selection.
         const inCleaningRun = this.isInCleaningRunMode(this.getOperationalState());
+        if (this.selectedCleanModeLiveConfirmationExpiresAt > 0) {
+            if (!inCleaningRun) {
+                this.selectedCleanModeLiveConfirmationExpiresAt = 0;
+            }
+            else if (this.doesLiveCleanModeMatch(this.selectedCleanMode)) {
+                this.selectedCleanModeLiveConfirmationExpiresAt = 0;
+                this.appliedCleanTypePin = null;
+                this.clearOptimisticCluster("rvcCleanMode");
+            }
+            else if (Date.now() < this.selectedCleanModeLiveConfirmationExpiresAt) {
+                return selected;
+            }
+            else {
+                this.selectedCleanModeLiveConfirmationExpiresAt = 0;
+                this.appliedCleanTypePin = null;
+                this.platform.log.warn(`Roborock acknowledged the live ${this.getCleanModeLabel(this.selectedCleanMode)} change for ${this.getVacuumName()}, but its status did not converge within ${MATTER_CLEAN_MODE_LIVE_CONFIRMATION_TIMEOUT_MS / 1000} seconds; Apple Home will now follow the robot's live report.`);
+            }
+        }
         this.trackAppliedCleanTypeRun(inCleaningRun);
         // The wind-down is not a mode change, and on a classic robot it looks
         // exactly like one.
@@ -2310,6 +2406,30 @@ class RoborockMatterVacuumAccessory {
      * vacuum-family mode keeps the robot's current suction, a mop-family mode
      * its current water level), so applying pins the clean TYPE and nothing else.
      */
+    async applyCleanModeDuringRun(cleanMode) {
+        var _a;
+        const applySettings = this.api.applyMatterCleanModeSettings;
+        if (typeof applySettings !== "function") {
+            throw new Error("Roborock clean-mode control is unavailable.");
+        }
+        const settings = this.getRoborockCleanModeSettings(cleanMode);
+        if (!settings) {
+            throw new Error(`No Roborock settings exist for ${this.getCleanModeLabel(cleanMode)}.`);
+        }
+        this.platform.log.info(`Applying ${this.getCleanModeLabel(cleanMode)} mode to ${this.getVacuumName()} during cleaning.`);
+        const result = await this.withCleanModePrepTimeout(applySettings.call(this.api, this.getDuid(), settings, this.getMatterCleanModeLiveCommandOptions()));
+        if ((_a = result === null || result === void 0 ? void 0 : result.unconfirmedSettings) === null || _a === void 0 ? void 0 : _a.length) {
+            throw new Error(`Roborock did not confirm the ${result.unconfirmedSettings.join(" and ")} during the live clean-mode change.`);
+        }
+        this.selectedCleanModeNeedsApply = false;
+        this.selectedCleanModeLiveConfirmationExpiresAt =
+            Date.now() + MATTER_CLEAN_MODE_LIVE_CONFIRMATION_TIMEOUT_MS;
+        this.appliedCleanTypePin = {
+            cleanType: this.getBaseCleanType(cleanMode),
+            runObserved: true,
+            reported: false,
+        };
+    }
     async applyCleanModeBeforeStarting() {
         const applySettings = this.api.applyMatterCleanModeSettings;
         if (typeof applySettings !== "function") {
@@ -2634,6 +2754,8 @@ class RoborockMatterVacuumAccessory {
         // reports which one the robot is actually inside, the first requested
         // area is shown as operating and the rest as pending.
         this.liveConfirmedServiceAreaIds = new Set();
+        this.liveRoomVisitAreaId = null;
+        this.liveRoomVisitReadings = 0;
         this.serviceAreaCurrentArea = areaIds[0];
         this.serviceAreaProgress = areaIds.map((areaId, index) => ({
             areaId,
@@ -2680,6 +2802,8 @@ class RoborockMatterVacuumAccessory {
             return;
         }
         this.liveConfirmedServiceAreaIds = new Set();
+        this.liveRoomVisitAreaId = null;
+        this.liveRoomVisitReadings = 0;
         this.serviceAreaCurrentArea = null;
         this.serviceAreaProgress = areaIds.map((areaId) => ({
             areaId,
@@ -2726,6 +2850,8 @@ class RoborockMatterVacuumAccessory {
     }
     clearServiceAreaProgress() {
         this.liveConfirmedServiceAreaIds = new Set();
+        this.liveRoomVisitAreaId = null;
+        this.liveRoomVisitReadings = 0;
         this.serviceAreaCurrentArea = null;
         this.serviceAreaProgress = [];
         this.persistServiceAreaProgress();
@@ -2740,6 +2866,8 @@ class RoborockMatterVacuumAccessory {
         // The run ended (docked, charging, stopped): everything requested is
         // reported as completed and no area is current anymore.
         this.liveConfirmedServiceAreaIds = new Set();
+        this.liveRoomVisitAreaId = null;
+        this.liveRoomVisitReadings = 0;
         this.serviceAreaCurrentArea = null;
         this.serviceAreaProgress = this.serviceAreaProgress.map((entry) => ({
             areaId: entry.areaId,
@@ -2839,7 +2967,16 @@ class RoborockMatterVacuumAccessory {
                 return entry;
             });
         }
-        this.liveConfirmedServiceAreaIds.add(area.areaId);
+        if (this.liveRoomVisitAreaId === area.areaId) {
+            this.liveRoomVisitReadings += 1;
+        }
+        else {
+            this.liveRoomVisitAreaId = area.areaId;
+            this.liveRoomVisitReadings = 1;
+        }
+        if (this.liveRoomVisitReadings >= LIVE_ROOM_READINGS_TO_CONFIRM) {
+            this.liveConfirmedServiceAreaIds.add(area.areaId);
+        }
         if (!changedCurrentArea && !changedProgress) {
             return;
         }
@@ -3654,6 +3791,20 @@ class RoborockMatterVacuumAccessory {
             return null;
         }
         return this.optimisticClusters;
+    }
+    clearOptimisticCluster(cluster) {
+        const optimistic = this.getActiveOptimisticState();
+        if (!optimistic || !(cluster in optimistic)) {
+            return;
+        }
+        const remaining = { ...optimistic };
+        delete remaining[cluster];
+        if (Object.keys(remaining).length === 0) {
+            this.clearOptimisticState();
+            return;
+        }
+        this.optimisticClusters = remaining;
+        this.optimisticGeneration += 1;
     }
     clearOptimisticState() {
         this.optimisticClusters = null;
