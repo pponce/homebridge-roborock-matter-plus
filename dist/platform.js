@@ -99,16 +99,7 @@ class RoborockPlatform {
         this.platformConfig = config;
         // Initialise logging utility
         this.log = new logger_1.default(homebridgeLogger, this.platformConfig.debugMode);
-        this.scheduleAccountCoordinator = new hap_schedule_accessory_1.ScheduleAccountCoordinator({
-            cacheTtlMs: (0, hap_schedule_accessory_1.normalizeSchedulePolicyValue)(this.platformConfig.scheduleRefreshIntervalMinutes, 5, 1, 1440) *
-                60 *
-                1000,
-            batchWindowMs: (0, hap_schedule_accessory_1.normalizeSchedulePolicyValue)(this.platformConfig.scheduleBatchWindowMilliseconds, 500, 100, 5000),
-            writeSpacingMs: (0, hap_schedule_accessory_1.normalizeSchedulePolicyValue)(this.platformConfig.scheduleWriteSpacingMilliseconds, 500, 250, 10000),
-            throttleCooldownMs: (0, hap_schedule_accessory_1.normalizeSchedulePolicyValue)(this.platformConfig.scheduleRateLimitCooldownMinutes, 65, 60, 1440) *
-                60 *
-                1000,
-        });
+        this.scheduleAccountCoordinator = new hap_schedule_accessory_1.ScheduleAccountCoordinator();
         // Create Roborock App communication module
         const username = this.platformConfig.email;
         const password = this.platformConfig.password;

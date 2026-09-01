@@ -26,7 +26,6 @@ import RoborockStateSensorAccessory, {
 } from "./state_sensor_accessory";
 import RoborockHapScheduleAccessory, {
   isHapScheduleAccessory,
-  normalizeSchedulePolicyValue,
   ScheduleAccountCoordinator,
 } from "./hap_schedule_accessory";
 
@@ -152,38 +151,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       homebridgeLogger,
       this.platformConfig.debugMode
     );
-    this.scheduleAccountCoordinator = new ScheduleAccountCoordinator({
-      cacheTtlMs:
-        normalizeSchedulePolicyValue(
-          this.platformConfig.scheduleRefreshIntervalMinutes,
-          5,
-          1,
-          1440
-        ) *
-        60 *
-        1000,
-      batchWindowMs: normalizeSchedulePolicyValue(
-        this.platformConfig.scheduleBatchWindowMilliseconds,
-        500,
-        100,
-        5000
-      ),
-      writeSpacingMs: normalizeSchedulePolicyValue(
-        this.platformConfig.scheduleWriteSpacingMilliseconds,
-        500,
-        250,
-        10000
-      ),
-      throttleCooldownMs:
-        normalizeSchedulePolicyValue(
-          this.platformConfig.scheduleRateLimitCooldownMinutes,
-          65,
-          60,
-          1440
-        ) *
-        60 *
-        1000,
-    });
+    this.scheduleAccountCoordinator = new ScheduleAccountCoordinator();
     // Create Roborock App communication module
 
     const username = this.platformConfig.email;

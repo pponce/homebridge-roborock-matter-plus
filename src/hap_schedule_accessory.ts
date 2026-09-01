@@ -38,24 +38,6 @@ export const DEFAULT_SCHEDULE_POLICY: Readonly<SchedulePolicyOptions> = {
   throttleCooldownMs: SCHEDULE_THROTTLE_COOLDOWN_MS,
 };
 
-export function normalizeSchedulePolicyValue(
-  value: unknown,
-  defaultValue: number,
-  minimum: number,
-  maximum: number
-): number {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim() !== ""
-        ? Number(value)
-        : defaultValue;
-
-  return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum
-    ? parsed
-    : defaultValue;
-}
-
 export const HAP_EXTENSION_KIND = "hapExtension" as const;
 export const HAP_SCHEDULE_EXTENSION = "schedules" as const;
 

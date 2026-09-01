@@ -149,38 +149,6 @@
         "type": "boolean",
         "default": false
       },
-      "scheduleRefreshIntervalMinutes": {
-        "title": "Schedule Refresh Interval",
-        "description": "Minutes that a successful schedule read remains fresh. Lower values increase Roborock cloud traffic.",
-        "type": "number",
-        "default": 5,
-        "minimum": 1,
-        "maximum": 1440
-      },
-      "scheduleBatchWindowMilliseconds": {
-        "title": "Schedule Write Batch Window",
-        "description": "Milliseconds used to combine rapid schedule switch changes and keep only each schedule's final requested state.",
-        "type": "number",
-        "default": 500,
-        "minimum": 100,
-        "maximum": 5000
-      },
-      "scheduleWriteSpacingMilliseconds": {
-        "title": "Schedule Write Spacing",
-        "description": "Minimum delay in milliseconds between schedule writes in one batch.",
-        "type": "number",
-        "default": 500,
-        "minimum": 250,
-        "maximum": 10000
-      },
-      "scheduleRateLimitCooldownMinutes": {
-        "title": "Schedule Rate-Limit Cooldown",
-        "description": "Minutes to pause all schedule cloud traffic after an explicit rate-limit response.",
-        "type": "number",
-        "default": 65,
-        "minimum": 60,
-        "maximum": 1440
-      },
       "homeKitActionSwitches": {
         "title": "Which Switches to Add",
         "description": "Which Home app action switches to add. Return to Dock is the one Apple Home cannot automate, and Empty Bin provides the dock action Apple Home does not show while a compatible robot is docked. Start Cleaning starts the same clean as the Home tile's play button, including any rooms selected there; Pause and Find expose their corresponding commands. Schedules are controlled separately by the \"Add Home app schedule switches\" setting above. Only used when the action-switch setting is on.",

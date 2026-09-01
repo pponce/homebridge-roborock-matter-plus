@@ -8,7 +8,6 @@ jest.mock("../src/hap_schedule_api.ts", () => ({
 
 const {
   isDefiniteScheduleThrottle,
-  normalizeSchedulePolicyValue,
   ScheduleAccountCoordinator,
   ScheduleWriteBatcher,
   ScheduleWriteQueue,
@@ -42,23 +41,6 @@ describe("schedule throttle detection", () => {
     [undefined],
   ])("does not classify an ambiguous failure as throttling", (error) => {
     expect(isDefiniteScheduleThrottle(error)).toBe(false);
-  });
-});
-
-describe("schedule policy validation", () => {
-  test.each([undefined, "", 0, -1, NaN, Infinity, "not-a-number", 10001])(
-    "rejects unsafe or extreme value %p",
-    (value) => {
-      expect(normalizeSchedulePolicyValue(value, 500, 100, 10000)).toBe(500);
-    }
-  );
-
-  test.each([
-    [100, 100],
-    ["500", 500],
-    [10000, 10000],
-  ])("accepts bounded value %p", (value, expected) => {
-    expect(normalizeSchedulePolicyValue(value, 500, 100, 10000)).toBe(expected);
   });
 });
 

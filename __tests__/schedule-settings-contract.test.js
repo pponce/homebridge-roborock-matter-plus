@@ -33,32 +33,29 @@ describe("HomeKit schedule settings contract", () => {
     expect(uiHtml).toContain('id="homekit-action-schedules"');
   });
 
-  test("schedule cloud timing settings are wired through schema, UI, types, and runtime", () => {
-    const expected = {
-      scheduleRefreshIntervalMinutes: [5, 1, 1440],
-      scheduleBatchWindowMilliseconds: [500, 100, 5000],
-      scheduleWriteSpacingMilliseconds: [500, 250, 10000],
-      scheduleRateLimitCooldownMinutes: [65, 60, 1440],
-    };
+  test("schedule cloud policy keeps internal defaults out of user configuration", () => {
+    const removedKeys = [
+      "scheduleRefreshIntervalMinutes",
+      "scheduleBatchWindowMilliseconds",
+      "scheduleWriteSpacingMilliseconds",
+      "scheduleRateLimitCooldownMinutes",
+    ];
 
-    for (const [key, [defaultValue, minimum, maximum]] of Object.entries(
-      expected
-    )) {
-      expect(typesSource).toContain(`${key}?: number;`);
-      expect(schema.schema.properties[key]).toMatchObject({
-        type: "number",
-        default: defaultValue,
-        minimum,
-        maximum,
-      });
-      expect(uiJs).toContain(`${key}:`);
-      expect(platformSource).toContain(`this.platformConfig.${key}`);
+    for (const key of removedKeys) {
+      expect(typesSource).not.toContain(`${key}?: number;`);
+      expect(schema.schema.properties[key]).toBeUndefined();
+      expect(uiJs).not.toContain(key);
+      expect(platformSource).not.toContain(`this.platformConfig.${key}`);
     }
 
-    expect(uiHtml).toContain('id="schedule-refresh-interval-minutes"');
-    expect(uiHtml).toContain('id="schedule-batch-window-milliseconds"');
-    expect(uiHtml).toContain('id="schedule-write-spacing-milliseconds"');
-    expect(uiHtml).toContain('id="schedule-rate-limit-cooldown-minutes"');
+    expect(uiHtml).not.toContain("schedule-refresh-interval-minutes");
+    expect(uiHtml).not.toContain("schedule-batch-window-milliseconds");
+    expect(uiHtml).not.toContain("schedule-write-spacing-milliseconds");
+    expect(uiHtml).not.toContain("schedule-rate-limit-cooldown-minutes");
+    expect(platformSource).toContain("new ScheduleAccountCoordinator()");
+    expect(scheduleSource).toMatch(
+      /cacheTtlMs: SCHEDULE_CACHE_TTL_MS,[\s\S]*?batchWindowMs: SCHEDULE_WRITE_BATCH_WINDOW_MS,[\s\S]*?writeSpacingMs: SCHEDULE_WRITE_SPACING_MS,[\s\S]*?throttleCooldownMs: SCHEDULE_THROTTLE_COOLDOWN_MS/
+    );
   });
 
   test("the schedule checkbox is loaded from saved config", () => {
@@ -338,7 +335,7 @@ describe("HomeKit schedule settings contract", () => {
       "private readonly scheduleAccountCoordinator: ScheduleAccountCoordinator;"
     );
     expect(platformSource).toContain(
-      "this.scheduleAccountCoordinator = new ScheduleAccountCoordinator({"
+      "this.scheduleAccountCoordinator = new ScheduleAccountCoordinator();"
     );
     expect(platformSource).toContain("this.scheduleAccountCoordinator");
     expect(scheduleSource).toContain(

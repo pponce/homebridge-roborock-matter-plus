@@ -390,7 +390,6 @@ request is necessary and should run next.
 - Count schedule reads, primary writes, fallback writes, verification reads, coalesced changes, and
   requests avoided by cache/backoff/throttling.
 - Keep logs free of credentials, device secrets, and complete schedule payloads.
-- Validate all exposed values as finite numbers with conservative defaults and minimums.
 
 ### Phase 5: validation and upstream preparation
 

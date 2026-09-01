@@ -263,57 +263,6 @@
           ></span
         >
       </label>
-      <div class="field-grid">
-        <label class="field">
-          <span>Schedule refresh interval (minutes)</span>
-          <input
-            id="schedule-refresh-interval-minutes"
-            type="number"
-            min="1"
-            max="1440"
-            step="1"
-          />
-          <small
-            >Successful schedule reads are reused for this long. Default:
-            5.</small
-          >
-        </label>
-        <label class="field">
-          <span>Schedule batch window (milliseconds)</span>
-          <input
-            id="schedule-batch-window-milliseconds"
-            type="number"
-            min="100"
-            max="5000"
-            step="50"
-          />
-          <small>Combines rapid switch changes. Default: 500.</small>
-        </label>
-        <label class="field">
-          <span>Schedule write spacing (milliseconds)</span>
-          <input
-            id="schedule-write-spacing-milliseconds"
-            type="number"
-            min="250"
-            max="10000"
-            step="50"
-          />
-          <small>Delay between writes in one batch. Default: 500.</small>
-        </label>
-        <label class="field">
-          <span>Schedule rate-limit cooldown (minutes)</span>
-          <input
-            id="schedule-rate-limit-cooldown-minutes"
-            type="number"
-            min="60"
-            max="1440"
-            step="1"
-          />
-          <small
-            >Account-wide pause after an explicit throttle. Default: 65.</small
-          >
-        </label>
-      </div>
     </div>
 
     <label class="checkbox">

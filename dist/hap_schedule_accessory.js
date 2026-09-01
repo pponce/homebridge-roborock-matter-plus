@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ScheduleWriteBatcher = exports.ScheduleAccountCoordinator = exports.ScheduleWriteQueue = exports.HAP_SCHEDULE_EXTENSION = exports.HAP_EXTENSION_KIND = exports.DEFAULT_SCHEDULE_POLICY = void 0;
-exports.normalizeSchedulePolicyValue = normalizeSchedulePolicyValue;
 exports.scheduleFailureBackoffMs = scheduleFailureBackoffMs;
 exports.isDefiniteScheduleThrottle = isDefiniteScheduleThrottle;
 exports.parseServerTimers = parseServerTimers;
@@ -29,16 +28,6 @@ exports.DEFAULT_SCHEDULE_POLICY = {
     writeSpacingMs: SCHEDULE_WRITE_SPACING_MS,
     throttleCooldownMs: SCHEDULE_THROTTLE_COOLDOWN_MS,
 };
-function normalizeSchedulePolicyValue(value, defaultValue, minimum, maximum) {
-    const parsed = typeof value === "number"
-        ? value
-        : typeof value === "string" && value.trim() !== ""
-            ? Number(value)
-            : defaultValue;
-    return Number.isFinite(parsed) && parsed >= minimum && parsed <= maximum
-        ? parsed
-        : defaultValue;
-}
 exports.HAP_EXTENSION_KIND = "hapExtension";
 exports.HAP_SCHEDULE_EXTENSION = "schedules";
 function scheduleFailureBackoffMs(consecutiveFailures, randomValue = Math.random()) {

@@ -87,8 +87,4 @@ export interface RoborockPlatformConfig extends PlatformConfig {
   enableHomeKitStateSensors?: boolean;
   homeKitStateSensors?: string[];
   enableHomeKitScheduleSwitches?: boolean;
-  scheduleRefreshIntervalMinutes?: number;
-  scheduleBatchWindowMilliseconds?: number;
-  scheduleWriteSpacingMilliseconds?: number;
-  scheduleRateLimitCooldownMinutes?: number;
 }
