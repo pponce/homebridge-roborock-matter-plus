@@ -171,13 +171,13 @@ upstream merge rather than treating these figures as permanent implementation fa
 - Start with an approximately 500 ms coalescing window.
 - When one schedule is toggled repeatedly within the window, retain only its final requested value.
 - Preserve the final requested state for every distinct schedule in the batch.
-- Keep the collection window at the reviewed conservative internal default.
+- Make the window configurable only with safe validation and a conservative minimum.
 
 #### State and verification
 
 - Optimistically update the coordinator cache so HomeKit reflects the requested final state without
   waiting for every network round trip.
-- Space writes using the reviewed conservative internal default.
+- Space writes conservatively; make spacing configurable with a safe default and minimum.
 - Verify once after the batch rather than once after every switch.
 - Compare the authoritative result with every schedule modified by the batch.
 - Retain the reviewed `upd_timer` fallback behavior, but invoke it in an ordered, bounded way rather
@@ -355,13 +355,20 @@ request is necessary and should run next.
 - These metrics cover schedule traffic only and therefore cannot be mistaken for HomeData, map,
   status, or total Roborock cloud usage.
 
-#### Phase 4 checkpoint: fixed safe schedule policy
+#### Phase 4 checkpoint: safe schedule policy configuration
 
-- The schedule policy remains an internal implementation detail rather than adding advanced timing
-  controls to the Homebridge configuration experience.
-- The reviewed defaults remain fixed at a five-minute successful cache, 500 ms batch window, 500 ms
-  write spacing, and 65-minute definite-throttle cooldown.
-- The effective fixed policy continues to be logged once at startup.
+- The Homebridge schema and custom settings UI expose schedule refresh minutes, batch-window
+  milliseconds, write-spacing milliseconds, and definite-throttle cooldown minutes with units in
+  every setting name and label.
+- Omitted settings preserve the reviewed defaults: 5 minutes, 500 ms, 500 ms, and 65 minutes.
+- Runtime validation accepts finite numbers and numeric strings only within conservative bounds;
+  empty strings, zero, negative values, `NaN`, infinity, nonnumeric strings, and extreme values fall
+  back to the safe default.
+- Minimums are 1 minute for successful schedule cache, 100 ms for batching, 250 ms for write
+  spacing, and 60 minutes for a definite-throttle cooldown.
+- Maximums prevent accidental effectively-permanent disabling: 24 hours for cache/cooldown, 5
+  seconds for batching, and 10 seconds for write spacing.
+- The effective validated policy continues to be logged once at startup.
 
 #### Phase 5 checkpoint: deterministic integration gate
 
@@ -377,7 +384,7 @@ request is necessary and should run next.
 - Live cloud success remains deferred while Pedro's account is capped; deterministic coverage is the
   release gate until a single controlled field test is safe.
 
-### Phase 4: observability
+### Phase 4: observability and configuration
 
 - Log effective schedule refresh, coalescing, spacing, and cooldown settings at startup.
 - Count schedule reads, primary writes, fallback writes, verification reads, coalesced changes, and
@@ -434,3 +441,18 @@ Until the account has clearly recovered:
 
 The implementation must remain useful under this condition: stale schedule services stay present,
 queued work stops on a definite throttle, and failures do not cause a retry storm.
+
+## Live validation notes
+
+- A two-schedule Downtown Rock scene produced two ordered primary writes, spaced by the configured
+  interval, followed by one consolidated verification read and no fallback, timeout, or throttle.
+- The first field check began from a known Home/Roborock state mismatch and was therefore not valid
+  evidence that consolidated verification had accepted a false result. After Pedro reconciled the
+  states in the Roborock app, individual enable/disable operations and a two-schedule scene all
+  changed the corresponding Roborock schedules successfully.
+- Future field tests must establish the starting state in both Home and the Roborock app before a
+  write. A post-write parser line proves that a verification snapshot was received, but the batch
+  summary log should report how many requested changes that snapshot confirmed.
+- Aggregate primary and fallback verification summaries are logged at info level so normal,
+  fallback, and partial-failure paths can be distinguished without logging complete timer payloads
+  or credentials.

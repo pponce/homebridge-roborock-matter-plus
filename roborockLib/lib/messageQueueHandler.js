@@ -2,6 +2,7 @@
 "use strict";
 
 const b01Q7Adapter = require("./b01Q7Adapter");
+const b01Q10Adapter = require("./b01Q10Adapter");
 const { describeDevice } = require("./describeDevice");
 
 /**
@@ -14,17 +15,26 @@ const { describeDevice } = require("./describeDevice");
  * matters: an unclassified refusal is logged as a plugin error with a stack,
  * once per poll, for as long as the robot is away. The reason now travels as
  * a code and the prose is free to change.
- */
-/**
+ *
+ * `code` defaults to the transport code because most refusals ARE transport
+ * conditions — an offline robot, a dead cloud link, a missing local socket —
+ * and those must stay visible as warnings. A refusal that reflects what a
+ * robot family can never do is a capability fact instead, and passing
+ * `B01_METHOD_UNSUPPORTED` puts it on `catchError`'s calm branch by
+ * construction rather than leaving each caller to gate itself. Do not widen
+ * that to the transport cases: it would tell a user nothing is wrong while
+ * their robot is unreachable.
+ *
  * @param {string} kind
  * @param {string} message
+ * @param {string} [code]
  * @returns {Error & { code: string, transientKind: string }}
  */
-function refusal(kind, message) {
+function refusal(kind, message, code = "ROBOROCK_TRANSPORT_REFUSED") {
   const error = /** @type {Error & { code: string, transientKind: string }} */ (
     new Error(message)
   );
-  error.code = "ROBOROCK_TRANSPORT_REFUSED";
+  error.code = code;
   error.transientKind = kind;
   return error;
 }
@@ -53,6 +63,87 @@ function getRequestTimeout(method, requestTimeoutMs) {
 }
 
 /**
+ * What the MQTT link did while a cloud request was pending, as a sentence to
+ * append to the timeout error.
+ *
+ * A cloud timeout says only that nothing came back, and the two causes behind
+ * it need opposite responses: a reply that never arrived is a robot or account
+ * that is not answering, while a reply that arrived and was not matched is a
+ * correlation bug on this side. The plugin already knows which — the MQTT
+ * receiver attributes every decoded message to a device — but the three paths
+ * that could say so all log at debug, so the fact never reaches the warn line
+ * a user actually reports.
+ *
+ * Measured in #14 (niclasreich, Q10 S5 `roborock.vacuum.ss07`, 26 Aug 2026):
+ * every `prop.get`, `prop.set` and `service.set_room_clean` timed out with the
+ * MQTT state reported as `true`, and neither of us could tell silence from an
+ * unrecognised answer. It cost two round trips with the reporter.
+ *
+ * Deliberately cloud-only. A local request dies on its own socket, and MQTT
+ * receipts would say nothing about it.
+ *
+ * @param {MessageQueueAdapter} adapter
+ * @param {string} duid
+ * @param {number | null} receiptsAtSend Receipts counted as the request went
+ *   out, or `null` when this adapter cannot count them.
+ * @returns {string} A sentence starting with a space, or `""`.
+ */
+function describeCloudSilence(adapter, duid, receiptsAtSend) {
+  if (
+    receiptsAtSend === null ||
+    typeof adapter.getCloudMessageReceiptCount !== "function"
+  ) {
+    return "";
+  }
+
+  const total = adapter.getCloudMessageReceiptCount(duid);
+
+  if (total === 0) {
+    // 3.17.7 concluded "the reply never arrived rather than arriving
+    // unrecognised" here, and that does not follow. The receiver drops a frame
+    // before the counter whenever its topic matches no known robot, and that
+    // path logs at debug — so an unattributed reply is invisible to both the
+    // counter and the user. Unattributed traffic is the difference between a
+    // robot that is silent (Roborock-side) and one whose answers we are
+    // throwing away (ours), so say which was observed and claim nothing more.
+    const unattributed =
+      typeof adapter.getUnattributedCloudMessageCount === "function"
+        ? adapter.getUnattributedCloudMessageCount()
+        : null;
+
+    if (unattributed === null) {
+      return " No Roborock message has reached the plugin from this robot since startup.";
+    }
+
+    if (unattributed > 0) {
+      return ` No Roborock message has reached the plugin from this robot since startup, but ${unattributed} message(s) arrived on a topic matching no known robot — the link is delivering and the plugin is failing to attribute it, which is a fault on this side.`;
+    }
+
+    return " No Roborock message has reached the plugin from this robot since startup, and none arrived on an unrecognised topic either, so nothing is coming back over MQTT at all.";
+  }
+
+  const duringRequest = total - receiptsAtSend;
+  if (duringRequest > 0) {
+    // Arrived-but-unmatched is not proof the reply was sent: an unsolicited
+    // robot push counts here too. It does prove the link delivers, which is
+    // the half that a bare timeout leaves open.
+    return ` ${duringRequest} Roborock message(s) reached the plugin from this robot while the request was pending, so the link is delivering; the reply was either never sent or not recognised.`;
+  }
+
+  // The bare total was uninterpretable, and it misleads in the one direction
+  // that matters. This counter is incremented in the MQTT receiver only, so a
+  // robot that answers on the local socket never touches it — yet the poll
+  // chain a reader would compare it against runs over whichever transport is
+  // up. Measured on Mathias' own S8 Pro Ultra (a70, 27 Aug 2026): one cloud
+  // timeout reported "(8 since startup)" after 8.5 hours in which the 180 s
+  // poll had issued hundreds of requests, all answered locally. Read as a
+  // like-for-like ratio that says a 95 % dead link; read correctly it says
+  // nothing is wrong. Say what the number counts so the comparison is not
+  // available to make.
+  return ` No Roborock message reached the plugin from this robot while the request was pending (${total} cloud message(s) since startup). That total counts cloud traffic only — replies over the local socket are never counted here — so a low number on a robot that usually answers locally is normal and is not evidence the link is failing.`;
+}
+
+/**
  * @typedef {Object} PendingRequest
  * @property {(value: unknown) => void} resolve
  * @property {(reason?: unknown) => void} reject
@@ -71,7 +162,7 @@ function getRequestTimeout(method, requestTimeoutMs) {
 
 /**
  * @typedef {Object} MessageBuilder
- * @property {(duid: string, protocol: number, messageID: number, method: string, params: unknown[], secure: boolean, photo: boolean) => Promise<unknown>} buildPayload
+ * @property {(duid: string, protocol: number, messageID: number, method: string, params: unknown[], secure: boolean, photo: boolean, options?: {b01Q10Dps?: Record<string, unknown>}) => Promise<unknown>} buildPayload
  * @property {(duid: string, protocol: number, timestamp: number, payload: unknown) => Promise<Buffer | null | undefined>} buildRoborockMessage
  */
 
@@ -117,6 +208,13 @@ function getRequestTimeout(method, requestTimeoutMs) {
  * @property {(duid: string, update: TransportDiagnosticsUpdate) => Promise<void>} updateTransportDiagnostics
  * @property {(duid: string) => Promise<boolean>} [ensureLocalConnection]
  * @property {(duid: string, method?: string) => Promise<void>} [noteLocalRequestTimedOut]
+ * @property {(duid: string) => number} [getCloudMessageReceiptCount] How many
+ *   decoded MQTT messages have been attributed to this robot since startup.
+ *   Optional so an adapter that cannot count them keeps the old timeout text.
+ * @property {() => number} [getUnattributedCloudMessageCount] How many inbound
+ *   MQTT frames matched no known robot since startup. Account-wide, since
+ *   attribution is what failed. Optional: without it the timeout reports the
+ *   observation and draws no conclusion about why the robot is silent.
  * @property {(message: string, location: string, duid?: string) => void} catchError
  * @property {(duid: string) => string} [describeDevice]
  * @property {(duid: string, attribute: string) => string} [getProductAttribute]
@@ -187,20 +285,82 @@ class messageQueueHandler {
       localConnectionState = this.adapter.localConnector.isConnected(duid);
     }
 
-    // B01 (Q7-series) devices are cloud/MQTT-only and speak a different RPC
-    // dialect. Translate the v1-shaped method to the Q7 equivalent here so a
+    // The Q10 datapoint write, when this request is bound for a Q10. Non-null
+    // is what makes the send below fire-and-forget, because that is the only
+    // family whose dialect never replies.
+    /** @type {Record<string, any> | null} */
+    let b01Q10Dps = null;
+
+    // B01 devices are cloud/MQTT-only and speak a different RPC dialect.
+    // Translate the v1-shaped method to the family's equivalent here so a
     // single choke point covers every caller (Matter, polling, UI).
     if (b01Q7Adapter.isB01Protocol(version)) {
+      const model = this.adapter?.getProductAttribute?.(duid, "model");
+      const family = b01Q7Adapter.b01FamilyForModel(model);
       const neutral = b01Q7Adapter.neutralResponse(method);
-      const translated = b01Q7Adapter.translateOutgoing(
-        method,
-        params,
-        b01Q7Adapter.b01FamilyForModel(
-          this.adapter?.getProductAttribute?.(duid, "model")
-        )
-      );
 
-      if (!translated) {
+      // `pv === "B01"` IS TWO WIRE PROTOCOLS AND ONLY Q7 IS IMPLEMENTED.
+      //
+      // Q7 (`sc*`) carries a request as an RPC envelope on datapoint 10000:
+      //   {"dps":{"10000":{"method":"prop.set","msgId":"…","params":…}}}
+      // Q10 (`ss*`) writes the datapoint directly, with no method and no
+      // msgId at all:
+      //   {"dps":{"201":1}}
+      //
+      // Datapoint 10000 is not in the Q10 datapoint set, so publishing the Q7
+      // envelope to a Q10 sends it a correctly framed, correctly encrypted
+      // frame addressed to a datapoint it does not have, which it discards.
+      // Q10 commands are also fire-and-forget — the dialect sends no RPC
+      // reply — so the request then waits out its full timeout for an answer
+      // that could not arrive even on a healthy link.
+      //
+      // That is what #14 spent three rounds on: the timeout diagnostics
+      // correctly reported total MQTT silence and thereby sent the reporter
+      // after a Roborock-side fault, when the cause was this plugin speaking
+      // the wrong language into a working link.
+      //
+      // Since 3.19.0 the Q10 dialect is spoken for COMMANDS: the datapoint
+      // write is built here and travels to the encoder in the options bag.
+      // READS stay refused, and that is a property of the dialect rather than
+      // unfinished work — a Q10 sends no RPC reply at all, so a read has
+      // nothing to resolve with. Serving one would hand the caller a value the
+      // robot never sent, and `mapStatusToV1` would publish that non-answer to
+      // Apple Home as the robot's state. A Q10's status comes from home data
+      // over HTTPS instead, a separate transport measured working in #14;
+      // reading it off pushed datapoint updates is the remaining half of #19.
+      //
+      // Methods answered from NEUTRAL_RESPONSES never touch the wire, so they
+      // are left alone either way — refusing those would regress the
+      // room-mapping fix from 3.17.3, opened by this same reporter.
+      if (family === b01Q7Adapter.B01_FAMILY.Q10 && !neutral) {
+        const q10 = b01Q10Adapter.translateOutgoing(method, params);
+
+        if (!q10) {
+          // A capability fact, not a transport fault: this dialect has no
+          // equivalent for the method and never will. Carrying the unsupported
+          // code keeps `catchError` calm BY CONSTRUCTION, so a caller that
+          // reaches here logs debug instead of "Failed to execute …" on warn.
+          // 3.19.0 and 3.19.1 were each one gate for one loop of exactly this
+          // class; the shape of the error is what kept producing them.
+          throw refusal(
+            "b01 q10 method unsupported",
+            `${describeDevice(this.adapter, duid)} speaks the B01 Q10 dialect, which has no equivalent for ${method}, so it was not sent. The Q10 dialect (${model || "ss*"}) writes numbered datapoints and sends no reply, so a request that exists to read a value cannot be answered over it; see issue #19.`,
+            "B01_METHOD_UNSUPPORTED"
+          );
+        }
+
+        b01Q10Dps = b01Q10Adapter.buildDps(q10.dp, q10.params);
+      }
+
+      // A Q10 request is already fully encoded; running it through the Q7
+      // translation as well would overwrite `method` and `params` with the
+      // wrong dialect's names, and `set_custom_mode` would then be refused
+      // outright because the Q10 wind codes are not in the Q7 table.
+      const translated = b01Q10Dps
+        ? null
+        : b01Q7Adapter.translateOutgoing(method, params, family);
+
+      if (!b01Q10Dps && !translated) {
         if (neutral) {
           this.adapter.log.debug(
             `Method ${method} has no B01/Q7 equivalent for ${duid}; returning a neutral response.`
@@ -217,8 +377,10 @@ class messageQueueHandler {
         throw unsupported;
       }
 
-      method = translated.method;
-      params = /** @type {any} */ (translated.params);
+      if (translated) {
+        method = translated.method;
+        params = /** @type {any} */ (translated.params);
+      }
     }
 
     let useCloudConnection =
@@ -275,7 +437,8 @@ class messageQueueHandler {
       method,
       params,
       secure,
-      photo
+      photo,
+      b01Q10Dps ? { b01Q10Dps } : {}
     );
     const roborockMessage = await this.adapter.message.buildRoborockMessage(
       duid,
@@ -338,6 +501,29 @@ class messageQueueHandler {
               `No local connection to ${describeDevice(this.adapter, duid)}, so the ${method} request was not sent.`
             )
           );
+        } else if (b01Q10Dps) {
+          // THE Q10 DIALECT IS FIRE-AND-FORGET. It defines no RPC reply, so
+          // there is no acknowledgement to wait for and nothing to correlate
+          // against — upstream's own channel returns None. Registering a
+          // pending request here would arm a timeout that is guaranteed to
+          // expire on a perfectly healthy link, and reporting that expiry is
+          // exactly the false "the cloud has gone silent" diagnosis that cost
+          // #14 three rounds.
+          //
+          // Resolving means "the write left this plugin", not "the robot did
+          // it". Nothing downstream may treat it as confirmation: the state
+          // the tile shows still comes from the optimistic-state machinery,
+          // which self-corrects against what the robot actually reports.
+          this.adapter.rr_mqtt_connector.sendMessage(duid, roborockMessage);
+          this.adapter.updateTransportDiagnostics(duid, {
+            lastTransport: "cloud",
+            lastTransportReason: "b01-q10-fire-and-forget",
+            lastCommandMethod: method,
+          });
+          this.adapter.log.debug(
+            `Published B01 Q10 datapoint write for ${duid} with ${payload}. The Q10 dialect is fire-and-forget, so this is a publish confirmation and not a robot acknowledgement; no reply is expected.`
+          );
+          resolve(["ok"]);
         } else {
           // setup Timeout
           const requestTimeout = getRequestTimeout(
@@ -345,13 +531,19 @@ class messageQueueHandler {
             options.requestTimeoutMs
           );
           const timeoutSeconds = Math.round(requestTimeout / 1000);
+          // Read BEFORE the send, so the timeout can subtract and report what
+          // arrived while this particular request was outstanding.
+          const receiptsAtSend =
+            typeof this.adapter.getCloudMessageReceiptCount === "function"
+              ? this.adapter.getCloudMessageReceiptCount(duid)
+              : null;
           const timeout = this.adapter.setTimeout(() => {
             this.adapter.pendingRequests.delete(messageID);
             this.adapter.localConnector.clearChunkBuffer(duid);
             if (useCloudConnection) {
               reject(
                 new Error(
-                  `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${mqttConnectionState}`
+                  `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${mqttConnectionState}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`
                 )
               );
             } else {

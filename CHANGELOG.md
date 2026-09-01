@@ -1,5 +1,183 @@
 # Changelog
 
+## 3.19.6
+
+**The periodic poll no longer carries a cloud firmware check whose answer nothing reads. The check has in fact never run — a missing `await` disabled it — and the tempting one-character repair would have added roughly 480 discarded cloud round-trips per robot per day.**
+
+`checkForNewFirmware()` sat in the poll chain and asked the Roborock cloud for `ota/firmware/<duid>/updatev2` once per robot per poll interval. Its own gate read `const isLocalDevice = !this.isRemoteDevice(duid)`, and `isRemoteDevice` is `async`. Negating a promise is false for every promise there has ever been, so the gate never opened and the body behind it has been unreachable for the life of this plugin. Every other caller of that method awaits it; this one line did not.
+
+Adding the missing `await` was the obvious repair and it was the wrong one. The request's result goes to `setObjectNotExistsAsync`, which is a documented no-op here, and to `setStateAsync("Devices.<duid>.updateStatus.<field>")`, which nothing in the plugin, the settings UI or the diagnostics export ever reads. The firmware revision Apple Home shows comes from a different source entirely — the `fv` field in HomeData. So the repair would have bought an awaited HTTPS round-trip on the poll thread, per robot, every three minutes, for an answer with no reader, plus a `catchError` path able to log a warning once per poll whenever the OTA endpoint was unhappy. That is the same never-throttled retry loop that 3.19.0, 3.19.1 and 3.19.5 each closed one instance of, and it would have been introduced rather than found.
+
+The call and the unreachable method are removed instead. Because the code could never execute, this changes no runtime behaviour on any robot: the same requests go out, the same values reach Apple Home, and nothing that had a reader lost one.
+
+What is new is the guard. A test now pins the outcome rather than the implementation — a periodic poll may spend no cloud round-trip on an answer no one can read — and it was verified by applying the naive `await` and watching it go red at exactly 480 requests per simulated day.
+
+## 3.19.5
+
+**A room-list refresh that cannot succeed is no longer re-attempted by every periodic poll. On a Q10 it is not attempted at all, and on a Q7 whose map channel is down it now backs off instead of running 480 guaranteed-to-fail map reads a day.**
+
+Room names on B01 robots come from the map channel, and because rooms rarely change a successful fetch is good for six hours. That six-hour stamp was written only on success — correct for the happy path, and the whole story for a refresh that never completes one. A robot that cannot answer never closes the throttle, so it was asked again by every periodic poll for as long as the plugin ran.
+
+**On a Q10 (`ss*`) the answer could never arrive.** `get_map_list` has no Q10 translation, so the send choke point refuses it by name before anything reaches the wire. That refusal is correct and is caught quietly at debug level, but it is certain before the request is made, and it was being repeated every three minutes forever. This is the third loop of that exact shape: the status loop was gated in 3.19.0 and the live-room loop in 3.19.1, and this one was missed both times. It is now gated at the same place and for the same reason — at the function entry, because both call sites reach it through a check that matches _both_ B01 dialects.
+
+**On a Q7 (`sc*`) the request is not refused, so the same missing guard cost real work.** A robot whose map channel is down ran a `get_map_list` on the wire plus a map read that waited out its full 20-second timeout, once per poll cycle — roughly 480 attempts a day for a room list that was not going to arrive, and in the uncached case it delayed the rest of the poll chain by that timeout each time.
+
+Repeated failures now widen the gap, following the same rule the live-room fetch already used. The first failure is deliberately not slowed, so a single lost frame on a healthy channel still costs nothing. Past that the gap doubles from two poll cycles and is capped at 30 minutes, which stays far below the six-hour success cadence — a channel that comes back is picked up within the same half hour rather than at the next scheduled refresh. A success clears the accumulated penalty outright.
+
+A reply that arrives but reports no current map is explicitly not counted as a failure. That is a robot still building its first map, and it must not be asked ever more rarely precisely while the answer is about to become available.
+
+This changes retry timing only. No new request is introduced, and nothing is published to Apple Home that was not published before.
+
+## 3.19.4
+
+**An unmapped `error_code` is now logged with the state the robot was in when it appeared, because these codes turn out to describe transitions rather than faults — and a bare number cannot be reported usefully or mapped later.**
+
+When a robot reports an `error_code` this plugin has no entry for, nothing is published to Apple Home and the number is named once in the log so it can be reported and mapped. That behaviour is unchanged and correct. What was missing was the context that makes the number mean anything.
+
+Three distinct unmapped codes appeared on two B01/sc05 robots in a single log during one ordinary scheduled run, and each one was tied to a state change: 2105 only while docked and charging at 100%, 2110 one second after the run started, 2104 on the way back to the dock. Nothing was wrong with any of the robots — the run started, ran and docked normally. Establishing that required hand-correlating each code against the neighbouring publish lines across a 2574-line log. Someone filing a model report pastes the one line, so that context never arrived with it.
+
+The line now names the robot's own state number and the Matter operational state derived from it. It also makes its own question answerable: "if the robot really is in trouble right now" cannot be judged from a number alone, and it was being asked while a robot was demonstrably cleaning normally.
+
+The once-per-code-per-robot-per-run rule is deliberately unchanged. Keying the de-duplication on code _and_ state would name a lingering code again at every transition it survived, which is the per-poll log burial that rule exists to prevent.
+
+No mapping is claimed for 2104, 2105 or 2110. They are still published as nothing, which remains the right answer for a number nobody has explained.
+
+## 3.19.3
+
+**A periodic cloud snapshot could overwrite live status with its own slightly older view, so a robot mid-clean briefly showed as docked. Reported with a measured sequence by [@jbyhb](https://github.com/jbyhb) in [#20](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/20).**
+
+During an active clean an S7 published 99% / running, a periodic HomeData refresh then published 88% / stopped, and the next live frame restored 99% / running one second later. No robot loses and regains 11% of its battery in a second, so the two readings were not a sequence of events — they were two views of the same moment, and the slower one won.
+
+**The cause is that HomeData was being promoted into the live cache.** Status reads prefer the live cache while it is fresh and fall back to the cloud snapshot once it is not, which is the right order. But parsing a HomeData poll into that cache also stamped it with the current time, so the poll presented itself as the newest live reading. Its values then took precedence over the genuinely newer transport frames until the next one arrived — and the freshness window it reset is the same one that decides whether live data is trusted at all.
+
+HomeData is no longer written into the live cache. It stays what it is: the fallback. The 15-minute staleness window is unchanged, so if live reporting genuinely goes quiet the snapshot still takes over and the tile still self-heals — that path is now pinned by a test that advances the clock past the window and asserts the snapshot wins, so this fix cannot quietly turn into a stale tile pinned forever.
+
+This corrects reporting only. It adds no command path and cannot move the robot.
+
+Troubleshooting documentation for the Apple Home "Updating…" tile is revised again, and this time it makes the remedy stronger rather than weaker. The reporter in [#7](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/7) clarified when his tile recovered during six months of chasing it: only ever immediately after installing an iOS release, perhaps twice, and never spontaneously. Installing a release restarts the device. So the recoveries that read as version fixes are the same restart step 1 already recommends, and the page now says so — including the part that matters to anyone living with it, which is that a restart buys days to a week rather than a permanent fix.
+
+## 3.19.2
+
+**Two releases in a row gated one caller each against the same defect. This one changes the shape of the error that kept producing them, so the next caller is calm without having to know.**
+
+3.19.0 stopped the status loop polling a Q10 (`ss*`) for a value the dialect cannot return. 3.19.1 did the same for the live-room loop. Both were the same class one loop apart, and a sweep of every send site has since confirmed no third loop is left. What had not been fixed was the reason the class kept surfacing as a warning rather than a debug line.
+
+The send choke point refuses an untranslatable Q10 read correctly and by design. But it built that refusal with `ROBOROCK_TRANSPORT_REFUSED`, and `catchError`'s calm early exit matches only `B01_METHOD_UNSUPPORTED`. So the refusal missed the calm branch, picked up the transient-warning path, and came out as `Failed to execute get_status on robot … Future transient warnings for this robot will be logged at most once every 360 minutes` — a line that reads as a failing robot when the plugin declined to send by design.
+
+**A Q10 having no equivalent for a read is a capability fact, not a transport fault.** It is permanent, identical for every Q10, and the same kind of condition as the B01/Q7 unsupported-method case that has always logged at debug. It now carries the unsupported code, so any caller that reaches it is quiet by construction rather than by remembering to gate itself.
+
+**The reclassification is deliberately narrow, and the guard is part of the change.** The same helper builds three genuine transport refusals — an offline robot, an unavailable cloud link, a missing local socket — and those must stay warnings, because for those the robot really is unreachable and the user does need to know. Only the dialect-capability refusal is reclassified; the three transport refusals are pinned by tests that fail if a future change widens it.
+
+One existing test asserted the old code. It was not wrong about the code — the code was the defect — and its two message assertions are untouched.
+
+**A flaky test in the release gate is fixed, and it was found by this release rather than reported.** Two tests start a real Node child process and wait for it to exit, on jest's default 5-second timeout — the only tests in the suite whose cost is a cold interpreter start. Under full-suite load that is a coin flip: two consecutive runs each failed one of the two, a different one each time, while the file passed 21 of 21 in nine seconds on its own. Both now carry an explicit ceiling generous enough that only a genuine hang reaches it, and the suite-wide default is raised from jest's 5 seconds to 20 seconds because the class is wider than those two — a socket test connecting to a closed port failed the next run for the same reason. Twenty seconds is roughly 220 times the suite's mean test, so a test that reaches it is stuck rather than unlucky. A gate that fails at random either blocks releases it should not or teaches whoever reads it to wave failures through, and the second is the worse outcome.
+
+Troubleshooting documentation for the Apple Home "Updating…" / "No Response" tile is corrected on two points, both from field reports rather than reasoning. An iOS update is no longer presented as the confirmed cure: one reporter's tile has stayed up since 26.6.1, while another on the same version has watched it lapse and return for six months, so restarting the affected Apple device is now the remedy the page leads with. And a note explains why the symptom appears on a robot vacuum and no other accessory — Apple Home requires a vacuum to be its own Matter node, so it is the only accessory Homebridge publishes outside the bridge, and therefore the only one whose subscription can die alone.
+
+## 3.19.1
+
+**The live-room loop was polling a Q10 for a map it cannot answer, and counting each refusal as a failure. Same defect 3.19.0 fixed in the status loop, one loop over.**
+
+3.19.0 stopped the dedicated B01 status loop asking a Q10 (`ss*`) for `get_status`. The live-room loop has the same shape and was missed. It sends `get_map_list`, which has no Q10 translation and is not answered neutrally, so the send choke point refuses it by name and throws — correctly. The catch then counted that refusal as a failure and logged `Live-room map fetch has failed N times in a row` at warn level every fifth one.
+
+It reached a Q10 because `refreshLiveRoomForDevice` gates on `pv === "B01"`, and `pv === "B01"` is both dialects — which is the entire premise of [#19](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/19). The Matter accessory drives it whenever the robot is in a cleaning run and `enableMatterServiceArea` is not false, and that setting defaults to on.
+
+**That timing is what makes it worth a release on its own: the live-room loop only runs while the robot is actively cleaning.** The first two attempts are 10 seconds apart before the backoff widens, so the first warning lands roughly two and a half minutes into a clean — during the exact operation [#14](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/14)'s reporter had just confirmed working on the only Q10 in the field. A fourth round of chasing this plugin's own designed refusal was one clean away.
+
+A Q10 is now skipped before the request is built, and says once per robot that the dialect sends no reply to a map read, so no room is reported during a clean. No state entry is allocated and `null` is returned — the same answer the disabled-tracking branch already gives, so every caller already handles it. The gate sits at the loop's entry rather than at its two call sites, because one of those call sites is the `pv === "B01"` test that caused this.
+
+A Q7 is unchanged and pinned as such: it is still fetched, an unrecognised B01 model is still treated as a Q7, and a Q7 that genuinely stops answering still raises the warning. The warning is kept off a robot that cannot answer by design, not removed.
+
+The 6-hourly room-name refresh also sends `get_map_list` and is also refused on a Q10, but it logs at debug and is left alone. It wastes a request; it does not tell anyone their robot is failing.
+
+## 3.19.0
+
+**The B01 Q10 command dialect has now been run on a Q10, and it works. That measurement is the whole reason this goes to `latest`.**
+
+[@niclasreich](https://github.com/niclasreich) installed `3.19.0-beta.1` on his Q10 S5 (`roborock.vacuum.ss07`) and reported on 27 August 2026 that the robot starts cleaning from both the Homebridge interface and the Home app, and that commands are accepted. Every datapoint code in the dialect was read from python-roborock's docstrings rather than measured here, and the beta shipped saying so; his robot is the first `ss*` device this project has ever had a result from. Commands, return to dock and the state the tile shows while returning all behave as the dialect predicts.
+
+Nothing in the command path changed between the beta and this release. It is the same code with a field result behind it, which is the only thing the beta was waiting for. Details of what the dialect covers are in the `3.19.0-beta.1` notes below.
+
+**A Q10 is no longer polled for status, and no longer reports its own by-design refusal as a failure.** The dedicated B01 status loop asked every Q10 for `get_status` every 25 seconds. The send choke point refused each one correctly — a fire-and-forget dialect cannot answer a read — but a refused request was still a counted one: each refusal incremented the consecutive-failure tally and every tenth logged `B01 status has failed N times in a row` at warn level. On a healthy Q10 that is a warning every four minutes about a robot doing exactly what its protocol says. It was the first thing the beta put in the one field log this project has, and a diagnostic that fires on a working robot is worse than none — it is the same false alarm that made [#14](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/14) take three rounds to diagnose. The loop now skips a Q10 before the request is built and states once, per robot, that the dialect sends no reply, that state comes from home data over HTTPS instead, and where the remaining work is tracked. Asking a question whose refusal is certain before it is asked was never a diagnostic.
+
+A Q7 is unchanged and pinned as such: it is still polled, its answer is still mapped and dispatched, an unrecognised B01 model is still treated as a Q7, and a Q7 that genuinely stops answering still raises the warning. The warning is kept off a robot that cannot answer by design, not removed.
+
+**Known and not fixed by this release: a Q10's tile does not follow the robot into a clean.** State on a Q10 still comes from the home data snapshot, so docked and charging read correctly while a run in progress does not. Reading state from the datapoint updates the robot pushes is the remaining half of [#19](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/19). It is deliberately not in this release: it is the one change that has to touch the incoming MQTT path that Q7 and Q10 share, and bundling it with the promotion of a command path that has exactly one field measurement behind it would risk three working Q7 robots to save a release.
+
+A cloud request that times out without anything having arrived during it now says what its message total actually counts. It used to end with a bare `(8 since startup)`, and that figure is incremented in the MQTT receiver alone — a robot answering on the local socket never touches it, while the 180-second poll chain a reader would compare it against runs over whichever transport is up.
+
+Measured on an S8 Pro Ultra (`roborock.vacuum.a70`) on 27 August 2026: one transient cloud timeout reported `(8 since startup)` after eight and a half hours of polling. Read as a like-for-like ratio that says a link dropping about 95 % of replies; read correctly it says nothing is wrong, because the robot had been answering locally the whole time. The sentence now states that the total covers cloud traffic only and that a low number on a locally-answering robot is normal. A diagnostic that exists to stop wrong conclusions should not hand the reader a ratio that cannot be taken.
+
+## 3.19.0-beta.1
+
+**Beta channel only — `npm install homebridge-roborock-matter@beta`. This does not go to `latest` and no existing installation will pick it up.** It contains the first implementation of the B01 Q10 command dialect, and there is no Q10 robot available to this project to verify it on. Every datapoint code in it is read from python-roborock, where the docstrings mark them verified live against `ss07` hardware, but none of it has been measured here. Shipping that to everyone on `latest` on the strength of someone else's docstrings would be the same mistake [#14](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/14) already cost three rounds of wrong diagnosis.
+
+3.18.0 stopped this plugin sending Q7 frames to a Q10, which the robot discards, and refused instead. That made the plugin honest on a Q10; it did not make one work. This is the command half of [#19](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/19).
+
+A Q10 command is now published in the dialect the robot speaks — a direct write to a numbered datapoint, `{"dps":{"201":1}}`, with no method name, no `msgId` and no datapoint 10000. Start, stop, pause, return to dock, empty the dustbin, room clean, suction level and clean mode are covered.
+
+**The dialect is fire-and-forget, and that shapes the rest of the change.** A Q10 sends no RPC reply at all, so a Q10 request no longer registers a pending request or arms a timeout. Arming one would guarantee expiry on a perfectly healthy link, and reporting that expiry is exactly the false "the Roborock cloud has gone silent" that sent #14's reporter chasing a fault at Roborock. A command resolves when the write leaves the plugin, which means published and not acknowledged; the state Apple Home shows still comes from the optimistic-state machinery, which corrects itself against what the robot reports.
+
+**Reads stay refused on a Q10, and that is the dialect rather than unfinished work.** `get_status`, `get_map_list` and `get_prop` exist to return a value, and a protocol that never answers cannot return one. Serving them would hand the caller something the robot never sent and publish that non-answer to Apple Home as the robot's state. A Q10's status continues to come from home data over HTTPS, a separate transport measured working in #14. Reading state from the datapoint updates the robot pushes is the remaining half of #19.
+
+Two known limitations, stated rather than papered over. Resume restarts a whole-home clean instead of resuming, because the plugin has no distinct resume method to map onto the dialect's dedicated `205`. And `find_me` is refused: upstream has a datapoint number for it but no verified payload, and guessing one on hardware nobody here owns is how #14 happened.
+
+The two clean-type tables are not interchangeable and neither are the two suction scales — Q7 is vacuum=0, vac+mop=1, mop=2 while Q10 is vac+mop=1, vacuum=2, mop=3, and Max+ is 5 on a Q7 and 8 on a Q10. The numbers overlap, so the wrong table does not fail loudly; it mops when it was asked to vacuum. Both directions are pinned by tests.
+
+Q7 is unchanged. Three `sc*` robots run on the maintainer's own bridge, and the regression cover asserts that a Q7 still builds the RPC envelope on datapoint 10000, still arms its timeout, still registers its pending request, and that nothing addressed to a Q10 can ever carry the Q7 form — checked against the whole B01 method surface rather than a list of today's commands, with a guard that fails if that check ever becomes vacuous.
+
+## 3.18.0
+
+**`B01` is two wire protocols, this plugin only implements one of them, and it has been sending the wrong one to Q10 robots.** This is the root cause behind [#14](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/14), where [@niclasreich](https://github.com/niclasreich)'s Q10 S5 (`roborock.vacuum.ss07`) could not run a single command. The two diagnostic releases before this one, 3.17.7 and 3.17.8, both measured the symptom correctly and both pointed at Roborock's cloud. The cause was here.
+
+Robots reporting `pv === "B01"` fall into two families that share the 23-byte framing and the AES-128-CBC payload encryption but not the request format. The Q7 series (`sc*`) carries an RPC envelope on datapoint 10000, with a method name and a `msgId` to correlate the reply against. The Q10 series (`ss*`) writes numbered datapoints directly — no method, no `msgId`, no datapoint 10000 — and does not reply at all, because the dialect is fire-and-forget.
+
+This plugin built the Q7 envelope for every B01 device. On a Q10 that means every command ever sent was a well-formed, correctly encrypted frame addressed to a datapoint the robot does not have, which it discards, followed by the plugin waiting out a full timeout for an acknowledgement the protocol never sends. `b01FamilyForModel()` has classified `ss*` as Q10 since 3.15.5, but that flag only ever reached the suction scale and the fault tables — never the wire format. Getting the enums right for a dialect that is never spoken correctly bought nothing.
+
+Q10 commands are now refused at the send choke point, immediately and by name, instead of being published in a form the robot cannot read. The refusal is classified as transient, so it is throttled like any other and does not arrive as a plugin error with a stack. Methods that are answered without touching the wire are unaffected, which keeps the room-mapping fix from 3.17.3 intact — the timeout the same reporter originally opened #14 about.
+
+This makes the plugin honest on a Q10 rather than functional on one. It is a smaller change than it sounds and deliberately so: Q7 and Q10 share this code path, Q7 devices work, and implementing an unverifiable Q10 dialect in the same change that could regress them is a bad trade. Real Q10 support — the dialect encoder, the datapoint tables, a fire-and-forget command path, and status from pushed datapoint updates — is tracked in [#19](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/19).
+
+Q7 behaviour is unchanged and covered by regression tests asserting that `sc*` models, and any unrecognised B01 model, still publish exactly as before. Two comments in `b01Q7Adapter.js` that listed `ss07` as a Q7 model have been corrected; that claim is what made #14 take three rounds to diagnose.
+
+## 3.17.8
+
+**The cloud-timeout diagnostic added in 3.17.7 drew a conclusion it could not support, and this corrects it.** Found by [@niclasreich](https://github.com/niclasreich) acting on it in [#14](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/14): he updated, read the new sentence, and reported the answer it gave — that no reply had ever arrived from his Q10 S5.
+
+When no message had been attributed to a robot, 3.17.7 stated that "the reply never arrived rather than arriving unrecognised". That only follows if every inbound frame is either counted or logged where a user can see it, and one path is neither. The MQTT receiver drops a message before the counter whenever its topic matches no known robot, and that path logs at debug. A reply arriving on a topic the plugin cannot attribute is precisely "arriving unrecognised" — the one possibility the sentence ruled out. The other two ways a frame can be discarded are already visible, so they were never the gap: an undecodable message logs at error, and a missing local key warns once.
+
+Frames that match no known robot are now counted account-wide — attribution is what failed, so there is no robot to file them under — and a cloud timeout reports total silence only when nothing arrived on any topic. If unattributed frames did arrive, the timeout now says so and names it as a fault on this side, because that is the difference between a robot that never answers and one whose answers this plugin is throwing away. An adapter that cannot supply the count states the observation and draws no conclusion at all.
+
+Diagnostics only, as in 3.17.7. No change to when requests are sent, how long they wait, or what is retried, and a local timeout remains untouched.
+
+## 3.17.7
+
+**A cloud request that times out now says whether the robot answered at all.** Raised by the log [@niclasreich](https://github.com/niclasreich) posted in [#14](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/14), where every single Roborock request to a Q10 S5 timed out — status polls, the clean-type write, the start command — while the MQTT connection state read `true` throughout.
+
+That combination has two causes needing opposite responses. Either no reply ever arrived, which points at the robot or the account, or a reply did arrive and could not be matched to its request, which points at a correlation bug in this plugin. The plugin already knew which: the MQTT receiver attributes every message it decodes to a device. But the three paths that could have said so — an unmatched topic, an unsolicited message, an ordinary cloud reply — all log at debug, so the fact never reached the warning a user reports. Two rounds of questions went by without it.
+
+A cloud timeout now names what the link did while the request was outstanding: nothing at all since startup, some messages while this request was pending, or messages earlier but none during it. The counter is incremented only after a message has been attributed to a robot _and_ decrypted, so a link delivering only garbage cannot read as alive — an undecodable message already logs its own error and is deliberately not counted.
+
+Diagnostics only. No change to when requests are sent, how long they wait, or what is retried; a local timeout is untouched, because MQTT receipts say nothing about a local socket.
+
+## 3.17.6
+
+**Optional HomeKit switches keep the name and the place in Home you gave them across a Homebridge restart.** Two independent reports of the same class of fault, from the two people using these switches most, and both are fixed here by their own pull requests.
+
+**The Empty Bin switch.** Reported by [@pponce](https://github.com/pponce) in [#16](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/16) and fixed by [@jbyhb](https://github.com/jbyhb) in [#17](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/17), who had independently hit it on an S7. A renamed switch reverted to its generated name on restart, and one removed from Home View came back — the second symptom being the useful one, because it says HomeKit watched the accessory leave and return rather than merely redraw.
+
+The cause is a question asked one poll too early. Whether a robot can auto-empty is read from its dock type, and some classic robots — the S7 among them — omit that capability from the account data and report the attached dock only in the first live status poll. Startup reconciliation ran before that poll arrived, read the absence as "this robot has no auto-empty dock", and unregistered the cached switch; the first `get_status` then supplied `dock_type: 1` and the capability update built it again. That unregister/register pair is a new accessory as far as HomeKit is concerned, and a custom name, a room and a Home View placement all belong to the old one. The reporter's second robot never showed the fault because its dock capability _is_ in the account data, so its switch was never in doubt.
+
+An already-cached Empty Bin switch is now preserved through that short window where the dock is not yet known, and only through it. Nothing new is published for a robot whose dock is genuinely unsupported, and once a live capability update does arrive for a robot it is authoritative — a supported dock keeps the same accessory identity, an unsupported one still removes the switch. Both halves of that rule are pinned by a test.
+
+**The schedule switches.** Reported and fixed by [@pponce](https://github.com/pponce) in [#15](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/15), found in live use of the schedule support he contributed in 3.16.0. A custom schedule name did not survive a restart and the schedule group tile was recreated.
+
+One teardown path was serving two unrelated purposes. Stopping schedule work at a normal Homebridge shutdown and deliberately withdrawing the switches — because the feature was turned off, or the robot removed — ran the same code, and that code removed the Switch services and rewrote the cached accessory topology. For the shutdown case that discarded HomeKit's side of every schedule switch on the way out, every time. The two are now separate: a normal shutdown stops in-memory work and leaves the services exactly as they are, while intentional withdrawal still clears them.
+
+Names and identity are also now kept apart. A schedule service's identity stays its schedule-ID-derived subtype, its generated display name is derived from the vacuum, and a name you set in Home is preserved across refreshes, schedule renumbering and restarts — while a blank or whitespace-only name is repaired to the generated one. A schedule service is removed only when a refresh that is known to have succeeded no longer lists its ID; a failed or untrusted refresh changes nothing, and a schedule merely switched off stays present and off.
+
+No change to cloud request behaviour: no new polling, and the existing cache, coalescing, backoff and post-write verification are untouched. Verified in the field by the reporter across 15 schedule services on two vacuums, including a custom Home name surviving a restart and enable/disable round-tripping to the Roborock app both ways.
+
 ## 3.17.5
 
 **A network outage no longer takes the Roborock account offline until Homebridge is restarted.** Found on the maintainer's own server, which lost DNS for about 75 minutes on 25 August 2026. Every other plugin on that bridge recovered by itself — the Tado platform was making successful API calls again 35 minutes after its last name-resolution error. This one did not. It logged `B01 status has failed 1070 times in a row … the Roborock cloud connection is not available` continuously for **1 hour and 44 minutes after the network was healthy again**, through three scheduled hourly reconnects, and came back only when a plugin update restarted the child bridge — instantly, on the very same saved session, which is what ruled out the credentials and pointed at the reconnect itself.
