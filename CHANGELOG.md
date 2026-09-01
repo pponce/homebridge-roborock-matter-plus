@@ -1,5 +1,91 @@
 # Changelog
 
+## 3.21.0
+
+**You can now change the clean mode while the robot is already cleaning. This needed a change in Homebridge itself, and that change has now shipped.**
+
+Until now a mode picked mid-run only moved the picker. The prep sequence that sends the mode to the robot runs before a start and nowhere else, so the robot carried on with the settings it began with, and the tile quietly disagreed with the floor. That was not an oversight in this plugin: Matter's RvcCleanMode cluster forbids a mode change outside idle unless the device advertises the `DirectModeChange` feature, and Homebridge had no way for a plugin to advertise it. [homebridge/homebridge#4001](https://github.com/homebridge/homebridge/pull/4001) added one, and it is merged and released in `2.4.1-beta.11`.
+
+**What happens now.** A mode change while the robot is running or paused is sent to the robot immediately, and the picker holds your choice until the robot's own status agrees with it — up to 150 seconds, after which the picker gives up and follows the robot again with a warning line naming what it asked for. If the command fails outright, every piece of selection state rolls back to what it was and the controller is told the change failed, so a rejected change cannot leave the picker showing a mode the robot never took.
+
+**On the empty-tank warning, which had to move with it.** The tank check deliberately read the robot's live water level rather than the picker, on the reasoning that a mid-run selection was never applied and so could not be trusted. That reasoning no longer holds, and left alone it would have raised a tank warning for water the robot had already acknowledged turning off. The applied-type pin is now the authority during the confirmation window.
+
+**What you need to run it.** Homebridge `2.4.1-beta.11` or newer. On `2.4.0` the feature declaration is inert — that version has no concept of plugin-advertised Matter features, so nothing changes and nothing breaks. It follows the existing `enableMatterCleanMode` setting: leave it on and live changes are advertised, turn it off and neither the declaration nor the handler exists.
+
+6 new tests.
+
+## 3.20.1
+
+**The resource half of the same review: seven things that leaked, hung on, or would have taken the bridge down given the right unlucky moment.**
+
+**Every timer this library creates is now unref'd, and cannot become an unhandled rejection.** `src/timers.ts` has stated the policy since it was written — "a pending timer must never be why Homebridge cannot shut down" — and `src/` honours it at every one of its own call sites. `roborockLib` never imported that module, so all ~20 of its timers were ref'd, including each in-flight request timeout of up to 30 seconds, none of which were cleared on shutdown. Both fixes live in the 2 wrapper methods every timer in the library already goes through, so they cover all of them at once. The rejection guard matters more than it looks: Homebridge's `uncaughtException` handler is `process.kill(SIGTERM)` and node routes unhandled rejections into it, so one rejecting poll callback takes the whole bridge down. None can reject today — but `updateDataMinimumData` has no `try` in its 114 lines and survives only because each of its callees happens to catch, which is a contract nobody had written down.
+
+**Shutdown now actually stops things.** `stopService()` cleared timers and nothing else. `client.end()` existed in exactly 1 place in the codebase, inside `reconnectClient`, and never on the shutdown path — so in the seconds between Homebridge's SIGTERM and its forced exit, robot frames kept arriving and being dispatched into disposed accessories, and a local socket closing in that window scheduled a _new_ reconnect and wrote diagnostics files into a bridge being dismantled. Both transports are closed now, and every pending request is rejected rather than left hanging.
+
+**One throwing `dispose()` no longer skips the rest of shutdown.** The SHUTDOWN handler was a straight-line sequence, so a throw anywhere in it skipped `stopService()` — the step that stops the polling and closes the transports. A shutdown that half-runs is worse than one that fails loudly.
+
+**A list that grew by 2 entries a minute, forever.** `processDockType()` runs on every status poll carrying `dock_type`, and the poll site's comment says that is safe because the function is idempotent. It is — for `commands`, `deviceStates` and `consumablesString`, which all use keyed assignment. `resetConsumables` was the one member using `.push`. Measured: 6 entries became 2016 after 1005 polls, about 86,400 a month per robot.
+
+**A transient network failure no longer deletes your saved session.** The login error path made no distinction between "Roborock rejected your password" and "DNS was not up yet", and deleted both the stored session and the cached device list for either. On a boot where the router is still coming up that destroyed the only offline snapshot the plugin has. Only an actual refusal clears it now, and an unrecognised failure is treated as transport — deleting a good session costs a re-login, keeping a dead one costs one failed request.
+
+**Two smaller ones.** A guard reading `photoGzipChunks != []` compared against a fresh array literal and was therefore always true, so it never guarded anything. And two concurrent `createClient` calls could each build a socket, with the later assignment orphaning the first — its handlers correctly declined to reconnect, so there was no storm, but the file descriptor stayed open for the life of the process. The new claim is released in a `finally`, because a leaked claim would be worse than the leak it prevents: that robot could never reconnect again.
+
+17 new tests.
+
+## 3.20.0
+
+**Two ways the plugin could stop working and never start again. Both silent, both permanent until somebody restarted Homebridge.**
+
+Neither was a crash, which is why neither had been noticed. The plugin stayed up and stopped doing its job.
+
+### A classic robot that flapped offline was never polled again
+
+`manageDeviceIntervals` stops both polling intervals when a robot reads as offline and restarts them when it reads as online. The restart half was unreachable for a classic robot: the only caller sits **inside the `get_status` handler**, so it runs only when a status poll succeeds — and `getStatusIntervalHandle` is the one thing driving those polls. Once they were cleared, nothing was left alive to notice the robot had come back. The one other caller, the home-data supervisor, filtered on B01 and skipped every classic robot deliberately.
+
+`onlineChecker` reads the cached home-data snapshot, which lags by up to one refresh, so the trigger was ordinary rather than exotic: robot drops off wifi, comes back, its LAN socket reconnects first, the next local poll succeeds, the snapshot still says offline, both intervals die. From then on the tile froze on the last known state until the user pressed a button or restarted.
+
+Same dead end at boot, for a different reason: the intervals are only started `if (device.online)`, so a robot that was offline when Homebridge started was **never polled at all** for the life of the process.
+
+The supervisor now covers every robot. It runs on the home-data cadence, which is the same clock that decides `onlineChecker`'s answer, so a robot that comes back is picked up on the tick that notices it.
+
+### A cloud outage during startup wedged the plugin permanently
+
+`getUserData` returns a stored session **without touching the network**, so any install that has logged in once — essentially all of them — never reaches the login retry with backoff. It reaches `getHomeDetail` instead. When that failed, the plugin logged one warning and stopped.
+
+The ordering is what made it terminal: `homedataInterval` and `reconnectIntervall` are created _after_ that call, and `initUser` was never reached, so there was no MQTT client either. **Not one timer existed that would ever try again.** A Pi rebooting after a power cut, with the router still coming up, registered nothing and sat idle until a human intervened. The README's "retries with increasing backoff, up to 10 attempts" described only the login step, which this path skips.
+
+There is now a retry: 1 minute, doubling to a 10-minute ceiling, then holding there. Deliberately with no attempt cap — the failure it recovers from is "the network was not ready yet" and the device is unattended, so giving up means a person has to notice. One timer at a time, unref'd so it can never hold Homebridge open, cleared on shutdown, and reset by a success so a later outage starts from 1 minute again.
+
+9 new tests, and the supervisor's own test previously asserted the skip that caused the first bug.
+
+## 3.19.8
+
+**A recovery line now names only a failure the log actually announced — and the test that says so had been failing on disk, uncommitted, for 3 days.**
+
+Two things, and the second is the more uncomfortable.
+
+**The log rule.** A B01 status attempt is logged at debug until the 10th consecutive failure, but the _recovery_ was announced at info from the first. With debug off, which is the default, a single transient miss that healed on the next tick told the user a channel had recovered from a problem they were never told about. On a robot with a flaky link that is a steady drip of good news about invisible bad news. The recovery is now announced exactly when the failure was — and no more than that, because a streak that did reach the warning must still get its closing line, or the log's last word on the channel stays "broken" long after it healed. The same rule was already written down in this file's own neighbour, `noteLiveRoomFetchRecovered`, whose doc comment says to announce a recovery exactly when the thing it reports on was itself announced "so the message and the behaviour it reports on cannot drift apart".
+
+**The part worth saying out loud.** The test suite for that rule was written on 29 August, saved to disk, and never committed. `git status` had been showing it as untracked ever since. So it failed on every local `npm test` run for 3 days while CI stayed green — because CI only runs what is in the repository, and this was not. A suite that is red locally and green remotely is worse than no suite: it trains whoever runs it to expect failures and to scroll past them.
+
+The test is now in the repository, where it fails 5 times against the old behaviour and passes against the new. Nothing about the release gate changes; the gate was never wrong. What was wrong was a file that only existed on one machine.
+
+## 3.19.7
+
+**Driving through a room is not cleaning it.**
+
+Reported by vp-debug12 in [#9](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/9): with several rooms selected, a room the robot merely crossed on its way to the first target was reported as cleaned.
+
+Exactly right, and the mechanism is one line. A room joined the confirmed-visited set on its **first** live-room detection, and a confirmed room is reported Completed the moment the robot moves on. One reading taken while crossing the hall was therefore enough to call the hall done — while it still had its whole clean ahead of it.
+
+A room now counts as visited only after the robot has been detected in it on **2 consecutive** live-room readings. Readings are at least 10 seconds apart, so this asks the robot to still be there next time: true of a room being cleaned, false of a room being crossed.
+
+Erring low is deliberate and is why 2 is enough rather than some larger number picked by feel. A room that really was cleaned but missed its second reading falls back to Pending mid-run, and the end of the run marks everything Completed anyway — so under-confirming corrects itself. Over-confirming is the one that lies, and it lies about work the robot has not done.
+
+Crossing a room early does not disqualify it either: confirmation is about the current visit, so a room crossed at the start and cleaned properly later still completes.
+
+3 tests, 2 of which fail against the old behaviour.
+
 ## 3.19.6
 
 **The periodic poll no longer carries a cloud firmware check whose answer nothing reads. The check has in fact never run — a missing `await` disabled it — and the tempting one-character repair would have added roughly 480 discarded cloud round-trips per robot per day.**

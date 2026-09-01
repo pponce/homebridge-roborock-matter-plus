@@ -525,16 +525,86 @@ class Roborock {
     return Boolean(this.localConnector.isConnected(duid));
   }
 
+  /**
+   * Every timer in this library goes through here, which is why 2 rules live
+   * in these 4 lines rather than at each of the ~20 call sites.
+   *
+   * **Unref.** `src/timers.ts` states the policy — "a pending timer must
+   * never be why Homebridge cannot shut down" — and `src/` honours it at all
+   * of its own call sites. This library never imported that module (JS/TS
+   * boundary), so every timer it created was ref'd, including each in-flight
+   * request timeout of up to 30 seconds. Homebridge always has listening
+   * sockets of its own holding the event loop, so unref'ing here cannot make
+   * the process exit early; it only stops these timers being the last thing
+   * standing during a shutdown.
+   *
+   * **Catch.** Several callers pass an `async` function, and the returned
+   * promise was dropped on the floor. Homebridge installs an
+   * `uncaughtException` handler whose body is `process.kill(SIGTERM)`, and
+   * node routes unhandled rejections through it, so one rejection from a
+   * poll loop takes the whole bridge down. No caller can reject today —
+   * every one of them catches internally — but `updateDataMinimumData` has
+   * no `try` in its 114 lines and survives only because each of its callees
+   * happens to catch. That is a contract nobody wrote down. This makes it
+   * one that cannot be broken from the outside.
+   *
+   * @param {(...a: any[]) => any} callback
+   * @param {number} interval
+   * @param {...any} args
+   */
   setInterval(callback, interval, ...args) {
-    return setInterval(() => callback(...args), interval);
+    const handle = setInterval(() => {
+      try {
+        const result = callback(...args);
+        if (result && typeof result.catch === "function") {
+          result.catch((/** @type {any} */ error) => {
+            this.log?.debug?.(
+              `Interval callback rejected: ${error?.message || error}`
+            );
+          });
+        }
+      } catch (error) {
+        this.log?.debug?.(
+          `Interval callback threw: ${/** @type {any} */ (error)?.message || error}`
+        );
+      }
+    }, interval);
+    if (typeof handle?.unref === "function") {
+      handle.unref();
+    }
+    return handle;
   }
 
   clearInterval(interval) {
     clearInterval(interval);
   }
 
+  /**
+   * @param {(...a: any[]) => any} callback
+   * @param {number} timeout
+   * @param {...any} args
+   */
   setTimeout(callback, timeout, ...args) {
-    return setTimeout(() => callback(...args), timeout);
+    const handle = setTimeout(() => {
+      try {
+        const result = callback(...args);
+        if (result && typeof result.catch === "function") {
+          result.catch((/** @type {any} */ error) => {
+            this.log?.debug?.(
+              `Timer callback rejected: ${error?.message || error}`
+            );
+          });
+        }
+      } catch (error) {
+        this.log?.debug?.(
+          `Timer callback threw: ${/** @type {any} */ (error)?.message || error}`
+        );
+      }
+    }, timeout);
+    if (typeof handle?.unref === "function") {
+      handle.unref();
+    }
+    return handle;
   }
 
   clearTimeout(timeout) {
@@ -1968,6 +2038,13 @@ class Roborock {
           await this.initializeDeviceUpdates();
 
           this.bInited = true;
+          // A success ends the retry chain and forgets the backoff, so a
+          // later outage starts from one minute again rather than ten.
+          if (this.startServiceRetryTimer) {
+            this.clearTimeout(this.startServiceRetryTimer);
+            this.startServiceRetryTimer = null;
+          }
+          this.startServiceRetryAttempts = 0;
           this.log.info(
             `Roborock connection ready; ${this.getVacuumList().length} robot(s) available.`
           );
@@ -1989,10 +2066,19 @@ class Roborock {
       // maintenance, a rate-limited response and plain DNS failure. The stack
       // tells the user nothing and the line used to end without saying what
       // now happens.
-      this.log.warn(
-        `Could not fetch your Roborock home details: ${error?.message || error}. This is almost always a temporary Roborock cloud or network problem; no robots will load until the next successful start.`
-      );
       this.log.debug(error?.stack || String(error));
+      // A CACHED SESSION MEANS THIS PATH IS THE COMMON ONE, AND IT USED TO BE
+      // TERMINAL.
+      //
+      // `getUserData` returns a stored session without touching the network,
+      // so an install that has logged in once never reaches the login retry
+      // above. It reaches `getHomeDetail` instead — and both `homedataInterval`
+      // and `reconnectIntervall` are created AFTER that call, so a failure here
+      // left the plugin with no MQTT client and not one timer that would ever
+      // try again. A Pi that reboots after a power cut while the router is
+      // still coming up registered nothing and sat idle until a human
+      // restarted Homebridge.
+      this.scheduleStartServiceRetry(error);
     }
 
     if (callback) {
@@ -2057,6 +2143,23 @@ class Roborock {
     try {
       this.flushPendingPersistedStates();
       await this.clearTimersAndIntervals();
+      // Timers were the only thing shutdown used to stop. Both transports
+      // stayed open, so frames kept arriving into disposed accessories and
+      // the process could only ever be killed rather than exit.
+      this.rr_mqtt_connector?.disconnect?.();
+      this.localConnector?.destroyAllClients?.();
+      // Nothing is coming back for these, and leaving them means every
+      // caller still awaiting one hangs until Homebridge is killed.
+      for (const [messageID, pending] of this.pendingRequests) {
+        try {
+          this.clearTimeout(pending?.timeout);
+          pending?.reject?.(new Error("Homebridge is shutting down."));
+        } catch {
+          // A rejected pending request that nobody is listening to any more
+          // is exactly what shutdown looks like; it must not stop the rest.
+        }
+        this.pendingRequests.delete(messageID);
+      }
       this.bInited = false;
     } catch (e) {
       this.catchError(e.stack);
@@ -2198,10 +2301,54 @@ class Roborock {
       throw new Error(`Login failed: ${JSON.stringify(loginResult)}`);
     } catch (error) {
       this.log.error(`Error in getUserData: ${error.message}`);
-      await this.deleteStateAsync("HomeData");
-      await this.deleteStateAsync("UserData");
+      // DO NOT THROW AWAY THE CACHED SESSION BECAUSE DNS WAS NOT UP YET.
+      //
+      // This used to delete both stored states for any failure at all, with
+      // no distinction between "Roborock rejected your password" and
+      // "getaddrinfo EAI_AGAIN". On a boot where the router is still coming
+      // up, that destroyed the only offline device-list snapshot the plugin
+      // has — state it did not need to touch to recover.
+      //
+      // Only a refusal invalidates the stored session. A transport failure
+      // means we learned nothing about whether the credentials are good.
+      if (this.isCredentialRejection(error)) {
+        await this.deleteStateAsync("HomeData");
+        await this.deleteStateAsync("UserData");
+      } else {
+        this.log.debug(
+          "Keeping the saved session: this looks like a network or Roborock-side failure rather than a credential rejection."
+        );
+      }
       throw error;
     }
+  }
+
+  /**
+   * Did Roborock actually refuse these credentials, or did we simply fail to
+   * ask?
+   *
+   * Errs towards keeping the session: an unrecognised failure is treated as
+   * transport, because deleting a good session costs the user a re-login
+   * while keeping a dead one costs one extra failed request.
+   *
+   * @param {any} error
+   */
+  isCredentialRejection(error) {
+    const code = Number(error?.code ?? error?.status);
+    if ([2012, 2008, 2018, 2010].includes(code)) {
+      return true;
+    }
+    const message = String(error?.message || error).toLowerCase();
+    if (
+      /(^|[^a-z])(enotfound|eai_again|econnrefused|econnreset|etimedout|ehostunreach|enetunreach|socket hang up|network|timeout)/.test(
+        message
+      )
+    ) {
+      return false;
+    }
+    return /(login failed|invalid|unauthor|password|credential|token)/.test(
+      message
+    );
   }
 
   isValidUserData(userdata) {
@@ -2634,7 +2781,11 @@ class Roborock {
    * @param {string[]} unconfirmedSettings
    * @returns {{ unconfirmedSettings: string[], cleanTypeConfirmed: boolean }}
    */
-  reportUnconfirmedMatterCleanModeSettings(duid, unconfirmedSettings) {
+  reportUnconfirmedMatterCleanModeSettings(
+    duid,
+    unconfirmedSettings,
+    context = "before starting"
+  ) {
     const reported = [...new Set(unconfirmedSettings)];
     const result = {
       unconfirmedSettings: reported,
@@ -2648,7 +2799,7 @@ class Roborock {
     }
 
     this.log.warn(
-      `Roborock did not confirm the ${reported.join(" and ")} for ${this.describeDevice(duid)} before starting; the robot may keep its previous settings for this run, so the clean may not match the mode selected in your controller.`
+      `Roborock did not confirm the ${reported.join(" and ")} for ${this.describeDevice(duid)} ${context}; the robot may keep its previous settings for this run, so the clean may not match the mode selected in your controller.`
     );
 
     return result;
@@ -2668,7 +2819,11 @@ class Roborock {
    * @returns {Promise<{ unconfirmedSettings: string[], cleanTypeConfirmed: boolean }>}
    */
   async applyMatterCleanModeSettings(duid, settings, options = {}) {
-    const { prepWindowMs, ...commandInput } = options ?? {};
+    const {
+      prepWindowMs,
+      context = "before starting",
+      ...commandInput
+    } = options ?? {};
     const budget = this.createMatterCleanModePrepBudget(prepWindowMs);
     const { commandOptions } = this.buildCommandOptions(commandInput, {
       requestTimeoutMs: MATTER_CLEAN_MODE_COMMAND_TIMEOUT_MS,
@@ -2764,7 +2919,8 @@ class Roborock {
 
       return this.reportUnconfirmedMatterCleanModeSettings(
         duid,
-        unconfirmedSettings
+        unconfirmedSettings,
+        context
       );
     }
 
@@ -2855,7 +3011,8 @@ class Roborock {
 
     return this.reportUnconfirmedMatterCleanModeSettings(
       duid,
-      unconfirmedSettings
+      unconfirmedSettings,
+      context
     );
   }
 
@@ -3576,7 +3733,62 @@ class Roborock {
     return `${duid}:${mapId}`;
   }
 
+  /**
+   * Try `startService` again after a failure that left nothing running.
+   *
+   * Backoff doubles from 1 minute to a 10-minute ceiling and then keeps
+   * going, deliberately without an attempt cap: the failure this recovers
+   * from is "the network was not ready yet", and the device it runs on is
+   * unattended. Giving up would mean a human has to notice. One timer at a
+   * time, unref'd so it can never hold Homebridge open, and cleared on
+   * shutdown.
+   *
+   * @param {unknown} [error]
+   */
+  scheduleStartServiceRetry(error) {
+    if (this.startServiceRetryTimer || this.bInited) {
+      return;
+    }
+    this.startServiceRetryAttempts = (this.startServiceRetryAttempts || 0) + 1;
+    const delay = Math.min(
+      60000 * Math.pow(2, this.startServiceRetryAttempts - 1),
+      600000
+    );
+    this.log.warn(
+      `Could not fetch your Roborock home details: ${
+        /** @type {any} */ (error)?.message || error
+      }. This is almost always a temporary Roborock cloud or network problem. Retrying in ${Math.round(
+        delay / 60000
+      )} minute(s); no robots will load until it succeeds.`
+    );
+    const timer = setTimeout(() => {
+      this.startServiceRetryTimer = null;
+      if (this.bInited) {
+        return;
+      }
+      this.log.info(
+        `Retrying the Roborock connection (attempt ${this.startServiceRetryAttempts + 1}).`
+      );
+      void Promise.resolve(this.startService()).catch((retryError) => {
+        this.log.debug(
+          `Roborock connection retry failed: ${
+            /** @type {any} */ (retryError)?.message || retryError
+          }`
+        );
+        this.scheduleStartServiceRetry(retryError);
+      });
+    }, delay);
+    if (typeof timer?.unref === "function") {
+      timer.unref();
+    }
+    this.startServiceRetryTimer = timer;
+  }
+
   clearTimersAndIntervals() {
+    if (this.startServiceRetryTimer) {
+      this.clearTimeout(this.startServiceRetryTimer);
+      this.startServiceRetryTimer = null;
+    }
     if (this.reconnectIntervall) {
       this.clearInterval(this.reconnectIntervall);
     }
@@ -3641,7 +3853,7 @@ class Roborock {
         const homedata = home.data.result;
 
         if (homedata) {
-          this.superviseB01DeviceIntervals();
+          this.superviseDeviceIntervals();
           await this.refreshLocalKeysFromHomeData(homedata);
           await this.setStateAsync("HomeData", {
             val: JSON.stringify(homedata),
@@ -4412,6 +4624,7 @@ class Roborock {
         lastAttemptAt: 0,
         inflight: null,
         consecutiveFailures: 0,
+        failureWarned: false,
       };
       this._b01StatusState.set(duid, refreshState);
     }
@@ -4476,7 +4689,21 @@ class Roborock {
         refreshState.lastV1Status = v1Status;
 
         if (refreshState.consecutiveFailures > 0) {
-          this.log.info(
+          // ANNOUNCE A RECOVERY ONLY FROM A FAILURE THE LOG ANNOUNCED.
+          //
+          // The attempts themselves are debug-level until the 10th, so a
+          // single transient miss that healed on the next tick used to
+          // produce an info line reporting a recovery from something the
+          // user had never been told about. On a robot with a flaky link
+          // that is a steady drip of good news about invisible bad news.
+          //
+          // The counterpart matters just as much: a streak that DID reach
+          // the warning must still get its closing line, or the log's last
+          // word on the channel stays "broken" long after it healed.
+          const announce = refreshState.failureWarned;
+          refreshState.failureWarned = false;
+          (announce ? this.log.info : this.log.debug).call(
+            this.log,
             `B01 status for ${this.describeDevice(duid)} recovered after ${refreshState.consecutiveFailures} failed attempt(s) (the attempts themselves are debug-level).`
           );
         }
@@ -4515,6 +4742,7 @@ class Roborock {
         refreshState.consecutiveFailures += 1;
         const message = error?.message || String(error);
         if (refreshState.consecutiveFailures % 10 === 0) {
+          refreshState.failureWarned = true;
           this.log.warn(
             `B01 status has failed ${refreshState.consecutiveFailures} times in a row for ${this.describeDevice(duid)}. Last error: ${message}`
           );
@@ -4538,17 +4766,43 @@ class Roborock {
    * their status polling forever. Called from the periodic HomeData refresh
    * as a supervisor: restarts intervals when a B01 robot is back online.
    */
-  superviseB01DeviceIntervals() {
+  /**
+   * Re-check every robot's polling intervals, from the home-data refresh.
+   *
+   * THIS USED TO SKIP EVERY CLASSIC ROBOT, AND THAT WAS A DEAD END IT COULD
+   * NOT COME BACK FROM.
+   *
+   * `manageDeviceIntervals` stops both intervals when the robot reads as
+   * offline and restarts them when it reads as online. The restart half was
+   * unreachable for a classic robot, because the only other caller sits
+   * inside the `get_status` handler — i.e. it only runs when a status poll
+   * SUCCEEDS, and `getStatusIntervalHandle` is the one thing that drives
+   * those polls. Once the intervals were cleared, nothing was left alive to
+   * notice the robot had come back.
+   *
+   * `onlineChecker` reads the cached home-data snapshot, which lags by up to
+   * one refresh, so the trigger was ordinary: robot drops off wifi, comes
+   * back, its LAN socket reconnects first, the next local poll succeeds, the
+   * stale snapshot still says offline, both intervals die. From then on the
+   * Apple Home tile froze on the last known state until the user pressed a
+   * button or restarted Homebridge.
+   *
+   * This runs on the home-data cadence, which is exactly the clock that
+   * decides `onlineChecker`'s answer, so a robot that comes back is picked up
+   * on the same tick that notices it. The B01 status loop stays B01-only —
+   * that is a different mechanism and it is started unconditionally below.
+   */
+  superviseDeviceIntervals() {
     this.startB01StatusLoop();
 
     for (const duid of this.initializedVacuumDuids) {
-      if (
-        this.getVacuumDeviceInfo(duid, "pv") ===
-        b01Q7Adapter.B01_PROTOCOL_VERSION
-      ) {
-        void this.manageDeviceIntervals(duid).catch(() => undefined);
-      }
+      void this.manageDeviceIntervals(duid).catch(() => undefined);
     }
+  }
+
+  /** @deprecated Kept so existing callers and tests keep working. */
+  superviseB01DeviceIntervals() {
+    this.superviseDeviceIntervals();
   }
 
   /**
