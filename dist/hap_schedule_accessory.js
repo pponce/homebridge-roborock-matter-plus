@@ -623,6 +623,10 @@ class RoborockHapScheduleAccessory {
             return new Map(requests.map((request) => [request.scheduleId, throttleError]));
         }
         const fallback = primarySent.filter((request) => !this.cachedScheduleMatches(request));
+        const primaryConfirmed = primarySent.length - fallback.length;
+        this.platform.log.info(`Schedule batch verification for ${this.duid}: ` +
+            `requested=${requests.length}; primarySent=${primarySent.length}; ` +
+            `primaryConfirmed=${primaryConfirmed}; fallbackNeeded=${fallback.length}.`);
         for (const request of primarySent) {
             if (!fallback.includes(request)) {
                 failures.delete(request.scheduleId);
@@ -669,6 +673,12 @@ class RoborockHapScheduleAccessory {
                 failures.set(request.scheduleId, new Error(`Roborock did not confirm schedule ${request.scheduleId} as ${request.enabled ? "enabled" : "disabled"}`));
             }
         }
+        const fallbackConfirmed = fallbackSent.filter((request) => this.cachedScheduleMatches(request)).length;
+        this.platform.log.info(`Schedule fallback verification for ${this.duid}: ` +
+            `requested=${requests.length}; primarySent=${primarySent.length}; ` +
+            `primaryConfirmed=${primaryConfirmed}; fallbackNeeded=${fallback.length}; ` +
+            `fallbackSent=${fallbackSent.length}; fallbackConfirmed=${fallbackConfirmed}; ` +
+            `failed=${failures.size}.`);
         return failures;
     }
     cachedScheduleMatches(request) {

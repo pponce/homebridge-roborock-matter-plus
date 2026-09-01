@@ -442,3 +442,18 @@ Until the account has clearly recovered:
 
 The implementation must remain useful under this condition: stale schedule services stay present,
 queued work stops on a definite throttle, and failures do not cause a retry storm.
+
+## Live validation notes
+
+- A two-schedule Downtown Rock scene produced two ordered primary writes, spaced by the configured
+  interval, followed by one consolidated verification read and no fallback, timeout, or throttle.
+- The first field check began from a known Home/Roborock state mismatch and was therefore not valid
+  evidence that consolidated verification had accepted a false result. After Pedro reconciled the
+  states in the Roborock app, individual enable/disable operations and a two-schedule scene all
+  changed the corresponding Roborock schedules successfully.
+- Future field tests must establish the starting state in both Home and the Roborock app before a
+  write. A post-write parser line proves that a verification snapshot was received, but the batch
+  summary log should report how many requested changes that snapshot confirmed.
+- Aggregate primary and fallback verification summaries are logged at info level so normal,
+  fallback, and partial-failure paths can be distinguished without logging complete timer payloads
+  or credentials.

@@ -593,6 +593,9 @@ describe("HAP schedule names and stable group identity", () => {
       await Promise.all([first, second]);
 
       expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(2);
+      expect(platform.log.info).toHaveBeenCalledWith(
+        "Schedule fallback verification for device-1: requested=2; primarySent=2; primaryConfirmed=1; fallbackNeeded=1; fallbackSent=1; fallbackConfirmed=1; failed=0."
+      );
       expect(
         switchService(accessory, "timer-1").getCharacteristic(Characteristic.On)
           .value
