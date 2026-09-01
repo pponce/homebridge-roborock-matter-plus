@@ -1,17 +1,221 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.HAP_SCHEDULE_EXTENSION = exports.HAP_EXTENSION_KIND = void 0;
+exports.ScheduleWriteBatcher = exports.ScheduleAccountCoordinator = exports.ScheduleWriteQueue = exports.HAP_SCHEDULE_EXTENSION = exports.HAP_EXTENSION_KIND = exports.DEFAULT_SCHEDULE_POLICY = void 0;
+exports.scheduleFailureBackoffMs = scheduleFailureBackoffMs;
+exports.isDefiniteScheduleThrottle = isDefiniteScheduleThrottle;
 exports.parseServerTimers = parseServerTimers;
 exports.isHapScheduleAccessory = isHapScheduleAccessory;
 const hap_schedule_api_1 = require("./hap_schedule_api");
 const timers_1 = require("./timers");
 const VERIFY_DELAY_MS = 3000;
 const WRITE_SUPPRESSION_MS = 5000;
-const SCHEDULE_CACHE_TTL_MS = 60 * 1000;
-const SCHEDULE_FAILURE_BACKOFF_MS = 30 * 1000;
+const SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
+const SCHEDULE_FAILURE_BACKOFF_STEPS_MS = [
+    60 * 1000,
+    2 * 60 * 1000,
+    5 * 60 * 1000,
+    15 * 60 * 1000,
+    60 * 60 * 1000,
+];
+const SCHEDULE_FAILURE_JITTER_RATIO = 0.1;
+const SCHEDULE_WRITE_BATCH_WINDOW_MS = 500;
+const SCHEDULE_WRITE_SPACING_MS = 500;
+const SCHEDULE_THROTTLE_COOLDOWN_MS = 65 * 60 * 1000;
 const SERVICE_PREFIX = "roborock-schedule-";
+exports.DEFAULT_SCHEDULE_POLICY = {
+    cacheTtlMs: SCHEDULE_CACHE_TTL_MS,
+    batchWindowMs: SCHEDULE_WRITE_BATCH_WINDOW_MS,
+    writeSpacingMs: SCHEDULE_WRITE_SPACING_MS,
+    throttleCooldownMs: SCHEDULE_THROTTLE_COOLDOWN_MS,
+};
 exports.HAP_EXTENSION_KIND = "hapExtension";
 exports.HAP_SCHEDULE_EXTENSION = "schedules";
+function scheduleFailureBackoffMs(consecutiveFailures, randomValue = Math.random()) {
+    const failureIndex = Math.max(0, Math.floor(consecutiveFailures) - 1);
+    const baseDelay = SCHEDULE_FAILURE_BACKOFF_STEPS_MS[Math.min(failureIndex, SCHEDULE_FAILURE_BACKOFF_STEPS_MS.length - 1)];
+    const boundedRandom = Math.min(1, Math.max(0, randomValue));
+    const jitterFactor = 1 + (boundedRandom * 2 - 1) * SCHEDULE_FAILURE_JITTER_RATIO;
+    return Math.round(baseDelay * jitterFactor);
+}
+function isDefiniteScheduleThrottle(error) {
+    const candidates = [error];
+    const visited = new Set();
+    while (candidates.length > 0) {
+        const candidate = candidates.shift();
+        if (candidate == null || visited.has(candidate))
+            continue;
+        visited.add(candidate);
+        if (typeof candidate === "number" && candidate === 429)
+            return true;
+        if (typeof candidate === "string") {
+            if (/\b429\b|too many requests|rate[ -]?limit(?:ed|ing)?|request limit|frequency limit|throttl(?:ed|ing)/i.test(candidate)) {
+                return true;
+            }
+            continue;
+        }
+        if (typeof candidate !== "object")
+            continue;
+        const record = candidate;
+        candidates.push(record.status, record.statusCode, record.code, record.message, record.cause, record.response);
+    }
+    return false;
+}
+class ScheduleWriteQueue {
+    constructor() {
+        this.tail = Promise.resolve();
+        this.generation = 0;
+    }
+    enqueue(operation) {
+        const generation = this.generation;
+        const run = this.tail.then(async () => {
+            if (generation !== this.generation) {
+                return undefined;
+            }
+            return operation();
+        });
+        this.tail = run.then(() => undefined, () => undefined);
+        return run;
+    }
+    cancelPending() {
+        this.generation++;
+    }
+}
+exports.ScheduleWriteQueue = ScheduleWriteQueue;
+class ScheduleAccountCoordinator {
+    constructor(policy = exports.DEFAULT_SCHEDULE_POLICY) {
+        this.policy = policy;
+        this.tail = Promise.resolve();
+        this.throttleUntil = 0;
+        this.metrics = {
+            scheduleReads: 0,
+            primaryWrites: 0,
+            fallbackWrites: 0,
+            coalescedChanges: 0,
+            cacheAvoidedReads: 0,
+            backoffAvoidedReads: 0,
+            throttleAvoidedOperations: 0,
+        };
+    }
+    enqueue(operation, rejectedDuringCooldown) {
+        const run = this.tail.then(async () => {
+            const throttle = this.currentThrottleError();
+            if (throttle !== undefined) {
+                this.metrics.throttleAvoidedOperations++;
+                return rejectedDuringCooldown(throttle);
+            }
+            return operation();
+        });
+        this.tail = run.then(() => undefined, () => undefined);
+        return run;
+    }
+    recordThrottle(error) {
+        this.throttleUntil = Math.max(this.throttleUntil, Date.now() + this.policy.throttleCooldownMs);
+        this.throttleError = error;
+    }
+    currentThrottleError(now = Date.now()) {
+        var _a;
+        if (this.throttleUntil <= now)
+            return undefined;
+        return ((_a = this.throttleError) !== null && _a !== void 0 ? _a : new Error("Roborock schedule requests are in throttle cooldown"));
+    }
+    cooldownRemainingMs(now = Date.now()) {
+        return Math.max(0, this.throttleUntil - now);
+    }
+    recordRequest(kind) {
+        if (kind === "read")
+            this.metrics.scheduleReads++;
+        if (kind === "primaryWrite")
+            this.metrics.primaryWrites++;
+        if (kind === "fallbackWrite")
+            this.metrics.fallbackWrites++;
+    }
+    recordAvoided(kind) {
+        if (kind === "cache")
+            this.metrics.cacheAvoidedReads++;
+        if (kind === "backoff")
+            this.metrics.backoffAvoidedReads++;
+        if (kind === "coalesced")
+            this.metrics.coalescedChanges++;
+        if (kind === "throttle")
+            this.metrics.throttleAvoidedOperations++;
+    }
+    metricsSnapshot() {
+        return { ...this.metrics };
+    }
+    policyDescription() {
+        return (`Schedule cloud policy: cache=${this.policy.cacheTtlMs / 60000}m; ` +
+            `batchWindow=${this.policy.batchWindowMs}ms; writeSpacing=${this.policy.writeSpacingMs}ms; ` +
+            `throttleCooldown=${this.policy.throttleCooldownMs / 60000}m.`);
+    }
+}
+exports.ScheduleAccountCoordinator = ScheduleAccountCoordinator;
+class ScheduleWriteBatcher {
+    constructor(executeBatch, keyOf, windowMs = SCHEDULE_WRITE_BATCH_WINDOW_MS, onSuperseded = () => undefined) {
+        this.executeBatch = executeBatch;
+        this.keyOf = keyOf;
+        this.windowMs = windowMs;
+        this.onSuperseded = onSuperseded;
+        this.queue = new ScheduleWriteQueue();
+        this.pending = new Map();
+    }
+    enqueue(value) {
+        const key = this.keyOf(value);
+        const superseded = this.pending.get(key);
+        if (superseded) {
+            this.onSuperseded();
+            superseded.resolve(false);
+        }
+        const result = new Promise((resolve, reject) => {
+            this.pending.set(key, { value, resolve, reject });
+        });
+        if (!this.timer) {
+            const timer = (0, timers_1.scheduleTimer)(() => {
+                this.timer = undefined;
+                this.flush();
+            }, this.windowMs);
+            this.timer = timer;
+            (0, timers_1.unrefTimer)(timer);
+        }
+        return result;
+    }
+    cancelPending() {
+        if (this.timer) {
+            (0, timers_1.clearTimer)(this.timer);
+            this.timer = undefined;
+        }
+        for (const pending of this.pending.values()) {
+            pending.resolve(false);
+        }
+        this.pending.clear();
+        this.queue.cancelPending();
+    }
+    flush() {
+        const batch = [...this.pending.values()];
+        this.pending.clear();
+        void this.queue
+            .enqueue(() => this.executeBatch(batch.map((pending) => pending.value)))
+            .then((failures) => {
+            for (const pending of batch) {
+                if (failures === undefined) {
+                    pending.resolve(false);
+                    continue;
+                }
+                const error = failures.get(this.keyOf(pending.value));
+                if (error !== undefined) {
+                    pending.reject(error);
+                }
+                else {
+                    pending.resolve(true);
+                }
+            }
+        }, (error) => {
+            for (const pending of batch) {
+                pending.reject(error);
+            }
+        });
+    }
+}
+exports.ScheduleWriteBatcher = ScheduleWriteBatcher;
 function parseServerTimers(value) {
     if (!Array.isArray(value))
         return [];
@@ -61,18 +265,23 @@ function isHapScheduleAccessory(accessory) {
  * identity and must never overwrite the shared manager accessory identity.
  */
 class RoborockHapScheduleAccessory {
-    constructor(platform, accessory, duid) {
+    constructor(platform, accessory, duid, accountCoordinator = new ScheduleAccountCoordinator()) {
         this.platform = platform;
         this.duid = duid;
+        this.accountCoordinator = accountCoordinator;
         this.scheduleAccessories = new Map();
         this.vacuumName = "";
         this.managerRemoved = false;
         this.disposed = false;
         this.lastScheduleRefreshAt = 0;
         this.lastFailedRefreshAt = 0;
+        this.consecutiveRefreshFailures = 0;
+        this.nextRefreshAttemptAt = 0;
+        this.scheduleBackoffRandom = Math.random;
         this.refreshInProgressStartedAt = 0;
         this.refreshGeneration = 0;
         this.managerAccessory = accessory;
+        this.writeBatcher = new ScheduleWriteBatcher((requests) => this.executeScheduleWriteBatch(requests), (request) => request.scheduleId, this.accountCoordinator.policy.batchWindowMs, () => this.accountCoordinator.recordAvoided("coalesced"));
         accessory.context = {
             kind: exports.HAP_EXTENSION_KIND,
             extension: exports.HAP_SCHEDULE_EXTENSION,
@@ -162,25 +371,37 @@ class RoborockHapScheduleAccessory {
         return true;
     }
     async refreshIfNeeded() {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
         const now = Date.now();
         this.platform.log.debug(`Schedule refreshIfNeeded: entered; ` +
             `cached=${(_b = (_a = this.cachedSchedules) === null || _a === void 0 ? void 0 : _a.length) !== null && _b !== void 0 ? _b : "undefined"}; ` +
             `lastRefreshAgeMs=${this.lastScheduleRefreshAt > 0 ? now - this.lastScheduleRefreshAt : "never"}; ` +
-            `lastFailureAgeMs=${this.lastFailedRefreshAt > 0 ? now - this.lastFailedRefreshAt : "never"}`);
+            `lastFailureAgeMs=${this.lastFailedRefreshAt > 0 ? now - this.lastFailedRefreshAt : "never"}; ` +
+            `consecutiveFailures=${this.consecutiveRefreshFailures || 0}; ` +
+            `nextAttemptInMs=${Math.max(0, (this.nextRefreshAttemptAt || 0) - now)}`);
         if (this.cachedSchedules !== undefined &&
-            now - this.lastScheduleRefreshAt < SCHEDULE_CACHE_TTL_MS) {
+            now - this.lastScheduleRefreshAt <
+                this.accountCoordinator.policy.cacheTtlMs) {
             this.platform.log.debug(`Schedule refreshIfNeeded: CACHE HIT; ` +
                 `ageMs=${now - this.lastScheduleRefreshAt}; ` +
                 `returning=${this.cachedSchedules.length > 0}`);
+            this.accountCoordinator.recordAvoided("cache");
             return this.cachedSchedules.length > 0;
         }
-        if (this.lastFailedRefreshAt > 0 &&
-            now - this.lastFailedRefreshAt < SCHEDULE_FAILURE_BACKOFF_MS) {
+        if (this.accountCoordinator.currentThrottleError(now) !== undefined) {
+            this.platform.log.debug(`Schedule refreshIfNeeded: THROTTLE COOLDOWN; ` +
+                `retryInMs=${this.accountCoordinator.cooldownRemainingMs(now)}; ` +
+                `returning=${((_d = (_c = this.cachedSchedules) === null || _c === void 0 ? void 0 : _c.length) !== null && _d !== void 0 ? _d : 0) > 0}`);
+            this.accountCoordinator.recordAvoided("throttle");
+            return ((_f = (_e = this.cachedSchedules) === null || _e === void 0 ? void 0 : _e.length) !== null && _f !== void 0 ? _f : 0) > 0;
+        }
+        if ((this.nextRefreshAttemptAt || 0) > now) {
             this.platform.log.debug(`Schedule refreshIfNeeded: FAILURE BACKOFF; ` +
                 `ageMs=${now - this.lastFailedRefreshAt}; ` +
-                `returning=${((_d = (_c = this.cachedSchedules) === null || _c === void 0 ? void 0 : _c.length) !== null && _d !== void 0 ? _d : 0) > 0}`);
-            return ((_f = (_e = this.cachedSchedules) === null || _e === void 0 ? void 0 : _e.length) !== null && _f !== void 0 ? _f : 0) > 0;
+                `retryInMs=${this.nextRefreshAttemptAt - now}; ` +
+                `returning=${((_h = (_g = this.cachedSchedules) === null || _g === void 0 ? void 0 : _g.length) !== null && _h !== void 0 ? _h : 0) > 0}`);
+            this.accountCoordinator.recordAvoided("backoff");
+            return ((_k = (_j = this.cachedSchedules) === null || _j === void 0 ? void 0 : _j.length) !== null && _k !== void 0 ? _k : 0) > 0;
         }
         this.platform.log.debug(`Schedule refreshIfNeeded: CALLING refresh()`);
         return this.refresh();
@@ -200,7 +421,7 @@ class RoborockHapScheduleAccessory {
             }
             : undefined;
     }
-    async refreshDetailed(minimumRefreshStartedAt = 0) {
+    async refreshDetailed(minimumRefreshStartedAt = 0, accountCoordinatorHeld = false) {
         if (this.disposed) {
             return {
                 success: false,
@@ -213,7 +434,7 @@ class RoborockHapScheduleAccessory {
         }
         const startedAt = Date.now();
         const generation = ++this.refreshGeneration;
-        const refresh = this.performRefresh(generation);
+        const refresh = this.performRefresh(generation, accountCoordinatorHeld);
         this.refreshInProgress = refresh;
         this.refreshInProgressStartedAt = startedAt;
         try {
@@ -228,12 +449,20 @@ class RoborockHapScheduleAccessory {
             }
         }
     }
-    async performRefresh(generation) {
+    async performRefresh(generation, accountCoordinatorHeld) {
         try {
             const api = this.platform.roborockAPI;
-            const raw = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
-                requestTimeoutMs: 10000,
-            });
+            const readSchedules = () => {
+                this.accountCoordinator.recordRequest("read");
+                return (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
+                    requestTimeoutMs: 10000,
+                });
+            };
+            const raw = accountCoordinatorHeld
+                ? await readSchedules()
+                : await this.accountCoordinator.enqueue(readSchedules, (error) => {
+                    throw error;
+                });
             this.platform.log.debug(`Schedule discovery for ${this.duid}: ` +
                 `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
                 `value=${JSON.stringify(raw)}`);
@@ -244,7 +473,7 @@ class RoborockHapScheduleAccessory {
                         hasSchedules: this.scheduleAccessories.size > 0,
                     };
                 }
-                this.lastFailedRefreshAt = Date.now();
+                this.recordRefreshFailure();
                 this.platform.log.warn(`Unable to reliably read Roborock schedules for ${this.duid}: ` +
                     `get_server_timer returned ${typeof raw}; preserving existing schedules.`);
                 return {
@@ -272,7 +501,7 @@ class RoborockHapScheduleAccessory {
                         hasSchedules: this.scheduleAccessories.size > 0,
                     };
                 }
-                this.lastFailedRefreshAt = Date.now();
+                this.recordRefreshFailure();
                 this.platform.log.warn(`Unable to reliably read Roborock schedules for ${this.duid}: ` +
                     `get_server_timer returned a non-empty response that parsed to zero schedules; preserving existing schedules.`);
                 return {
@@ -294,7 +523,7 @@ class RoborockHapScheduleAccessory {
                 timer: [...schedule.timer],
             }));
             this.lastScheduleRefreshAt = Date.now();
-            this.lastFailedRefreshAt = 0;
+            this.clearRefreshFailure();
             this.platform.log.info(`Schedule parser: parsed ${this.duid}; result count=${schedules.length}.`);
             this.sync(schedules);
             // A successful empty snapshot is authoritative information. It is
@@ -311,7 +540,12 @@ class RoborockHapScheduleAccessory {
                     hasSchedules: this.scheduleAccessories.size > 0,
                 };
             }
-            this.lastFailedRefreshAt = Date.now();
+            if (isDefiniteScheduleThrottle(error)) {
+                this.recordScheduleThrottle(error);
+            }
+            else {
+                this.recordRefreshFailure();
+            }
             const message = error instanceof Error ? error.message : String(error);
             this.platform.log.warn(`Unable to refresh Roborock schedules for ${this.duid}: ${message}. Preserving existing schedules.`);
             return {
@@ -335,6 +569,138 @@ class RoborockHapScheduleAccessory {
         }
         this.cachedSchedules = schedules;
         this.lastScheduleRefreshAt = Date.now();
+    }
+    enqueueScheduleWrite(scheduleId, enabled) {
+        return this.writeBatcher.enqueue({ scheduleId, enabled });
+    }
+    async executeScheduleWriteBatch(requests) {
+        const result = await this.accountCoordinator.enqueue(() => this.executeAccountCoordinatedScheduleWriteBatch(requests), (error) => new Map(requests.map((request) => [request.scheduleId, error])));
+        this.logScheduleMetrics();
+        return result;
+    }
+    async executeAccountCoordinatedScheduleWriteBatch(requests) {
+        const failures = new Map();
+        const primarySent = [];
+        const api = this.platform.roborockAPI;
+        const primaryStartedAt = Date.now();
+        for (let index = 0; index < requests.length; index++) {
+            const request = requests[index];
+            if (index > 0) {
+                await this.waitForScheduleWriteSpacing();
+            }
+            try {
+                this.platform.log.info(`Schedule command: ${request.enabled ? "enabling" : "disabling"} ${this.duid}/${request.scheduleId}.`);
+                this.accountCoordinator.recordRequest("primaryWrite");
+                await (0, hap_schedule_api_1.updateServerTimer)(api, this.duid, request.scheduleId, request.enabled, { requestTimeoutMs: 10000 });
+                primarySent.push(request);
+            }
+            catch (error) {
+                failures.set(request.scheduleId, error);
+                if (isDefiniteScheduleThrottle(error)) {
+                    this.recordScheduleThrottle(error);
+                    return new Map(requests.map((candidate) => [candidate.scheduleId, error]));
+                }
+            }
+        }
+        if (primarySent.length === 0 || this.disposed) {
+            return failures;
+        }
+        await this.waitForScheduleVerification();
+        await this.refreshDetailed(primaryStartedAt, true);
+        const throttleError = this.accountCoordinator.currentThrottleError();
+        if (throttleError !== undefined) {
+            return new Map(requests.map((request) => [request.scheduleId, throttleError]));
+        }
+        const fallback = primarySent.filter((request) => !this.cachedScheduleMatches(request));
+        for (const request of primarySent) {
+            if (!fallback.includes(request)) {
+                failures.delete(request.scheduleId);
+            }
+        }
+        if (fallback.length === 0 || this.disposed) {
+            return failures;
+        }
+        const fallbackSent = [];
+        const fallbackStartedAt = Date.now();
+        for (let index = 0; index < fallback.length; index++) {
+            const request = fallback[index];
+            if (index > 0) {
+                await this.waitForScheduleWriteSpacing();
+            }
+            try {
+                this.platform.log.warn(`Schedule command: upd_server_timer was not confirmed for ${this.duid}/${request.scheduleId}; trying upd_timer fallback.`);
+                this.accountCoordinator.recordRequest("fallbackWrite");
+                await (0, hap_schedule_api_1.updateTimer)(api, this.duid, request.scheduleId, request.enabled, {
+                    requestTimeoutMs: 10000,
+                });
+                fallbackSent.push(request);
+            }
+            catch (error) {
+                failures.set(request.scheduleId, error);
+                if (isDefiniteScheduleThrottle(error)) {
+                    this.recordScheduleThrottle(error);
+                    for (const candidate of fallback) {
+                        failures.set(candidate.scheduleId, error);
+                    }
+                    return failures;
+                }
+            }
+        }
+        if (fallbackSent.length > 0 && !this.disposed) {
+            await this.waitForScheduleVerification();
+            await this.refreshDetailed(fallbackStartedAt, true);
+        }
+        for (const request of fallbackSent) {
+            if (this.cachedScheduleMatches(request)) {
+                failures.delete(request.scheduleId);
+            }
+            else {
+                failures.set(request.scheduleId, new Error(`Roborock did not confirm schedule ${request.scheduleId} as ${request.enabled ? "enabled" : "disabled"}`));
+            }
+        }
+        return failures;
+    }
+    cachedScheduleMatches(request) {
+        var _a;
+        return (((_a = this.cachedSchedules) === null || _a === void 0 ? void 0 : _a.some((schedule) => schedule.id === request.scheduleId &&
+            schedule.enabled === request.enabled)) === true);
+    }
+    async waitForScheduleVerification() {
+        await new Promise((resolve) => {
+            const timer = (0, timers_1.scheduleTimer)(resolve, VERIFY_DELAY_MS);
+            (0, timers_1.unrefTimer)(timer);
+        });
+    }
+    async waitForScheduleWriteSpacing() {
+        await new Promise((resolve) => {
+            const timer = (0, timers_1.scheduleTimer)(resolve, this.accountCoordinator.policy.writeSpacingMs);
+            (0, timers_1.unrefTimer)(timer);
+        });
+    }
+    recordRefreshFailure() {
+        const now = Date.now();
+        this.lastFailedRefreshAt = now;
+        this.consecutiveRefreshFailures =
+            (this.consecutiveRefreshFailures || 0) + 1;
+        const delay = scheduleFailureBackoffMs(this.consecutiveRefreshFailures, (this.scheduleBackoffRandom || Math.random)());
+        this.nextRefreshAttemptAt = now + delay;
+    }
+    clearRefreshFailure() {
+        this.lastFailedRefreshAt = 0;
+        this.consecutiveRefreshFailures = 0;
+        this.nextRefreshAttemptAt = 0;
+    }
+    recordScheduleThrottle(error) {
+        this.accountCoordinator.recordThrottle(error);
+        this.platform.log.warn(`Roborock schedule requests for this account appear rate-limited; pausing this vacuum's schedule traffic for ${this.accountCoordinator.policy.throttleCooldownMs / 60000} minutes.`);
+    }
+    logScheduleMetrics() {
+        const metrics = this.accountCoordinator.metricsSnapshot();
+        this.platform.log.debug(`Schedule cloud totals: reads=${metrics.scheduleReads}; ` +
+            `primaryWrites=${metrics.primaryWrites}; fallbackWrites=${metrics.fallbackWrites}; ` +
+            `coalesced=${metrics.coalescedChanges}; cacheAvoidedReads=${metrics.cacheAvoidedReads}; ` +
+            `backoffAvoidedReads=${metrics.backoffAvoidedReads}; ` +
+            `throttleAvoidedOperations=${metrics.throttleAvoidedOperations}.`);
     }
     /**
      * Stop in-memory work without changing the cached HAP service topology.
@@ -366,6 +732,8 @@ class RoborockHapScheduleAccessory {
         this.refreshInProgressStartedAt = 0;
         this.cachedSchedules = undefined;
         this.lastScheduleRefreshAt = 0;
+        this.clearRefreshFailure();
+        this.writeBatcher.cancelPending();
         for (const schedule of this.scheduleAccessories.values()) {
             schedule.dispose();
         }
@@ -417,11 +785,11 @@ class RoborockHapScheduleSwitchAccessory {
         this.accessory = accessory;
         this.duid = duid;
         this.scheduleId = scheduleId;
-        this.writes = new Set();
         this.suppression = new Map();
         // If Roborock rejects/doesn't reflect a command, don't allow HomeKit
         // to immediately hammer the same command over and over.
         this.failedCommands = new Map();
+        this.disposed = false;
         this.schedule = {
             id: scheduleId,
             enabled: false,
@@ -429,6 +797,7 @@ class RoborockHapScheduleSwitchAccessory {
         };
     }
     initialize(displayName, schedule) {
+        this.disposed = false;
         this.updateIdentity(displayName, schedule);
         const subtype = `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`;
         let service = this.accessory.getServiceById(this.platform.Service.Switch, subtype);
@@ -473,7 +842,7 @@ class RoborockHapScheduleSwitchAccessory {
         }
     }
     dispose() {
-        this.writes.clear();
+        this.disposed = true;
         this.suppression.clear();
         this.failedCommands.clear();
     }
@@ -494,27 +863,14 @@ class RoborockHapScheduleSwitchAccessory {
             this.updateService(previous);
             return;
         }
-        if (this.writes.has(this.scheduleId)) {
-            this.updateService(previous);
-            return;
-        }
-        this.writes.add(this.scheduleId);
         try {
-            const api = this.platform.roborockAPI;
-            this.platform.log.info(`Schedule command: ${enabled ? "enabling" : "disabling"} ${this.duid}/${this.scheduleId}; params=[[${JSON.stringify(this.scheduleId)}, ${JSON.stringify(enabled ? "on" : "off")}]].`);
-            const writeStartedAt = Date.now();
-            await (0, hap_schedule_api_1.updateServerTimer)(api, this.duid, this.scheduleId, enabled, {
-                requestTimeoutMs: 10000,
-            });
-            if (!(await this.verify(enabled, writeStartedAt))) {
-                this.platform.log.warn(`Roborock schedule ${this.scheduleId} did not reflect upd_server_timer; trying upd_timer fallback.`);
-                const fallbackWriteStartedAt = Date.now();
-                await (0, hap_schedule_api_1.updateTimer)(api, this.duid, this.scheduleId, enabled, {
-                    requestTimeoutMs: 10000,
-                });
-                if (!(await this.verify(enabled, fallbackWriteStartedAt))) {
-                    throw new Error(`Roborock did not confirm schedule ${this.scheduleId} as ${enabled ? "enabled" : "disabled"}`);
-                }
+            this.platform.log.info(`Schedule command: queueing ${enabled ? "enable" : "disable"} for ${this.duid}/${this.scheduleId}.`);
+            const executed = await this.coordinator.enqueueScheduleWrite(this.scheduleId, enabled);
+            if (!executed) {
+                return;
+            }
+            if (this.disposed) {
+                return;
             }
             this.schedule.enabled = enabled;
             this.schedule.timer[1] = enabled ? "on" : "off";
@@ -526,6 +882,9 @@ class RoborockHapScheduleSwitchAccessory {
             this.updateService(enabled);
         }
         catch (error) {
+            if (this.disposed) {
+                return;
+            }
             this.updateService(previous);
             this.failedCommands.set(this.scheduleId, {
                 enabled,
@@ -536,22 +895,6 @@ class RoborockHapScheduleSwitchAccessory {
                 `Further attempts for this same state are suppressed for ` +
                 `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`);
         }
-        finally {
-            this.writes.delete(this.scheduleId);
-        }
-    }
-    async verify(enabled, minimumRefreshStartedAt) {
-        await new Promise((resolve) => {
-            const timer = (0, timers_1.scheduleTimer)(resolve, VERIFY_DELAY_MS);
-            (0, timers_1.unrefTimer)(timer);
-        });
-        const current = await this.coordinator.refreshAndGetSchedule(this.scheduleId, minimumRefreshStartedAt);
-        if (!current) {
-            return false;
-        }
-        this.schedule = { ...current, timer: [...current.timer] };
-        this.updateService(current.enabled);
-        return current.enabled === enabled;
     }
     updateService(enabled) {
         const service = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
