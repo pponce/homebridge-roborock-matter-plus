@@ -1,9 +1,5 @@
 # Changelog
 
-## Unreleased
-
-**Schedule reads now reuse a successful cloud snapshot for 10 minutes instead of 5.** A HomeKit write still performs its own authoritative verification, so the longer TTL affects only changes made outside this bridge, such as edits in the Roborock app. Under continuous HomeKit reads, this lowers the per-vacuum coordinator ceiling from 12 schedule reads per hour to 6.
-
 ## 3.25.1
 
 **The schedule probe kept the status code of a refused route and threw away the server's explanation of it — so the route it was built to measure came back saying nothing.**
