@@ -29,8 +29,8 @@ const scheduleModule = require("../src/hap_schedule_accessory.ts");
 const RoborockHapScheduleAccessory = scheduleModule.default;
 const { ScheduleAccountCoordinator } = scheduleModule;
 
-// Older than the 5 minute schedule cache, so refreshIfNeeded really refreshes.
-const OLDER_THAN_CACHE_MS = 6 * 60 * 1000;
+// Older than the 10 minute schedule cache, so refreshIfNeeded really refreshes.
+const OLDER_THAN_CACHE_MS = 11 * 60 * 1000;
 const DEADLOCK_GUARD_MS = 250;
 
 function makeCoordinator() {

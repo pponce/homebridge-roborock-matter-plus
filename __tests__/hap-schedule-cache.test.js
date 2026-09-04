@@ -89,7 +89,7 @@ describe("HAP schedule coordinator cache", () => {
         timer: ["timer-1", "on"],
       },
     ];
-    coordinator.lastScheduleRefreshAt = Date.now() - 301000;
+    coordinator.lastScheduleRefreshAt = Date.now() - 601000;
 
     getServerTimers.mockResolvedValue([
       ["timer-1", "off"],
@@ -131,7 +131,7 @@ describe("HAP schedule coordinator cache", () => {
         timer: ["timer-1", "on"],
       },
     ];
-    coordinator.lastScheduleRefreshAt = Date.now() - 301000;
+    coordinator.lastScheduleRefreshAt = Date.now() - 601000;
 
     let resolveRequest;
     getServerTimers.mockReturnValue(
@@ -235,7 +235,7 @@ describe("HAP schedule coordinator cache", () => {
         timer: ["timer-existing", "on"],
       },
     ];
-    coordinator.lastScheduleRefreshAt = Date.now() - 301000;
+    coordinator.lastScheduleRefreshAt = Date.now() - 601000;
 
     getServerTimers.mockRejectedValueOnce(new Error("cloud timeout"));
 
@@ -267,7 +267,7 @@ describe("HAP schedule coordinator cache", () => {
     expect(coordinator.nextRefreshAttemptAt).toBe(0);
   });
 
-  test("five-minute cache absorbs frequent independent readers", async () => {
+  test("ten-minute cache absorbs frequent independent readers", async () => {
     const coordinator = makeCoordinator();
 
     getServerTimers.mockResolvedValue([["timer-1", "on"]]);
