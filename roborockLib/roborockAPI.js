@@ -299,6 +299,15 @@ const B01_STATUS_FORCED_GAP_MS = 1500;
 const B01_STATUS_ACTIVE_GAP_MS = 12000;
 const B01_STATUS_IDLE_GAP_MS = 25000;
 
+// The last path segment of the cloud schedule probe's negative control.
+//
+// The probe asks candidate routes which methods they take. An `Allow` header
+// coming back is only evidence if a route that CANNOT exist stays silent, so
+// one deliberately unmappable path is asked the same question. It is a fixed
+// literal rather than a random string so that the same reading is reproducible
+// across restarts and legible in a log a user pastes into an issue.
+const ABSENT_ROUTE_PROBE_SEGMENT = "no-such-subresource-control";
+
 // How many keys of an arbitrary diagnostic object survive compaction.
 const DIAGNOSTIC_KEY_LIMIT = 30;
 
@@ -4560,9 +4569,11 @@ class Roborock {
    * instead of a guess. Deliberately constrained:
    *
    * - **Debug only.** Silent for every installation that has not asked for it.
-   * - **GET only.** Nothing here can change a schedule. The Hawk interceptor
-   *   signs an empty body (`roborockAPI.js` request interceptor), so a
-   *   body-bearing write would not authenticate anyway — a read does.
+   * - **Safe methods only — GET and OPTIONS.** Nothing here can change a
+   *   schedule. The Hawk interceptor signs an empty body (`roborockAPI.js`
+   *   request interceptor), so a body-bearing write would not authenticate
+   *   anyway. OPTIONS carries no body either: it asks a resource which methods
+   *   it accepts, which is how you find a write target without attempting one.
    * - **Once per robot per session,** so a poll cadence cannot turn it into
    *   traffic.
    * - **Never throws.** A probe that breaks startup would be worse than the
@@ -4592,23 +4603,78 @@ class Roborock {
   }
 
   /**
-   * GET one candidate cloud schedule route, record it, and log what came back.
+   * Pluck the one response header that says which methods a resource takes.
    *
-   * Extracted so that every route — the two candidates and the singular scene
-   * resource probed after them — shares one error path. It never throws: this
-   * rides along on a live poll, and a route that does not exist is a
-   * measurement rather than a fault, so a failure is recorded and logged at
-   * debug level instead of surfacing.
+   * The reporter's 3.25.1 reading is why this exists: `GET user/scene/{id}`
+   * came back `400` carrying `"Request method 'GET' is not supported"`. That
+   * sentence is a servlet container's way of saying the path IS mapped, just
+   * not for the verb we asked with — so the resource exists and something
+   * else reaches it. Which verb that is belongs in the `Allow` header, and a
+   * probe that keeps the body but drops the headers is the same defect as
+   * 3.25.1's, one field over.
+   *
+   * Deliberately ONE header rather than the block. Response headers carry
+   * `set-cookie` and session material; a diagnostic that printed the lot
+   * would leak more than it measures. `Allow` is the answer and the only
+   * thing taken.
+   *
+   * @param {unknown} headers axios response headers — an `AxiosHeaders`
+   *   instance in production, a plain object in tests
+   * @returns {string | undefined} the header value, or nothing when absent
+   */
+  readAllowedMethods(headers) {
+    if (!headers || typeof headers !== "object") {
+      return undefined;
+    }
+
+    /** @type {unknown} */
+    let value;
+    const accessor = /** @type {{get?: unknown}} */ (headers).get;
+    if (typeof accessor === "function") {
+      try {
+        value = accessor.call(headers, "allow");
+      } catch {
+        value = undefined;
+      }
+    }
+
+    if (value === undefined || value === null) {
+      const match = Object.entries(headers).find(
+        ([key]) => key.toLowerCase() === "allow"
+      );
+      value = match?.[1];
+    }
+
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    return Array.isArray(value) ? value.join(", ") : String(value);
+  }
+
+  /**
+   * Read one candidate cloud schedule route, record it, and log what came back.
+   *
+   * Extracted so that every route — the two candidates, the singular scene
+   * resource probed after them, and the OPTIONS question asked of that same
+   * resource — shares one error path. It never throws: this rides along on a
+   * live poll, and a route that does not exist is a measurement rather than a
+   * fault, so a failure is recorded and logged at debug level instead of
+   * surfacing.
    *
    * @param {string} duid robot the reading belongs to
-   * @param {{label: string, path: string}} route label to file it under, and
-   *   the path to read
+   * @param {{label: string, path: string, method?: string}} route label to
+   *   file it under, the path to read, and the safe method to read it with
+   *   (`get` unless stated)
    * @param {Record<string, unknown>} results accumulator, written in place
    * @returns {Promise<void>}
    */
   async probeOneCloudScheduleRoute(duid, route, results) {
+    const method = route.method === "options" ? "options" : "get";
+    const verb = method.toUpperCase();
+
     try {
-      const response = await this.api.get(route.path);
+      const response = await this.api[method](route.path);
       // Roborock wraps most answers in `{api,result,status,success}`. Keep
       // the envelope only when there is no `result` to unwrap, so the log
       // shows the payload rather than the wrapper.
@@ -4624,17 +4690,28 @@ class Roborock {
       // is intact.
       const decoded = this.describeCloudScheduleAnswer(payload);
 
+      // An OPTIONS answer says nothing in its body — the whole reading is the
+      // `Allow` header — so keep it on the success path too, not only on a
+      // refusal.
+      const allow = this.readAllowedMethods(response?.headers);
+
       results[route.label] = {
         path: route.path,
+        method: verb,
         ok: true,
         response: payload,
+        allow,
         schedules: decoded.length > 0 ? decoded : undefined,
       };
 
       this.log.debug(
-        `Roborock cloud schedule probe for ${this.describeDevice(duid)} — GET ${route.path} answered: ${JSON.stringify(
+        `Roborock cloud schedule probe for ${this.describeDevice(duid)} — ${verb} ${route.path} answered: ${JSON.stringify(
           this.compactDiagnosticPayload(payload)
-        )}`
+        )}${
+          allow === undefined
+            ? ""
+            : ` — the resource allows: ${this.compactDiagnosticPayload(allow)}`
+        }`
       );
 
       if (decoded.length > 0) {
@@ -4667,21 +4744,33 @@ class Roborock {
       const describedBody =
         body === undefined ? undefined : this.compactDiagnosticPayload(body);
 
+      // And keep the headers' one useful field for the same reason. The
+      // refusal we went to this trouble for was "Request method 'GET' is not
+      // supported", which names the verb that failed and not the ones that
+      // would work; `Allow` is where a servlet puts those.
+      const allow = this.readAllowedMethods(error?.response?.headers);
+
       results[route.label] = {
         path: route.path,
+        method: verb,
         ok: false,
         status: status ?? null,
         error: message,
         body: describedBody,
+        allow,
       };
 
       this.log.debug(
-        `Roborock cloud schedule probe for ${this.describeDevice(duid)} — GET ${route.path} failed${
+        `Roborock cloud schedule probe for ${this.describeDevice(duid)} — ${verb} ${route.path} failed${
           status ? ` with HTTP ${status}` : ""
         }: ${message}${
           describedBody === undefined
             ? ""
             : ` — the server said: ${JSON.stringify(describedBody)}`
+        }${
+          allow === undefined
+            ? ""
+            : ` — the resource allows: ${this.compactDiagnosticPayload(allow)}`
         }`
       );
     }
@@ -4740,11 +4829,87 @@ class Roborock {
     );
 
     if (firstSchedule) {
+      const scenePath = `user/scene/${firstSchedule.id}`;
+
       await this.probeOneCloudScheduleRoute(
         duid,
-        { label: "scene", path: `user/scene/${firstSchedule.id}` },
+        { label: "scene", path: scenePath },
         results
       );
+
+      // The reading that arrived is why this second question exists. That GET
+      // came back `400` saying `"Request method 'GET' is not supported"` —
+      // which is not "no such route". A servlet only says that when the path
+      // IS mapped and the verb is not, so the singular scene resource exists
+      // and some other method reaches it. Naming that method is exactly the
+      // thing still missing: we know WHAT a write would have to change (the
+      // `enabled` flag inside the TIMER trigger) and not WHERE to send it.
+      //
+      // OPTIONS is how a resource is asked that question without attempting
+      // an answer. It is defined as safe, it carries no body, and it cannot
+      // alter a schedule — so it is the one step toward a write that does not
+      // require the guess this thread has twice refused to make.
+      await this.probeOneCloudScheduleRoute(
+        duid,
+        { label: "sceneMethods", path: scenePath, method: "options" },
+        results
+      );
+
+      // And that question was answered: the resource allows DELETE and
+      // OPTIONS. It is an answer, and not one of the two the thread's own
+      // decision rule anticipated. The singular scene resource takes exactly
+      // one method that changes anything, and it destroys a schedule rather
+      // than toggling one — so there is no write here to put behind a HomeKit
+      // switch, and a destructive verb aimed at a stranger's live account to
+      // see what happens is not a measurement this project will take.
+      //
+      // That rules out the resource, not the feature. Our own `executeScene`
+      // reaches `user/scene/{id}/execute`, so sub-resources under a scene id
+      // demonstrably exist and carry verbs the scene itself does not. Whether
+      // one of them is the toggle is the last question this instrument can
+      // ask, and it is asked WITH CONTROLS, because on its own an `Allow`
+      // header proves nothing:
+      //
+      //   - `user/scene` — the collection, where a REST API most often keeps
+      //     an update;
+      //   - `user/scene/{id}/enable` — the literal candidate for the nested
+      //     flag the reporter's app flips;
+      //   - `user/scene/device/{duid}` — the POSITIVE control. This run has
+      //     ALREADY read it successfully, so it is mapped beyond doubt. If
+      //     OPTIONS cannot describe even that, the instrument does not see
+      //     routes and every other answer in this set is noise. It is also
+      //     why the control is this route and not `/execute`: a control must
+      //     not be a path whose real verb runs a robot.
+      //   - a path that cannot exist — the NEGATIVE control. If THAT comes
+      //     back with an Allow header, the server answers everything and no
+      //     positive here means anything.
+      //
+      // Together they bound the search rather than extend it: this round
+      // either names a route or shows that no later round would.
+      //
+      // Asking costs nothing that could alter a schedule, and that is
+      // measured rather than assumed: the OPTIONS of the scene resource came
+      // back with an EMPTY body and an Allow header, which is a servlet
+      // container answering the request itself instead of handing it to the
+      // handler behind the path.
+      for (const candidate of [
+        { label: "sceneCollectionMethods", path: "user/scene" },
+        { label: "sceneEnableMethods", path: `${scenePath}/enable` },
+        {
+          label: "mappedRouteControl",
+          path: `user/scene/device/${duid}`,
+        },
+        {
+          label: "absentRouteControl",
+          path: `${scenePath}/${ABSENT_ROUTE_PROBE_SEGMENT}`,
+        },
+      ]) {
+        await this.probeOneCloudScheduleRoute(
+          duid,
+          { ...candidate, method: "options" },
+          results
+        );
+      }
     }
 
     await this.updateRoborockDiagnostics(
