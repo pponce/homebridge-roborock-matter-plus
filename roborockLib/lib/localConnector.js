@@ -5,6 +5,10 @@ const Parser = require("binary-parser").Parser;
 const net = require("net");
 const dgram = require("dgram");
 const { describeDevice } = require("./describeDevice");
+const {
+  describeReplyRefusal,
+  createRefusalError,
+} = require("./describeReplyRefusal");
 
 const PORT = 58866;
 const TIMEOUT = 5000; // 5 Sekunden Timeout
@@ -113,6 +117,22 @@ class localConnector {
     // Consecutive failed local connects per duid, used to back the retry delay
     // off. Reset the moment a connect succeeds.
     this.reconnectAttempts = new Map();
+    /**
+     * The discovery pass currently listening, if any. See getLocalDevices for
+     * why there can only be one.
+     * @type {Promise<Record<string, string>>|null}
+     */
+    this.discoveryInFlight = null;
+    /**
+     * Tear down the listening discovery pass: close its socket and settle its
+     * promise. Set while a pass is in the air, cleared the moment it ends by
+     * any route, so shutdown can never reach for a pass that is already gone.
+     *
+     * A single slot is enough only because `getLocalDevices` is single-flight;
+     * two overlapping passes would clobber it and leak the first socket.
+     * @type {(() => void)|null}
+     */
+    this.closeDiscoveryPass = null;
   }
 
   /**
@@ -157,15 +177,119 @@ class localConnector {
     // swallowing them here only prevents the crash.
     const timer = setTimer(() => {
       this.reconnectTimers.delete(duid);
+      // The address is re-read here rather than taken from the closure. See
+      // reconnectTargetFor.
       Promise.resolve()
-        .then(() => this.createClient(duid, ip))
+        .then(() => this.createClient(duid, this.reconnectTargetFor(duid, ip)))
         .catch((error) => {
           this.adapter.log.debug(
             `Local reconnect attempt for ${duid} failed: ${error?.message || error}`
           );
         });
+      // Deliberately not awaited before the attempt above: the correction it
+      // produces is for the retry AFTER this one, which is at least a minute
+      // out, and a robot that merely blipped is still at the address we hold.
+      // Making every attempt wait five seconds for a listen window would slow
+      // the common case down to fix the rare one.
+      void this.refreshLocalIpFromBroadcast(duid);
     }, delayMs);
     this.reconnectTimers.set(duid, timer);
+  }
+
+  /**
+   * The address the next reconnect should aim at.
+   *
+   * `scheduleReconnect` used to close over the address the socket was built
+   * with, and that is right for every reason a local socket drops but the one
+   * that lasts: a DHCP lease that moved the robot. That robot sat reachable at
+   * a new address while the retry chain probed the old one — backing off to
+   * once every fifteen minutes, for the life of the process. Nothing looked
+   * broken, because a failed local connect falls back to the cloud
+   * automatically and every command still worked; the only symptom was that
+   * the fast path never returned until Homebridge was restarted.
+   *
+   * The captured address stays the fallback. An adapter that knows no address
+   * for this robot must not turn a failed connect into a `connect(undefined)`,
+   * which is a thrown TypeError inside a timer callback rather than a
+   * connection failure the retry logic understands.
+   *
+   * @param {string} duid
+   * @param {string} fallbackIp the address the socket was originally built with
+   * @returns {string}
+   */
+  reconnectTargetFor(duid, fallbackIp) {
+    const known = this.adapter.getKnownLocalIp?.(duid);
+
+    return typeof known == "string" && known ? known : fallbackIp;
+  }
+
+  /**
+   * Re-run LAN discovery and adopt whatever address `duid` broadcasts now.
+   *
+   * The UDP broadcast is the one signal that means "this robot is on THIS LAN
+   * at THIS address", which is exactly what a local connection needs to know —
+   * so it, and not the cloud's `get_network_info`, is the right source for a
+   * correction. (`get_network_info` cannot serve here anyway: a robot whose
+   * local connect just failed has already been marked remote, and that mark is
+   * what gates the write of its address.)
+   *
+   * A pass that hears nothing changes nothing, and neither does one that hears
+   * the address we already hold: writing diagnostics unconditionally would let
+   * a background re-check overwrite the `tcp-connected` reason of a reconnect
+   * that had meanwhile succeeded.
+   *
+   * @param {string} duid
+   * @returns {Promise<string|null>} the new address, or null if nothing changed
+   */
+  async refreshLocalIpFromBroadcast(duid) {
+    if (this.adapter.isCloudOnlyModeEnabled?.()) {
+      return null;
+    }
+
+    let discovered;
+    try {
+      const devices = await this.getLocalDevices();
+      discovered = devices?.[duid];
+    } catch (error) {
+      this.adapter.log.debug(
+        `Re-discovery for ${duid} found nothing usable: ${error?.message || error}`
+      );
+      return null;
+    }
+
+    if (typeof discovered != "string" || !discovered) {
+      return null;
+    }
+
+    const previous = this.adapter.localDevices?.[duid];
+    if (previous === discovered) {
+      return null;
+    }
+
+    // Written back to the adapter rather than kept here, because
+    // `getKnownLocalIp` and `ensureLocalConnection` read that map: a
+    // correction only this module knew about would leave every other caller
+    // aiming at the dead address.
+    if (this.adapter.localDevices) {
+      this.adapter.localDevices[duid] = discovered;
+    }
+
+    if (previous) {
+      this.adapter.log.info(
+        `${describeDevice(this.adapter, duid)} is answering at a new local address ` +
+          `(${previous} → ${discovered}), so the local connection will be remade there. ` +
+          `A DHCP lease that moves is normal; reserve the address on the router if you ` +
+          `would rather it did not.`
+      );
+    }
+
+    await this.adapter.updateTransportDiagnostics(duid, {
+      localIp: discovered,
+      localDiscoveryState: "rediscovered",
+      lastTransportReason: "udp-broadcast-rediscovery",
+    });
+
+    return discovered;
   }
 
   async ensureConnected(duid, ip) {
@@ -584,16 +708,30 @@ class localConnector {
     const result = parsed_102.result;
 
     if (this.adapter.pendingRequests.has(id)) {
+      const refusal = describeReplyRefusal(parsed_102);
       this.adapter.log.debug(
-        `Local message with protocol 4 and id ${id} received. Result: ${JSON.stringify(result)}`
+        typeof result === "undefined"
+          ? `Local message with protocol 4 and id ${id} received. No result; reply was ${JSON.stringify(parsed_102)}`
+          : `Local message with protocol 4 and id ${id} received. Result: ${JSON.stringify(result)}`
       );
-      const { resolve, timeout } = this.adapter.pendingRequests.get(id);
+      const { resolve, reject, timeout, method } =
+        this.adapter.pendingRequests.get(id);
       this.adapter.clearTimeout(timeout);
       this.adapter.pendingRequests.delete(id);
       // Proof that this socket is not mute, so any run of timeouts counted
-      // against it starts over.
+      // against it starts over. A refusal still proves the socket answers —
+      // it is the request that failed, not the transport.
       if (this.adapter.noteLocalRequestSucceeded) {
         this.adapter.noteLocalRequestSucceeded(duid);
+      }
+      if (refusal && typeof reject === "function") {
+        reject(
+          createRefusalError(
+            `The robot refused ${method || "the request"} (local id ${id}): ${refusal}`,
+            parsed_102
+          )
+        );
+        return;
       }
       resolve(result);
 
@@ -737,7 +875,38 @@ class localConnector {
     await handshakePromise;
   }
 
-  async getLocalDevices() {
+  /**
+   * Listen for the robots' UDP broadcasts and answer duid → address.
+   *
+   * SINGLE-FLIGHT, because the listen socket binds a fixed port. Startup runs
+   * one pass, and a failing reconnect now runs one of its own, so two can
+   * genuinely overlap — and the second `bind` would fail with EADDRINUSE,
+   * which reaches `catchError` and rejects a discovery that had nothing wrong
+   * with it. A caller that arrives while a pass is listening joins that pass
+   * instead of opening a second one.
+   *
+   * The claim is released in a `finally`, including on rejection: a claim that
+   * leaked would be worse than the collision it prevents, because nothing
+   * would ever discover again.
+   *
+   * @returns {Promise<Record<string, string>>}
+   */
+  getLocalDevices() {
+    if (this.discoveryInFlight) {
+      return this.discoveryInFlight;
+    }
+
+    const pass = this.listenForLocalDevices().finally(() => {
+      if (this.discoveryInFlight === pass) {
+        this.discoveryInFlight = null;
+      }
+    });
+    this.discoveryInFlight = pass;
+
+    return pass;
+  }
+
+  async listenForLocalDevices() {
     return new Promise((resolve, reject) => {
       const devices = {};
 
@@ -827,6 +996,7 @@ class localConnector {
       });
 
       server.on("error", (error) => {
+        this.closeDiscoveryPass = null;
         this.adapter.catchError(`Discover server error: ${error.stack}`);
         closeServer();
         reject(error);
@@ -834,7 +1004,23 @@ class localConnector {
 
       server.bind(PORT);
 
+      // Shutdown's only hook into this module clears the timer below, which
+      // used to be the sole route to `closeServer()` and `resolve()` — so a
+      // pass caught in the air leaked a bound UDP socket AND hung every
+      // caller awaiting it. Hand shutdown the pass's own teardown instead.
+      //
+      // It resolves rather than rejects: a rejection reaches `catchError` and
+      // would log an error line for an ordinary shutdown. The addresses heard
+      // so far are already-measured facts, written to diagnostics as they
+      // arrived, so they are handed over rather than discarded.
+      this.closeDiscoveryPass = () => {
+        this.closeDiscoveryPass = null;
+        closeServer();
+        resolve(devices);
+      };
+
       this.localDevicesTimeout = this.adapter.setTimeout(() => {
+        this.closeDiscoveryPass = null;
         closeServer();
 
         resolve(devices);
@@ -896,7 +1082,17 @@ class localConnector {
   clearLocalDevicedTimeout() {
     if (this.localDevicesTimeout) {
       this.adapter.clearTimeout(this.localDevicesTimeout);
+      this.localDevicesTimeout = null;
     }
+
+    // Clearing that timer disarms the pass's own ending, so the pass has to be
+    // ended here instead: its socket closed and its promise settled. Dropping
+    // the single-flight claim while leaving the socket bound would be worse
+    // than the leak — the port is fixed (58866), so the next pass would fail
+    // to bind with EADDRINUSE and reject a discovery that had nothing wrong
+    // with it. No pass in flight (a cloud-only install never opens one) makes
+    // this a no-op by construction.
+    this.closeDiscoveryPass?.();
 
     // This is the only local-transport hook the adapter's
     // clearTimersAndIntervals calls on shutdown. Reconnect timers are armed as
