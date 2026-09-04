@@ -456,3 +456,17 @@ queued work stops on a definite throttle, and failures do not cause a retry stor
 - Aggregate primary and fallback verification summaries are logged at info level so normal,
   fallback, and partial-failure paths can be distinguished without logging complete timer payloads
   or credentials.
+
+## Post-merge follow-up: ten-minute successful-read TTL
+
+- The successful schedule snapshot TTL is now 10 minutes rather than the 5-minute value shipped in
+  3.22.0. Under continuous HomeKit reads, this lowers the coordinator-only theoretical ceiling from
+  `12 × N` schedule reads per hour to `6 × N`, where `N` is the number of configured vacuums.
+- This remains a ceiling rather than an expected steady-state rate: a vacuum is read only after its
+  successful snapshot expires and another HomeKit read asks for schedule state.
+- HomeKit schedule writes do not wait for the TTL. They still perform their own consolidated,
+  authoritative verification after the write batch.
+- The longer stale-state bound therefore applies only to schedule changes made outside this bridge,
+  such as a change made directly in the Roborock app.
+- Startup discovery, write verification, recovery after failures, and explicitly enabled diagnostic
+  probes are separate request sources and are not included in the `6 × N` cache-driven ceiling.
