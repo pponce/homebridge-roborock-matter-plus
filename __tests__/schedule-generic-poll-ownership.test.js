@@ -111,9 +111,38 @@ describe("generic timer poll ownership", () => {
 
     const probeSource = apiSource.slice(probeStart, probeEnd);
     expect(probeSource).toContain("async probeCloudScheduleRoutes(");
-    expect(probeSource).toContain("await this.api.get(route.path)");
+
+    // The verb became a variable in 3.26.0, when the singular scene resource
+    // answered `"Request method 'GET' is not supported"` and the next question
+    // was which method it DOES take — asked with OPTIONS, a safe method. So
+    // pin the invariant rather than the call site: whatever reaches the client
+    // is narrowed to a safe verb one line earlier, and no mutating verb
+    // appears in the probe at all, as a call or as a string that could be
+    // dispatched through the index.
+    expect(probeSource).toContain("await this.api[method](route.path)");
+    expect(probeSource).toContain(
+      'const method = route.method === "options" ? "options" : "get";'
+    );
     // A write to any of these routes would change a user's schedule. The probe
     // exists to measure, and nothing in it may send one.
     expect(probeSource).not.toMatch(/this\.api\.(post|put|patch|delete)\(/);
+    expect(probeSource).not.toMatch(/["'`](post|put|patch|delete)["'`]/i);
+
+    // 3.27.0 asks that same safe question of several candidate routes, and the
+    // two invariants that make those answers readable belong here rather than
+    // in the reading of any one of them.
+    //
+    // First: every candidate goes through the same narrowing as the original
+    // question did. A candidate that carried its own verb would slip past the
+    // safe-method gate above while still looking like part of the set.
+    expect(probeSource).toContain('{ ...candidate, method: "options" }');
+
+    // Second: the set includes a route that cannot exist. An `Allow` header is
+    // only evidence if a path with nothing behind it stays silent, so dropping
+    // the negative control would not fail anything visible — it would quietly
+    // turn every other answer from a measurement into a guess. That is exactly
+    // what a source guard is for.
+    expect(probeSource).toContain("ABSENT_ROUTE_PROBE_SEGMENT");
+    expect(apiSource).toMatch(/const ABSENT_ROUTE_PROBE_SEGMENT = "[^"]+";/);
   });
 });
