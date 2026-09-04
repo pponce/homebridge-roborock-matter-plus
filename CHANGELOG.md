@@ -1,5 +1,161 @@
 # Changelog
 
+## 3.25.1
+
+**The schedule probe kept the status code of a refused route and threw away the server's explanation of it — so the route it was built to measure came back saying nothing.**
+
+3.25.0 shipped a read of the singular cloud scene resource, on the reasoning that a 200 makes it a candidate for a later write and a 404 rules it out for free. Issue #22's reporter ran it, and the answer was neither: `400`.
+
+That is the one outcome the probe had nothing to say about. A 404 means there is no such resource. A 400 means the server routed the request and then rejected it — which is a statement about the request, not about whether the route exists. Whether it means "unknown route", "wrong method" or "that scene is not yours" lives in the body the server sent back, and axios flattens every one of those into the same sentence: `Request failed with status code 400`.
+
+The probe recorded that sentence and dropped the body. So a measurement that took a release to ship, and somebody else's live account to run, produced a number and no reading.
+
+A refused route now keeps what the server actually said, in the log and in the diagnostics record, under the same compaction and redaction a successful answer already gets — an error envelope is no more ours to print blindly than a normal one. This holds for every route the probe reads, not just the one it was found on.
+
+No behaviour outside the diagnostic changes, and the probe is still debug-only, GET-only, once per robot per session, and unable to throw.
+
+## 3.25.0
+
+**The schedule probe now measures whether a cloud schedule is a resource the plugin could ever write to.**
+
+Issue #22's reporter switched two of his three app schedules off, restarted, and sent the reading without saying which two. The log named them, and it named something more useful than that: every scene-level `enabled` stayed `true`, and the flag his app had actually flipped was `enabled` inside each schedule's own TIMER trigger, nested a level deeper. So a HomeKit switch over these schedules would have to rewrite that nested field — not the scene's own.
+
+Knowing what to write is not knowing where to send it. The only write route measured on this client is `user/scene/{id}/execute`, which runs a scene rather than enabling one, and a guessed write endpoint against somebody's live account does not fail politely — it edits or deletes a schedule they rely on.
+
+So this release measures the one remaining thing that costs nothing: whether the singular scene resource answers at all. When the device route reports a timer-driven scene, the probe reads that one scene by id. A resource that answers GET is the only defensible candidate for a later write, and its answer is the payload shape such a write would have to send back; a 404 rules it out for free.
+
+The constraints are unchanged, because they are what make shipping a measurement to thousands of installations defensible: debug logging only, GET only, once per robot per session, cannot throw, credential-shaped fields redacted. Exactly one scene is read rather than all of them — this is a shape measurement, not an inventory, and an account with nine schedules must not become nine requests.
+
+Still a diagnostic, still not a feature. Reading these schedules is solved; switching them is not, and it will not be built on a guess.
+
+## 3.24.2
+
+**Shutting down while LAN discovery was listening left a UDP socket open and every caller waiting on it hung.**
+
+Discovery listens for the robots' broadcasts for a fixed five-second window. One timer ends that window: it closes the socket and hands back whatever was heard. Shutdown's only hook into the local transport cleared that timer — which disarmed the one thing that ended the pass.
+
+A pass caught in the air when Homebridge stopped therefore never closed its socket, leaving a bound handle holding the event loop open, and never settled its promise, so anything awaiting discovery waited until the process was killed. Shutdown already fixes exactly that hang for pending cloud requests; discovery was missing from the list. It also never released the single-flight claim added in 3.24.1, because that claim is released in the promise's own completion.
+
+Shutdown now ends the pass properly: socket closed, promise resolved with the addresses already heard. Resolved rather than rejected, because a rejection would log an error line for an ordinary shutdown, and those addresses were measured facts already recorded — there is no reason to throw them away. Forgetting the pass without closing its socket would have been worse than the leak: the port is fixed, so the next pass would fail to bind with `EADDRINUSE` and reject a discovery that had nothing wrong with it.
+
+Nobody would have noticed this as a fault. The process was being torn down anyway, so the leaked handle went with it. It is fixed because a shutdown that cannot finish cleanly is the thing that turns a restart into a kill.
+
+## 3.24.1
+
+**A robot whose DHCP lease moved it stayed on the cloud until Homebridge was restarted.**
+
+Issue #21 asked the question directly: other plugins for this robot drop the connection when its IP changes, so does this one handle it? The honest answer needed measuring, and the measurement found a gap.
+
+The local TCP transport learns each robot's address once, at startup, from the robot's own UDP broadcast. That address was then held in a closure for the life of the process. For every reason a local socket drops — a blip, a robot picked up and carried out of range, a reboot — retrying the same address is exactly right. For the one reason that lasts, a lease that moved the robot, it never was: the retry chain went on probing the old address, backing off to once every fifteen minutes, until somebody restarted Homebridge.
+
+Nothing looked broken, which is why this survived. A failed local connect falls back to the Roborock cloud automatically, so commands kept working and Apple Home kept responding. The only symptom was that the fast path never came back.
+
+Two things change:
+
+- The address a reconnect aims at is resolved when the retry timer fires rather than when it was armed, so any correction from elsewhere is picked up.
+- A reconnect also re-consults the LAN in the background. The robot's UDP broadcast is the one signal that means "this robot is on _this_ network at _this_ address", so it is the right source for the correction — the cloud's `get_network_info` cannot serve here, because a robot whose local connect just failed has already been marked cloud-only, and that mark is what gates the write of its address. The correction is written where every other caller reads it, so a moved robot is picked up by ordinary commands too, not only by the retry.
+
+The re-check does not hold the reconnect attempt open: it is for the retry after this one, at least a minute out, and the common case is a robot that blipped and is still where we left it. A pass that hears nothing, or hears the address already held, changes nothing at all. Cloud-only installs never open the port. A move is reported once, by name, with both addresses.
+
+LAN discovery is now also single-flight. It binds a fixed port, so a startup pass and a reconnect pass could overlap and the second `bind` would fail with `EADDRINUSE` — rejecting a discovery that had nothing wrong with it.
+
+## 3.24.0
+
+**The probe from 3.23.0 came back, and it found the schedules.**
+
+Issue #22's reporter has three daily schedules in the Roborock app that his Saros 10R (`roborock.vacuum.a144`) insists it does not have — it refuses `get_server_timer` outright with `-10007 "Not FCC robot"`, and answers the legacy `get_timer` with `[]`. Both answers were true. 3.23.0 shipped a read-only diagnostic to find out where the schedules actually live, and his log settles it:
+
+- `GET user/devices/<duid>/jobs` → `[]`. That route is out.
+- `GET user/scene/device/<duid>` → **all three schedules**, with cron, timezone, enable flag and the room task.
+
+His app screenshots explain the shape. The three entries under **Meine Programme** each carry a clock icon, and in Roborock's data model a named program with a timer _is_ a scene with a `TIMER` trigger. Newer robots keep their schedules as cloud scenes, not as device timers. The device protocol was being asked a question only the cloud can answer.
+
+**What this release changes is the diagnostic, not the feature.** Reading these into HomeKit switches needs a route that can enable and disable a scene, and no such route has been measured. Guessing a write endpoint against somebody's live account is how you delete a schedule they depend on, so that half waits for a measurement rather than a hope.
+
+What it does change is that the measurement now survives being logged. The probe printed its answer through the diagnostic compactor, which caps every string at 500 characters and every array at 8 entries — the right default for an envelope nobody has mapped, and costly on this one. Measured on the real answer: every one of the three scenes was cut mid-task, so the log recorded _when_ each schedule fires and never _what it runs_, and an account with more than eight schedules would have lost the rest of them silently. The payload is now decoded from the raw answer, before compaction, and reported as facts:
+
+```
+… — user/scene/device/<duid> carries 3 timer-driven scene(s):
+…   "Saugen+" (scene …) — 09:00 on Wed (Europe/Berlin), enabled, runs do_scenes_segments over 7 segment(s)
+```
+
+The constraints from 3.23.0 are unchanged: debug logging only, `GET` only, once per robot per session, and it cannot throw. The decoder is pure, carries neither the duid nor room names out of the payload, and renders a cron only in the shape the app actually produces — anything else is printed verbatim rather than half-translated. A scene with no timer is one of the app's manually run Routines; it is counted in the summary rather than dropped without saying so.
+
+## 3.23.1
+
+**A Q7 that finished cleaning normally asked its owner to report a fault.**
+
+The maintainer's own `roborock.vacuum.sc05` logged six distinct unexplained `error_code`s in a single day — 2110, 2108, 501, 2102, 2103 and the long-familiar 2105 — every one of them while it was running. It then finished its run and docked at 100%. Nothing was wrong with it at any point.
+
+Read against python-roborock's own per-family fault tables, two of those six are not faults at all:
+
+- **2102** — "Cleaning completed. Returning to the dock." It fires after **every** task.
+- **2100** — "Low battery. Resume cleaning after recharging." The robot announcing normal auto-recharge-and-resume.
+
+The plugin already treats the Q10 family's equivalents this way: upstream marks that family's 501 as hardware-confirmed and firing per completed task, and its 502 as a low-battery resume, and both have been informational here since the families were split. The Q7 family was simply never given its own two. The asymmetry ran the other way too — the Q7 has always silenced 407 ("cleaning in progress, scheduled clean ignored") while the Q10 did not, though upstream marks it hardware-confirmed and "lifecycle, not an error" on that family as well. All three are informational now.
+
+Apple Home was never affected: no B01 fault number appears in the plugin's v1 error table, so an unrecognised one has always published nothing rather than drawing a fault on a healthy tile. What it reached was the log, which named the code once per run and asked the owner to report the number "if the robot really is in trouble right now" — asked, in these two cases, after a clean that had just completed successfully.
+
+**Restraint is the other half of this.** Only a healthy robot's lifecycle notifications are silenced. A scheduled clean that did not run (2003, "Battery level below 20%. Scheduled task canceled") and a clean that ended without reaching its target (2007, 2012) are outcomes an owner may want to know about, so they still surface. And the codes upstream itself cannot explain — 2103, 2105, 2108 and 2110 are bare `fault_NNNN` entries there too — stay exactly as they were. Silencing a number nobody has explained would be a guess, not a translation.
+
+## 3.23.0
+
+**Where a newer robot actually keeps its schedules: a read-only measurement, on request.**
+
+Some newer robots decline the device-side schedule method outright. A Saros 10R (`roborock.vacuum.a144`) answers `-10007 "Not FCC robot"` to every `get_server_timer`, while the legacy `get_timer` honestly answers `[]`. Both answers are true — that robot holds no _device-side_ timers — and yet its owner has three daily schedules, which he showed running under the robot's own Schedule screen in the Roborock app. They are held server-side, on cloud routes the device protocol never touches, and this plugin has only ever asked the robot.
+
+Rather than map a payload nobody here has seen, this release measures it. With debug logging on, the plugin now asks the two candidate cloud routes for each robot once and prints what came back:
+
+- `user/devices/{duid}/jobs` — schedules
+- `user/scene/device/{duid}` — the app's Routines
+
+The answer is also filed under `lastCloudScheduleProbe` in the plugin's diagnostics.
+
+**This is a diagnostic, not a feature, and it is built to stay that way.** It is silent unless debug logging is on, so no installation pays for it uninvited. It only ever issues GETs, so it cannot alter a schedule. It runs once per robot per session, so no poll cadence can turn it into traffic. It cannot throw, because it rides along on a live poll. And credential-shaped fields in the answer are redacted before anything is logged.
+
+It does not yet expose these schedules in HomeKit. It establishes their shape, which is what the next step needs.
+
+## 3.22.0
+
+**Schedule reads cost far fewer cloud calls, and the queue that makes that possible could deadlock itself.**
+
+pponce contributed #23, which cuts the cloud traffic HomeKit schedule operations generate. The schedule snapshot is now cached for 5 minutes instead of 1, read failures back off progressively (1m → 2m → 5m → 15m → 1h, with 10% jitter) instead of retrying every 30 seconds, rapid switch toggles inside a 500ms window are coalesced so only the last value for a schedule is sent, all schedule traffic for an account is serialised through one queue with 500ms spacing, and an explicit rate-limit answer from Roborock pauses that account's schedule traffic for 65 minutes rather than hammering it. For an account with several vacuums this is the difference between a steady stream of requests and a handful.
+
+**The defect found while reviewing it, and fixed here.** A write batch runs inside the account queue and verifies itself afterwards by refreshing. That verification refresh is told the queue is already held, so it reads directly instead of queueing behind itself — correct. But a refresh may _adopt_ another refresh that is already in flight, and an ordinary HomeKit read of a schedule switch starts one that does **not** hold the queue. With a schedule snapshot older than the cache, a single `onGet` during a write was enough:
+
+- the HomeKit read's refresh takes a place in the queue **behind** the running batch;
+- the batch finishes writing, waits, and adopts that refresh as its verification;
+- the refresh cannot start until the batch releases the queue, and the batch cannot release it until the refresh returns.
+
+Nothing below the queue could break this. The timeouts that make the queue safe apply to requests that have been issued, and this read was never issued — there was nothing to expire. Both promises stayed pending forever: the HomeKit switch never answered, and the account queue was wedged for **every** vacuum on the account until Homebridge restarted.
+
+A caller holding the queue now refuses to adopt a refresh that does not hold it, and starts its own instead. Separately, a refresh that has been superseded while waiting in the queue no longer spends a cloud request when its turn comes — the generation guards already barred it from storing the result, so the request was pure waste.
+
+## 3.21.4
+
+**The refusal 3.21.3 made visible was then reported as a plugin crash, twice per poll cycle, forever.**
+
+DSimeone1989 ran 3.21.3 and sent the line it was written to produce. His Saros 10R answers:
+
+```
+Cloud message with protocol 102 and id 5 received. No result; reply was {"id":5,"error":{"code":-10007,"message":"Not FCC robot"}}
+```
+
+That is the answer: the robot's firmware declines `get_server_timer` outright. The fix worked. What it also produced was this, every poll cycle, for a robot behaving exactly as intended:
+
+```
+Failed to execute get_server_timer on robot Rocky (roborock.vacuum.a144): Error: The robot refused get_server_timer (cloud id 5): Not FCC robot (code -10007)
+    at MqttClient.<anonymous> (…/roborock_mqtt_connector.js:420:17)
+    at MqttClient.emit (node:events:514:28)
+    … eight more frames
+```
+
+**A stated refusal was thrown as a bare `Error`.** It carried no code, so it matched none of `catchError`'s calm branches and fell through to the final `else`, which logs `error.stack`. The stack names our own MQTT handler and describes nothing that went wrong. Because the schedule coordinator and the generic poll both ask, it was emitted twice per cycle, indefinitely.
+
+**A refusal the robot spelled out is now a capability fact, not a failure.** It is tagged where it is constructed, carries the robot's own error code, is reported once per robot per method so the owner learns why a feature is missing, and then drops to debug. It never carries a stack trace and never escalates to `log.error`.
+
+Deliberately narrow: transport failures are untouched. A robot that is unreachable, a dead cloud link and a missing local socket all keep their existing loud paths — quieting those would tell an owner nothing is wrong while their robot is offline.
+
 ## 3.21.3
 
 **A robot that refuses a request was reported as a robot that answered nothing.**

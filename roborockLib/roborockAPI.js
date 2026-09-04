@@ -20,6 +20,11 @@ const RRMapParser = require("./lib/RRMapParser");
 const messageQueueHandler =
   require("./lib/messageQueueHandler").messageQueueHandler;
 const roborockCrypto = require("./lib/roborockCrypto");
+const { METHOD_REFUSED_CODE } = require("./lib/describeReplyRefusal");
+const {
+  summariseCloudSceneSchedules,
+  parseCloudSceneSchedules,
+} = require("./lib/parseCloudSceneSchedules");
 const b01Q7Adapter = require("./lib/b01Q7Adapter");
 
 // v1 states in which the robot is actively doing something and state
@@ -4316,6 +4321,33 @@ class Roborock {
         return;
       }
 
+      // A refusal the robot spelled out is a fact about that robot, not a
+      // plugin failure: nothing on our side went wrong, so there is no stack
+      // worth printing, and the same robot will keep saying the same thing on
+      // every poll. Say it once so the owner learns why a feature is missing,
+      // then keep quiet. (Issue #22: a Saros 10R refuses `get_server_timer`
+      // with "Not FCC robot", which 3.21.3 rendered as an ERROR plus a
+      // ten-frame stack trace twice per poll cycle, indefinitely.)
+      if (
+        error &&
+        typeof error === "object" &&
+        error.code === METHOD_REFUSED_CODE
+      ) {
+        if (!this._reportedMethodRefusals) {
+          this._reportedMethodRefusals = new Set();
+        }
+        const seenKey = `${duid || "unknown"}:${attribute || "unknown"}`;
+        if (this._reportedMethodRefusals.has(seenKey)) {
+          this.log.debug(errorText);
+        } else {
+          this._reportedMethodRefusals.add(seenKey);
+          this.log.warn(
+            `${this.describeDevice(duid)} (${model || "unknown model"}) refuses ${attribute}: ${error.message}. This is the robot's own answer, not a plugin failure; it will not be reported again this session.`
+          );
+        }
+        return;
+      }
+
       const transientErrorKind =
         (typeof error === "object" && error?.transientKind) ||
         this.getTransientErrorKind(errorText);
@@ -4510,6 +4542,218 @@ class Roborock {
     }
 
     return await this.vacuums[duid].getServerTimers(duid, options);
+  }
+
+  /**
+   * Ask the Roborock CLOUD where a robot's schedules live (#22).
+   *
+   * Some newer robots decline the device-side `get_server_timer` outright —
+   * a Saros 10R (`roborock.vacuum.a144`) answers `-10007 "Not FCC robot"` on
+   * every attempt, while the legacy `get_timer` honestly answers `[]`. Both
+   * answers are true: that robot has no DEVICE-side timers. Its owner
+   * demonstrably has three daily schedules in the app, under the robot's own
+   * Schedule screen, so they are held server-side on routes the device
+   * protocol knows nothing about.
+   *
+   * This is a MEASUREMENT, not a feature. It reads the two candidate routes
+   * and prints what came back, so the next release can map a real payload
+   * instead of a guess. Deliberately constrained:
+   *
+   * - **Debug only.** Silent for every installation that has not asked for it.
+   * - **GET only.** Nothing here can change a schedule. The Hawk interceptor
+   *   signs an empty body (`roborockAPI.js` request interceptor), so a
+   *   body-bearing write would not authenticate anyway — a read does.
+   * - **Once per robot per session,** so a poll cadence cannot turn it into
+   *   traffic.
+   * - **Never throws.** A probe that breaks startup would be worse than the
+   *   missing feature it investigates.
+   *
+   * @param {string} duid Robot to probe.
+   * @returns {Promise<Record<string, unknown> | undefined>} Per-route outcome,
+   *   or `undefined` when the probe did not run.
+   */
+  /**
+   * Turn a cloud schedule answer into legible lines, or nothing.
+   *
+   * Wrapped because it decorates a diagnostic that rides on a live poll: a
+   * decoder that threw would cost more than the reading it produces. The
+   * decoder itself is pure and already declines shapes it does not recognise,
+   * so an unrecognised route simply yields no extra lines.
+   *
+   * @param {unknown} payload unwrapped route answer
+   * @returns {string[]} headline plus one line per schedule, or an empty array
+   */
+  describeCloudScheduleAnswer(payload) {
+    try {
+      return summariseCloudSceneSchedules(payload);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * GET one candidate cloud schedule route, record it, and log what came back.
+   *
+   * Extracted so that every route — the two candidates and the singular scene
+   * resource probed after them — shares one error path. It never throws: this
+   * rides along on a live poll, and a route that does not exist is a
+   * measurement rather than a fault, so a failure is recorded and logged at
+   * debug level instead of surfacing.
+   *
+   * @param {string} duid robot the reading belongs to
+   * @param {{label: string, path: string}} route label to file it under, and
+   *   the path to read
+   * @param {Record<string, unknown>} results accumulator, written in place
+   * @returns {Promise<void>}
+   */
+  async probeOneCloudScheduleRoute(duid, route, results) {
+    try {
+      const response = await this.api.get(route.path);
+      // Roborock wraps most answers in `{api,result,status,success}`. Keep
+      // the envelope only when there is no `result` to unwrap, so the log
+      // shows the payload rather than the wrapper.
+      const payload =
+        response?.data?.result === undefined
+          ? response?.data
+          : response.data.result;
+
+      // Decode BEFORE compacting. `compactDiagnosticPayload` caps strings at
+      // 500 characters and arrays at 8 entries; measured on the real scenes
+      // answer, that cut every schedule mid-task and would drop a ninth
+      // schedule entirely. The raw answer is the only place the measurement
+      // is intact.
+      const decoded = this.describeCloudScheduleAnswer(payload);
+
+      results[route.label] = {
+        path: route.path,
+        ok: true,
+        response: payload,
+        schedules: decoded.length > 0 ? decoded : undefined,
+      };
+
+      this.log.debug(
+        `Roborock cloud schedule probe for ${this.describeDevice(duid)} — GET ${route.path} answered: ${JSON.stringify(
+          this.compactDiagnosticPayload(payload)
+        )}`
+      );
+
+      if (decoded.length > 0) {
+        const [headline, ...entries] = decoded;
+        this.log.debug(
+          `Roborock cloud schedule probe for ${this.describeDevice(duid)} — ${route.path} carries ${headline}:`
+        );
+        for (const entry of entries) {
+          this.log.debug(
+            `Roborock cloud schedule probe for ${this.describeDevice(duid)} —   ${entry}`
+          );
+        }
+      }
+    } catch (error) {
+      const status = error?.response?.status;
+      const message =
+        error instanceof Error ? error.message : String(error ?? "");
+
+      // The status alone does not measure the route, and the reporter's answer
+      // is why: `user/scene/{id}` came back `400`, not `404`. A 404 would have
+      // ruled the resource out; a 400 says the server routed the request and
+      // then rejected it, and only its own body says whether that is "no such
+      // route", "wrong method" or "that scene is not yours". Axios flattens all
+      // of it into `Request failed with status code 400`, which carries nothing.
+      //
+      // So keep the body. It goes through the same compaction and redaction as
+      // a successful answer, because an error envelope is no more ours to print
+      // blindly than a successful one.
+      const body = error?.response?.data;
+      const describedBody =
+        body === undefined ? undefined : this.compactDiagnosticPayload(body);
+
+      results[route.label] = {
+        path: route.path,
+        ok: false,
+        status: status ?? null,
+        error: message,
+        body: describedBody,
+      };
+
+      this.log.debug(
+        `Roborock cloud schedule probe for ${this.describeDevice(duid)} — GET ${route.path} failed${
+          status ? ` with HTTP ${status}` : ""
+        }: ${message}${
+          describedBody === undefined
+            ? ""
+            : ` — the server said: ${JSON.stringify(describedBody)}`
+        }`
+      );
+    }
+  }
+
+  async probeCloudScheduleRoutes(duid) {
+    if (!duid || !this.config?.debug || !this.api) {
+      return undefined;
+    }
+
+    if (!this._probedCloudScheduleRoutes) {
+      this._probedCloudScheduleRoutes = new Set();
+    }
+
+    if (this._probedCloudScheduleRoutes.has(duid)) {
+      return undefined;
+    }
+
+    this._probedCloudScheduleRoutes.add(duid);
+
+    // Route names and shapes cross-checked against python-roborock's
+    // `get_schedules` and `get_scenes`. Our own `executeScene` already talks to
+    // `user/scene/{id}/execute` on this same client, which is what makes the
+    // base URL and the leading-slash convention here a measured fact rather
+    // than a hope.
+    const routes = [
+      { label: "schedules", path: `user/devices/${duid}/jobs` },
+      { label: "scenes", path: `user/scene/device/${duid}` },
+    ];
+
+    /** @type {Record<string, unknown>} */
+    const results = {};
+
+    for (const route of routes) {
+      await this.probeOneCloudScheduleRoute(duid, route, results);
+    }
+
+    // A HomeKit switch over these schedules has to WRITE, and the only write
+    // route measured on this client is `user/scene/{id}/execute`, which RUNS a
+    // scene rather than enabling one. The reporter's off-and-on measurement
+    // narrowed what such a write would have to change — the `enabled` flag
+    // inside the TIMER trigger, not the scene-level one — but not where to
+    // send it, and a guessed write endpoint against a live account does not
+    // fail politely.
+    //
+    // So measure the one thing that costs nothing: whether the singular scene
+    // resource answers at all. A REST resource that answers GET is the only
+    // defensible candidate for a later write, its answer is the payload shape
+    // such a write would have to send back, and a 404 rules it out for free.
+    //
+    // Exactly one scene, deliberately: this is a shape measurement, not an
+    // inventory, and an account with nine schedules must not become nine
+    // requests. It stays inside the once-per-robot-per-session guard above.
+    const [firstSchedule] = parseCloudSceneSchedules(
+      /** @type {{response?: unknown}} */ (results.scenes)?.response
+    );
+
+    if (firstSchedule) {
+      await this.probeOneCloudScheduleRoute(
+        duid,
+        { label: "scene", path: `user/scene/${firstSchedule.id}` },
+        results
+      );
+    }
+
+    await this.updateRoborockDiagnostics(
+      String(duid),
+      "lastCloudScheduleProbe",
+      results
+    );
+
+    return results;
   }
 
   async updateServerTimer(duid, timerId, enabled, options = {}) {
@@ -5113,7 +5357,7 @@ class Roborock {
    * Fetch the current SCMap and derive which room the robot is physically
    * inside (currentPose ray-cast against the per-room boundary chains).
    * Called from the B01 status loop while the robot is actively cleaning;
-   * throttled on attempts (min 20s gap), single-flight per device, and
+   * throttled on attempts (min 10s gap), single-flight per device, and
    * disabled entirely with the enableLiveRoomTracking=false config option.
    *
    * On a room CHANGE the cached last v1 status is re-broadcast through
