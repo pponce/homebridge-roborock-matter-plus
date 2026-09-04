@@ -1,5 +1,54 @@
 # Changelog
 
+## 3.27.0
+
+**The scene resource named its one write verb, and it is the one that deletes. So the search moves off that resource and onto its siblings — asked safely, and this time with controls, so the round either finds the route or proves there is nothing left to find.**
+
+3.26.0 asked `user/scene/<id>` which methods it accepts. Issue #22's reporter ran it and the answer came back on the first try:
+
+```
+OPTIONS user/scene/<id> → "" — the resource allows: DELETE,OPTIONS
+```
+
+That is an answer, and not one of the two the thread had planned for. The plan said an `Allow` naming a write verb means the next step is a promised no-op, and a missing `Allow` means we are near the end of what can be measured from outside. What arrived names exactly one method that changes anything, and it removes a schedule rather than toggling one. There is no write there to put behind a HomeKit switch, and a destructive verb is not something to try against someone's live account to see what happens.
+
+**What that rules out is the resource, not the feature.** The plugin's own scene-run path reaches `user/scene/<id>/execute`, so sub-resources under a scene id exist and carry verbs the scene itself does not. This release asks the same safe question of the routes that are left:
+
+- `user/scene` — the collection, where a REST API most often keeps an update
+- `user/scene/<id>/enable` — the literal candidate for the nested `TIMER` flag the reporter's app flips
+
+**And of two controls, which is the part that makes the answers mean anything.** An `Allow` header on its own is not evidence:
+
+- `user/scene/device/<duid>` — a **positive** control. This same probe run already read it successfully, so it is mapped beyond doubt. If `OPTIONS` cannot describe even that, the instrument does not see routes and no other answer in the set is worth reading. It is also why the control is this route and not `/execute`: a control must not be a path whose real verb starts a robot.
+- `user/scene/<id>/no-such-subresource-control` — a **negative** control. If a path with nothing behind it also answers with an `Allow` header, the server answers everything and every positive here is an artefact.
+
+Together they bound the search instead of extending it: this round either names a route or shows that no later round would.
+
+Everything that made the probe safe to ship is unchanged and still bound by tests — silent unless debug logging is on, safe methods only, once per robot per session, cannot throw into the poll it rides on, and only the `Allow` header is taken from a response rather than the header block, which carries session material. A source guard now also pins the two properties that would otherwise fail invisibly: every candidate is narrowed to a safe method at one point, and the negative control cannot be dropped.
+
+## 3.26.0
+
+**The refused route answered, and what it said was that the route exists — just not for the verb we asked with. So this release asks it which verb it does take, without attempting one.**
+
+3.25.1 taught the schedule probe to keep the body of a refusal. Issue #22's reporter ran it, and the body was worth the release:
+
+```
+GET user/scene/<id> → 400
+{"code":"servlet.exception","msg":"Request method 'GET' is not supported", ...}
+```
+
+That is not "no such route". A servlet says that sentence when the path _is_ mapped and the method is not — so the singular scene resource exists, and something other than GET reaches it.
+
+Two releases have now established _what_ a HomeKit switch over these schedules would have to change: the `enabled` flag inside a scene's TIMER trigger, not the scene's own. Neither established _where_ to send it, and this thread has twice refused to guess, because a guessed write endpoint against somebody's live account does not fail politely.
+
+There is a way to ask a resource which methods it accepts without attempting any of them, and it is what OPTIONS is for. It is a safe method, it carries no body, and it cannot alter a schedule. When the probe finds a timer-driven scene, it now asks that one scene resource the question and records the `Allow` header that answers it.
+
+The probe was also dropping that header — on refusals and successes alike — which is the same defect 3.25.1 fixed one field over: a refusal saying "GET is not supported" names the verb that failed and not the ones that would work, and `Allow` is where a servlet puts those. It is now kept wherever it appears.
+
+Exactly one header is taken, deliberately. A response header block carries session material, and a diagnostic somebody pastes into a public issue must not leak their cookie to measure a verb.
+
+The constraints are otherwise unchanged and one of them is now stated more precisely: safe methods only — GET and OPTIONS — debug logging only, once per robot per session, cannot throw, credential-shaped fields redacted. Still a diagnostic, still not a feature.
+
 ## 3.25.1
 
 **The schedule probe kept the status code of a refused route and threw away the server's explanation of it — so the route it was built to measure came back saying nothing.**
