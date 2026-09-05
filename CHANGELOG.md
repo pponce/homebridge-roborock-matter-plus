@@ -1,5 +1,88 @@
 # Changelog
 
+## 3.29.0
+
+**Schedules that live on your Routines, Routines you can run from Apple Home — and a debug log that is safe to paste.**
+
+### The last measurement in #22, and what it said
+
+3.27.0 asked the two remaining candidate routes which methods they take, with a positive and a negative control so the answer would mean something. The reporter ran it, and the reading was clean on all 4 lines:
+
+```
+OPTIONS user/scene                                  → the resource allows: POST,OPTIONS
+OPTIONS user/scene/<id>/enable                      → the resource allows: PUT,OPTIONS
+OPTIONS user/scene/device/<duid>   (positive control) → the resource allows: GET,HEAD,OPTIONS
+OPTIONS user/scene/<id>/no-such-subresource-control (negative control) → 400, no Allow
+```
+
+The positive control described a route this run had already read, and the negative control stayed silent — so a `PUT` on `enable` is a real reading, not the server handing out headers to anything. That named a verb and a route. It did not name a payload, and I said in that thread I would not guess one against somebody else's account.
+
+So I measured it against **mine**. I have 6 Routines on my S8 Pro Ultra, 2 of them on timers, and the account API is the same one the reporter's robot talks to. In order, each step read back before the next:
+
+- `PUT user/scene/<id>/param` with the Routine's own param object, unchanged, as a JSON body → `success:true`. The server re-created the trigger under a new id and changed nothing else. **That is the no-op write I promised.**
+- `PUT user/scene/<id>/enable` with a JSON body → `400 parameter.error`. With a **form** body `enabled=true` → `success:true`, nothing changed (it was already on). With `enabled=false` → the scene-level `enabled` went false; the timer's own flag did not move. Set back to true, confirmed.
+- `PUT …/param` with the TIMER trigger's nested `enabled` set to false → the flag went false, the action came back byte for byte, the scene-level flag stayed true — **exactly the change the reporter's app made when he switched a schedule off**. Set back to true, confirmed.
+
+Two routes, two shapes, both measured on the route the feature needs. The `Allow` gate did not retire: every write still asks the route which verbs it takes before the first write of a session, and a route that stops offering `PUT` stops being written to. `DELETE` — the one verb the singular scene resource offers — is not sent by anything in this plugin, and a test reads the source to keep it that way.
+
+### Why no write ever worked before, and why this one does
+
+Every request to the account API is signed over 7 slots, and this plugin — like the ioBroker adapter it descends from — signed the last 2 empty. Right for every bodiless GET and POST it made; fatal for any write with a body, which the cloud answers with `401 auth.err.invalid.token`. The body slot is now `md5` of the exact bytes sent, which is python-roborock's formula and the one the mock server in `Python-roborock/local_roborock_server` verifies against; a form body hashes as the sorted `k=v&k=v` string. Query strings stay unused — my measurement of the query slot came back 401, so whatever the app does there, the 2 open-source implementations do not know it either, and no route here needs one.
+
+### Schedules on Routines, in the same accessory
+
+A robot that refuses `get_server_timer` with `-10007 "Not FCC robot"` — the Saros 10R in #22 — is now recognised as saying where **not** to look: the device-side list is not asked again that session, the refusal is 1 info line instead of a warning every refresh, and the schedules are read from the account's Routines instead. A timer-driven Routine appears in the existing `<robot> Schedules` accessory as a switch **named after the Routine** (`Saugen+`, `Hinten`, `Vorne`); device-side schedules keep their `Schedule 1`, `Schedule 2` numbering, and adding a Routine never renumbers them.
+
+The switch shows what the app's own schedule toggle shows: Routine enabled **and** timer enabled. Off rewrites the Routine's param with the timer flag false — from a **fresh** reading of the Routine, never the cached one, because the write replaces the whole param and a room list edited in the app 3 minutes earlier would otherwise be reverted by a switch that meant to change 1 flag. On sets it true, and re-enables the Routine itself if the app had disabled it at Routine level. Verification is the same read-back the device-side switches have always had; there is no `upd_timer` fallback for a Routine, because there is no second route to fall back to.
+
+Two sources on one robot are read together. A source that fails on the first refresh after a restart fails the refresh as a whole, as before — the alternative would have been applying the other source's list and deleting every switch the failed source owns. A source that fails later keeps its previous reading while the other is applied. A `4xx` from the Routine route (a robot shared from another account, say) is remembered for the session like a refusal, and the device-side switches carry on.
+
+### Routines as switches
+
+New, optional, off by default: **Add Home app Routine switches** gives each robot a `<robot> Routines` accessory with 1 momentary switch per Routine you created in the app, named as in the app. On sends the same `execute` the app's play button sends — the 1 scene write every open-source client agrees on — and the switch turns itself off 1.5 s later, like the action switches. `Hey Siri, turn on Saugen+` runs it; a Home automation can run a Routine the way it runs a scene. The accessory is registered only once it has a switch to show and unregistered when a trustworthy reading says there are none, so an empty tile never appears. The reporter said he would rather run his Routines from HomeKit than keep the app's schedules; this is that.
+
+### The debug log no longer prints your local keys
+
+The `HomeData notifyDeviceUpdater:` debug line printed the cloud's home data whole — and that payload carries every robot's `localKey` (the AES key for the LAN protocol) and serial number. Users are asked to paste debug logs into issues, and 3 such logs were public in #22 before I read one closely enough. The line now goes through a redactor that masks `localKey`, `sn`, the account token and the whole `rriot` signing block, including inside the JSON-in-a-string the state actually arrives as. If you posted a debug log from an earlier version somewhere public, consider removing it.
+
+### Housekeeping
+
+- The debug probe from 3.23–3.27 asks 1 more `OPTIONS` (`/param`), so a pasted log shows both write routes' `Allow` headers.
+- `homebridge-ui`: a Routines checkbox next to Schedules; `config.schema.json`: `enableHomeKitRoutineSwitches`.
+
+85 new tests: the signature against an independent implementation of the formula and through a real axios instance; the param builder on the real Routine shapes; the gated writes; the 2-source refresh, the refusal, the 4xx, the fresh-read-before-write; the Routines accessory; the redaction; the platform registration. Run against 3.28.0, 3 of them pass and 82 fail or cannot load.
+
+## 3.28.0
+
+**Startup and network traffic, measured rather than felt.**
+
+### The tiles no longer wait for readings no tile displays
+
+`initializeDeviceUpdates` awaited the whole first parameter cycle for every robot — 8 serial round-trips per classic robot — and only then did startup set `bInited`, fire the Homebridge callback and register the Matter accessories. Those 8 requests read consumable hours, timers, carpet mode and water-box mode. Not one of them reaches the tile; the tile displays `get_status`, which was not among them.
+
+Counted on the critical path between "Homebridge started the plugin" and "the vacuum exists in Apple Home": **up to 12 serial network waits before, 3 after.** The home snapshot was also fetched twice back to back — `v2/user/homes` to build the device list, then `user/homes` again inside `updateHomeData` — and the second one is now handed the first one's payload. The network probe and the first status run concurrently instead of one after the other.
+
+On my own network this was a few seconds. On a robot that does not answer locally — the case in [#22](https://github.com/mathiashornbek/homebridge-roborock-matter/issues/22), where every local request runs its full 10-second timeout before falling back to the cloud — it kept the vacuum out of Apple Home for over a minute after every restart.
+
+### The first status is immediate, not 15 seconds away
+
+The classic poller is a plain interval, so its first tick landed 15 seconds after start and the tile showed the cloud snapshot until then. The B01 loop already fired its first read immediately for exactly this reason; the classic path now does too. Each robot's first status is awaited before registration, in parallel across robots and capped at 4 seconds, so the tile registers with fresh state but never waits on a robot that will not answer.
+
+### 160 requests an hour became 52
+
+Measured per classic robot: the periodic cycle issued 8 requests every 180 seconds — `get_multi_maps_list`, `get_room_mapping`, `get_consumable`, `get_server_timer`, `get_timer`, `get_carpet_mode`, `get_carpet_clean_mode`, `get_water_box_custom_mode` — for values that change roughly once a week. 3 robots in one house: about 280 requests an hour, 6,700 a day, at the Roborock cloud and the robots' local ports.
+
+The 6 slow-changing readings now move to a **30-minute lane**. Room mappings deliberately stay on every cycle: a room renamed in the Roborock app should reach Apple Home within minutes, and that refresh now serves from the persisted cache first — the same shape the B01 branch already had — so its 2 round-trips run behind the tile rather than in front of it.
+
+|               | before     | after      |
+| ------------- | ---------- | ---------- |
+| classic robot | 160 / hour | ~52 / hour |
+| Q7 (B01)      | 60 / hour  | ~6 / hour  |
+
+`get_status` is untouched — still every 15 seconds for a classic robot, still the dedicated B01 loop — because that is the one reading the tile lives on. A schedule written from Apple Home or a diagnostics export that wants fresh numbers can bring the slow lane forward with `requestSlowParameterPoll`.
+
+8 new tests, 6 of which fail against 3.27.0.
+
 ## 3.27.0
 
 **The scene resource named its one write verb, and it is the one that deletes. So the search moves off that resource and onto its siblings — asked safely, and this time with controls, so the round either finds the route or proves there is nothing left to find.**
