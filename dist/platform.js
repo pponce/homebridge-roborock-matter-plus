@@ -62,6 +62,7 @@ function installDeprecationWarningFilter() {
 installDeprecationWarningFilter();
 const Roborock = require("../roborockLib/roborockAPI").Roborock;
 const { getModelNameWithoutBrand } = require("../roborockLib/lib/deviceFeatures");
+const { redactSecrets } = require("../roborockLib/lib/redactSecrets");
 /**
  * Roborock App Platform Plugin for Homebridge
  * Based on https://github.com/homebridge/homebridge-plugin-template
@@ -228,9 +229,11 @@ class RoborockPlatform {
     dispatchDeviceUpdate(id, homeData) {
         var _a;
         // HomeData payloads can be tens of kilobytes and arrive continuously.
-        // Only pay the JSON.stringify cost when debug logging is actually on.
+        // Only pay the JSON.stringify cost when debug logging is actually on —
+        // and never print the robots' localKeys or serials: this is the line
+        // people paste into GitHub issues, and until 3.29.0 it carried both.
         if ((_a = this.platformConfig) === null || _a === void 0 ? void 0 : _a.debugMode) {
-            this.log.debug(`${id} notifyDeviceUpdater:${JSON.stringify(homeData)}`);
+            this.log.debug(`${id} notifyDeviceUpdater:${JSON.stringify(redactSecrets(homeData))}`);
         }
         if (typeof this.roborockAPI.recordRoborockDiagnosticMessage === "function") {
             this.roborockAPI.recordRoborockDiagnosticMessage(id, homeData);
@@ -439,9 +442,19 @@ class RoborockPlatform {
         return (this.platformConfig.enableHomeKitActionSwitches === true &&
             this.platformConfig.enableHomeKitScheduleSwitches === true);
     }
+    /**
+     * Routine switches ride on the same coordinator and the same master
+     * setting as the schedules: one momentary switch per Routine in the app,
+     * grouped in a "<robot> Routines" accessory (#22).
+     */
+    shouldExposeHapRoutines() {
+        return (this.platformConfig.enableHomeKitActionSwitches === true &&
+            this.platformConfig.enableHomeKitRoutineSwitches === true);
+    }
     removeHapScheduleAccessories() {
-        const scheduleAccessories = this.accessories.filter((accessory) => (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory));
+        const scheduleAccessories = this.accessories.filter((accessory) => (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory) || (0, hap_schedule_accessory_1.isHapRoutineAccessory)(accessory));
         for (const schedule of this.hapScheduleAccessories.values()) {
+            schedule.removeRoutineServices();
             schedule.removeScheduleServices();
         }
         this.hapScheduleAccessories.clear();
@@ -455,9 +468,61 @@ class RoborockPlatform {
             this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, scheduleAccessories);
         }
     }
+    /** Unregister every "<robot> Routines" accessory and drop its switches. */
+    removeHapRoutineAccessories() {
+        for (const schedule of this.hapScheduleAccessories.values()) {
+            schedule.removeRoutineServices();
+        }
+        const routineAccessories = this.accessories.filter((accessory) => (0, hap_schedule_accessory_1.isHapRoutineAccessory)(accessory));
+        for (const accessory of routineAccessories) {
+            const index = this.accessories.indexOf(accessory);
+            if (index >= 0) {
+                this.accessories.splice(index, 1);
+            }
+        }
+        if (routineAccessories.length > 0) {
+            this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, routineAccessories);
+        }
+    }
+    routineAccessoryUuid(duid) {
+        return this.api.hap.uuid.generate(`hap:roborock:routines:${duid}`);
+    }
+    /**
+     * Hand a robot's coordinator its "<robot> Routines" accessory — the cached
+     * one when Homebridge restored it, a fresh unregistered one otherwise — and
+     * let the coordinator say, after every scene reading, whether the accessory
+     * has switches. It is registered the first time it has one and unregistered
+     * when a trustworthy reading says the account has none, so an empty
+     * accessory never shows up as a tile with nothing on it.
+     */
+    attachRoutineAccessory(duid, vacuumName, schedule) {
+        const uuid = this.routineAccessoryUuid(duid);
+        let accessory = this.accessories.find((cached) => cached.UUID === uuid && (0, hap_schedule_accessory_1.isHapRoutineAccessory)(cached));
+        if (!accessory) {
+            accessory = new this.api.platformAccessory(`${vacuumName} Routines`, uuid);
+        }
+        const routineAccessory = accessory;
+        schedule.attachRoutineAccessory(routineAccessory, (count) => {
+            const registered = this.accessories.includes(routineAccessory);
+            if (count > 0 && !registered) {
+                this.accessories.push(routineAccessory);
+                this.log.info(`Adding HAP routine accessory '${routineAccessory.displayName}' with ${count} switch${count === 1 ? "" : "es"}.`);
+                this.api.registerPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [routineAccessory]);
+            }
+            else if (count === 0 && registered) {
+                const index = this.accessories.indexOf(routineAccessory);
+                if (index >= 0) {
+                    this.accessories.splice(index, 1);
+                }
+                this.log.info(`Removing HAP routine accessory '${routineAccessory.displayName}': the account has no Routines for this robot.`);
+                this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [routineAccessory]);
+            }
+        });
+    }
     syncHapSchedules(devices) {
-        var _a, _b;
+        var _a;
         const exposeSchedules = this.shouldExposeHapSchedules();
+        const exposeRoutines = this.shouldExposeHapRoutines();
         // The master HAP-switch setting owns the entire HAP switch surface.
         // If it is disabled, schedule accessories must be completely removed
         // rather than merely having their dynamic services disposed.
@@ -465,13 +530,19 @@ class RoborockPlatform {
             this.removeHapScheduleAccessories();
             return;
         }
+        if (!exposeRoutines) {
+            this.removeHapRoutineAccessories();
+        }
         // The schedules sub-setting only controls schedule exposure. Keep the
         // coordinator cached so schedules can be rebuilt when re-enabled.
         if (!exposeSchedules) {
             for (const schedule of this.hapScheduleAccessories.values()) {
+                schedule.setScheduleExposure(false);
                 schedule.removeScheduleServices();
             }
-            return;
+            if (!exposeRoutines) {
+                return;
+            }
         }
         if (!this.schedulePolicyLogged) {
             this.schedulePolicyLogged = true;
@@ -497,7 +568,8 @@ class RoborockPlatform {
         // Remove schedule groups only when we have a trustworthy non-empty
         // account result and the robot genuinely disappeared.
         const obsolete = this.accessories.filter((accessory) => {
-            if (!(0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory)) {
+            if (!(0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory) &&
+                !(0, hap_schedule_accessory_1.isHapRoutineAccessory)(accessory)) {
                 return false;
             }
             const context = accessory.context;
@@ -507,7 +579,9 @@ class RoborockPlatform {
             for (const accessory of obsolete) {
                 const duid = accessory.context.duid;
                 if (duid) {
-                    (_b = this.hapScheduleAccessories.get(duid)) === null || _b === void 0 ? void 0 : _b.removeScheduleServices();
+                    const schedule = this.hapScheduleAccessories.get(duid);
+                    schedule === null || schedule === void 0 ? void 0 : schedule.removeRoutineServices();
+                    schedule === null || schedule === void 0 ? void 0 : schedule.removeScheduleServices();
                     this.hapScheduleAccessories.delete(duid);
                 }
                 const index = this.accessories.indexOf(accessory);
@@ -520,6 +594,10 @@ class RoborockPlatform {
         for (const [duid, target] of wanted) {
             let schedule = this.hapScheduleAccessories.get(duid);
             if (schedule) {
+                schedule.setScheduleExposure(exposeSchedules);
+                if (exposeRoutines) {
+                    this.attachRoutineAccessory(duid, target.vacuumName, schedule);
+                }
                 void schedule
                     .initialize(target.vacuumName)
                     .then((result) => {
@@ -555,7 +633,11 @@ class RoborockPlatform {
                 accessory = new this.api.platformAccessory(`${target.vacuumName} schedules`, uuid);
             }
             schedule = new hap_schedule_accessory_1.default(this, accessory, duid, this.scheduleAccountCoordinator);
+            schedule.setScheduleExposure(exposeSchedules);
             this.hapScheduleAccessories.set(duid, schedule);
+            if (exposeRoutines) {
+                this.attachRoutineAccessory(duid, target.vacuumName, schedule);
+            }
             void schedule
                 .initialize(target.vacuumName)
                 .then((result) => {
@@ -563,13 +645,15 @@ class RoborockPlatform {
                     this.log.info(`Schedule startup restoration attempt for ${target.vacuumName}: refresh failed; invoking restoreScheduleHandlersFromAccessory().`);
                     const restored = schedule.restoreScheduleHandlersFromAccessory();
                     this.log.info(`Schedule startup restoration result for ${target.vacuumName}: restored=${restored}.`);
-                    if (!restored) {
+                    if (!restored && !this.coordinatorKeepsRoutines(schedule)) {
                         this.hapScheduleAccessories.delete(duid);
                     }
                     return;
                 }
                 if (!result.hasSchedules) {
-                    this.hapScheduleAccessories.delete(duid);
+                    if (!this.coordinatorKeepsRoutines(schedule)) {
+                        this.hapScheduleAccessories.delete(duid);
+                    }
                     return;
                 }
                 if (!this.accessories.includes(accessory)) {
@@ -588,10 +672,20 @@ class RoborockPlatform {
             });
         }
     }
+    /**
+     * A coordinator whose schedule half came back empty still has work when it
+     * drives a Routines accessory, so it must stay in the map — dropping it
+     * would orphan the routine switches' handlers.
+     */
+    coordinatorKeepsRoutines(schedule) {
+        return this.shouldExposeHapRoutines() && schedule.routineCount > 0;
+    }
     removeHapScheduleAccessory(duid, accessory) {
-        var _a;
-        (_a = this.hapScheduleAccessories.get(duid)) === null || _a === void 0 ? void 0 : _a.removeScheduleServices();
-        this.hapScheduleAccessories.delete(duid);
+        const schedule = this.hapScheduleAccessories.get(duid);
+        schedule === null || schedule === void 0 ? void 0 : schedule.removeScheduleServices();
+        if (!schedule || !this.coordinatorKeepsRoutines(schedule)) {
+            this.hapScheduleAccessories.delete(duid);
+        }
         if (!accessory) {
             return;
         }
@@ -646,7 +740,8 @@ class RoborockPlatform {
     isOwnHapAccessory(accessory) {
         return ((0, action_switch_accessory_1.isActionSwitchAccessory)(accessory) ||
             (0, state_sensor_accessory_1.isStateSensorAccessory)(accessory) ||
-            (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory));
+            (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory) ||
+            (0, hap_schedule_accessory_1.isHapRoutineAccessory)(accessory));
     }
     /**
      * Which action switches the user has asked for.
