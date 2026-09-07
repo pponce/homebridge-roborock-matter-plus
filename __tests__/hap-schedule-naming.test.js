@@ -138,6 +138,38 @@ function switchService(accessory, id) {
 }
 
 describe("HAP schedule names and stable group identity", () => {
+  test("a schedule switch presents the requested state while verification is pending", async () => {
+    const platform = makePlatform();
+    let finishWrite;
+    const pendingWrite = new Promise((resolve) => {
+      finishWrite = resolve;
+    });
+    platform.roborockAPI = {
+      getServerTimers: jest.fn(),
+      vacuums: {
+        "device-1": {
+          command: jest.fn(() => pendingWrite),
+        },
+      },
+    };
+
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+    coordinator.sync([schedule("timer-1", true)]);
+    const characteristic = switchService(
+      accessory,
+      "timer-1"
+    ).getCharacteristic(Characteristic.On);
+
+    const setting = characteristic.setHandler(false);
+
+    expect(characteristic.value).toBe(false);
+
+    coordinator.stopRuntime();
+    finishWrite("ok");
+    await setting;
+  });
+
   test("multiple schedules cannot overwrite their shared group identity", () => {
     const platform = makePlatform();
     const accessory = new FakeAccessory("Test Vacuum Schedules");

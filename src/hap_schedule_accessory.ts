@@ -2000,6 +2000,12 @@ class RoborockHapScheduleSwitchAccessory {
     }
 
     try {
+      // Report the requested value immediately instead of leaving Apple Home
+      // displaying the old position throughout the batch window, propagation
+      // delay, and authoritative read-back. The onSet promise still remains
+      // pending until verification completes, and the catch path below rolls
+      // this optimistic presentation back if Roborock does not confirm it.
+      this.updateService(enabled);
       this.platform.log.info(
         `Schedule command: queueing ${enabled ? "enable" : "disable"} for ${this.duid}/${this.scheduleId}.`
       );
