@@ -264,7 +264,7 @@ describe("HomeKit schedule settings contract", () => {
       "await this.refreshDetailed(primaryStartedAt, true);"
     );
     expect(scheduleSource).toContain(
-      "await this.refreshDetailed(fallbackStartedAt, true);"
+      "const finalVerification = await this.refreshDetailed("
     );
   });
 
@@ -456,9 +456,9 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).toContain(
       "await this.refreshDetailed(primaryStartedAt, true);"
     );
-    expect(scheduleSource).toContain("const unconfirmed = primarySent.filter(");
+    expect(scheduleSource).toContain("const unconfirmed = candidates.filter(");
     expect(scheduleSource).toContain(
-      "await this.refreshDetailed(fallbackStartedAt, true);"
+      "const finalVerification = await this.refreshDetailed("
     );
     expect(scheduleSource).toContain("this.cachedScheduleMatches(request)");
   });

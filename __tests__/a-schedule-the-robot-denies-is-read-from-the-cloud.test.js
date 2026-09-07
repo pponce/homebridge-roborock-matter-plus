@@ -457,8 +457,11 @@ describe("switching a cloud schedule from HomeKit", () => {
       Characteristic.On
     );
     const write = on.setHandler(false);
+    const rejected = expect(write).rejects.toThrow(
+      /does not offer PUT on user\/scene\/\{id\}\/param/
+    );
     await flushTimers(5000);
-    await write;
+    await rejected;
 
     expect(on.value).toBe(true);
     expect(platform.log.warn).toHaveBeenCalledWith(
@@ -477,8 +480,9 @@ describe("switching a cloud schedule from HomeKit", () => {
       Characteristic.On
     );
     const write = on.setHandler(false);
+    const rejected = expect(write).rejects.toThrow(/no longer exists/);
     await flushTimers(5000);
-    await write;
+    await rejected;
 
     expect(cloud.updateCloudSceneParam).not.toHaveBeenCalled();
     expect(platform.log.warn).toHaveBeenCalledWith(
