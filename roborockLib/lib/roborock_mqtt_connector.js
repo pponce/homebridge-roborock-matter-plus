@@ -10,6 +10,10 @@ const {
   describeReplyRefusal,
   createRefusalError,
 } = require("./describeReplyRefusal");
+const {
+  MqttSessionReplacedError,
+  MqttReadinessError,
+} = require("./mqttSessionErrors");
 
 const PHOTO_MAGIC = "ROBOROCK";
 const PHOTO_HEADER_MIN_LENGTH = 9;
@@ -34,12 +38,6 @@ const photoParser = new Parser()
     stripNull: true,
   })
   .uint8("id");
-
-let mqttUser;
-let mqttPassword;
-let client;
-let endpoint;
-let rriot;
 
 let photoGzipChunks = [];
 let photoChunkID = 0;
@@ -112,8 +110,34 @@ function parseProtocol301Header(payload) {
 class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
-
+    this.client = null;
+    this.rriot = null;
+    this.endpoint = null;
+    this.mqttUser = null;
+    this.mqttPassword = null;
     this.connected = false;
+    this.socketConnected = false;
+    this.subscriptionReady = false;
+    this.sessionState = "disconnected";
+    this.sessionGeneration = 0;
+    this.readyAt = null;
+    this.lastRawMqttMessageAt = null;
+    this.lastAttributedCloudMessageAt = null;
+    this.lastDecodedCloudMessageAt = null;
+    this.lastCorrelatedCloudReplyAt = null;
+    this.lastDecodedCloudMessageAtByDuid = new Map();
+    this.lastCorrelatedCloudReplyAtByDuid = new Map();
+    this.subscriptionTimeoutMs = 10000;
+    this.shuttingDown = false;
+    this.handlersInstalledFor = null;
+    this.readinessWaiters = new Set();
+    this.reconnectInProgress = null;
+    this.lastReconnectAttemptAt = null;
+    this.lastReconnectSucceededAt = null;
+    this.lastReconnectFailureAt = null;
+    this.consecutiveReconnectFailures = 0;
+    this.nextReconnectAllowedAt = 0;
+    this.reconnectCooldownMs = 30000;
     this.initialConnectTimeout = null;
 
     // NOTE: this class previously generated its own RSA-2048 keypair here,
@@ -123,20 +147,44 @@ class roborock_mqtt_connector {
   }
 
   async initUser(userdata) {
-    rriot = userdata.rriot;
+    this.rriot = userdata.rriot;
 
-    endpoint = roborockCrypto
-      .md5bin(rriot.k)
+    this.endpoint = roborockCrypto
+      .md5bin(this.rriot.k)
       .subarray(8, 14)
       .toString("base64"); // Could be a random but rather static string. The app generates it on first run.
-    mqttUser = roborockCrypto.md5hex(rriot.u + ":" + rriot.k).substring(2, 10);
-    mqttPassword = roborockCrypto.md5hex(rriot.s + ":" + rriot.k).substring(16);
-    client = mqtt.connect(rriot.r.m, {
-      clientId: mqttUser,
-      username: mqttUser,
-      password: mqttPassword,
+    this.mqttUser = roborockCrypto
+      .md5hex(this.rriot.u + ":" + this.rriot.k)
+      .substring(2, 10);
+    this.mqttPassword = roborockCrypto
+      .md5hex(this.rriot.s + ":" + this.rriot.k)
+      .substring(16);
+    this.createClient();
+  }
+
+  createClient() {
+    if (this.shuttingDown) {
+      throw new MqttReadinessError(
+        "Cannot create an MQTT session during shutdown.",
+        "MQTT_SHUTTING_DOWN"
+      );
+    }
+    this.sessionGeneration += 1;
+    this.socketConnected = false;
+    this.subscriptionReady = false;
+    this.connected = false;
+    this.readyAt = null;
+    this.transitionSessionState("connecting", "client-created");
+    const candidate = mqtt.connect(this.rriot.r.m, {
+      clientId: this.mqttUser,
+      username: this.mqttUser,
+      password: this.mqttPassword,
       keepalive: 30,
     });
+    this.client = candidate;
+    this.handlersInstalledFor = null;
+    this.installClientHandlers(candidate, this.sessionGeneration);
+    return candidate;
   }
 
   async initMQTT_Subscribe() {
@@ -162,68 +210,146 @@ class roborock_mqtt_connector {
       this.initialConnectTimeout.unref();
     }
 
-    await client.on("connect", (result) => {
-      if (typeof result != "undefined") {
-        client.subscribe(`rr/m/o/${rriot.u}/${mqttUser}/#`, (err, granted) => {
-          if (err) {
-            this.logConnectionIssue(
-              `Failed to subscribe to the Roborock MQTT server: ${err} (granted: ${JSON.stringify(granted)}).`
-            );
-          }
-        });
-        this.clearInitialConnectTimeout();
+    this.installClientHandlers(this.client, this.sessionGeneration);
+  }
 
-        this.connected = true;
-        if (this._connectionIssueActive) {
-          this._connectionIssueActive = false;
-          this._connectionIssueLog?.clear();
-          this.adapter.log.info(
-            `Roborock MQTT connection recovered after the reported outage.`
-          );
-        }
-      }
+  isCurrentSession(candidate, generation) {
+    return (
+      !this.shuttingDown &&
+      candidate === this.client &&
+      generation === this.sessionGeneration
+    );
+  }
+
+  transitionSessionState(nextState, reason) {
+    if (this.sessionState !== nextState) {
+      this.adapter?.log?.debug?.(
+        `MQTT generation ${this.sessionGeneration} state ${this.sessionState} -> ${nextState}; reason=${reason}.`
+      );
+    }
+    this.sessionState = nextState;
+  }
+
+  installClientHandlers(candidate, generation) {
+    if (!candidate || this.handlersInstalledFor === candidate) {
+      return;
+    }
+    this.handlersInstalledFor = candidate;
+
+    candidate.on("connect", (result) => {
+      if (!this.isCurrentSession(candidate, generation)) return;
+      this.socketConnected = true;
+      this.subscriptionReady = false;
+      this.connected = false;
+      this.transitionSessionState("subscribing", "socket-connected");
+      this.clearInitialConnectTimeout();
+      void this.subscribeForReplies(candidate, generation);
       this.adapter.log.debug(
-        `MQTT connection connected ${JSON.stringify(result)}.`
+        `MQTT generation ${generation} socket connected ${JSON.stringify(result)}.`
       );
     });
 
-    // Connection-state events are account-level transport telemetry, not
-    // per-robot command failures: log them as clear, throttled warnings
-    // instead of routing them through catchError (which used to produce the
-    // misleading `Failed to execute client.on("error") on robot undefined`
-    // spam twice per reconnect attempt during network outages).
-    await client.on("error", (error) => {
-      this.connected = false;
+    candidate.on("message", (topic, message) => {
+      if (!this.isCurrentSession(candidate, generation)) return;
+      this.handleMessage(topic, message);
+    });
+
+    candidate.on("error", (error) => {
+      if (!this.isCurrentSession(candidate, generation)) return;
+      this.markNotReady("error");
       this.logConnectionIssue(
         `Roborock MQTT connection error: ${error?.message || error}. The client keeps reconnecting automatically.`
       );
     });
-
-    await client.on("close", () => {
-      if (this.connected) {
+    candidate.on("close", () => {
+      if (!this.isCurrentSession(candidate, generation)) return;
+      if (this.connected)
         this.adapter.log.info(`MQTT connection closed; reconnecting.`);
-      }
-      this.connected = false;
+      this.markNotReady("close");
     });
-
-    await client.on("reconnect", () => {
-      client.subscribe(`rr/m/o/${rriot.u}/${mqttUser}/#`, (err, granted) => {
-        if (err) {
-          this.logConnectionIssue(
-            `Failed to subscribe to the Roborock MQTT server after reconnect: ${err} (granted: ${JSON.stringify(granted)}).`
-          );
-        }
-      });
-      this.clearInitialConnectTimeout();
-      this.adapter.log.debug(`MQTT connection reconnect attempt.`);
-    });
-
-    await client.on("offline", () => {
-      this.connected = false;
+    candidate.on("offline", () => {
+      if (!this.isCurrentSession(candidate, generation)) return;
+      this.markNotReady("offline");
       this.logConnectionIssue(
         `Roborock MQTT connection is offline. The client keeps reconnecting automatically.`
       );
     });
+    candidate.on("reconnect", () => {
+      if (!this.isCurrentSession(candidate, generation)) return;
+      this.markNotReady("reconnect");
+      this.clearInitialConnectTimeout();
+      this.adapter.log.debug(
+        `MQTT generation ${generation} reconnect attempt.`
+      );
+    });
+  }
+
+  markNotReady(reason) {
+    this.connected = false;
+    this.socketConnected = false;
+    this.subscriptionReady = false;
+    this.readyAt = null;
+    this.transitionSessionState("disconnected", reason);
+  }
+
+  async subscribeForReplies(candidate, generation) {
+    const topic = `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`;
+    let timer;
+    try {
+      const granted = await Promise.race([
+        new Promise((resolve, reject) => {
+          candidate.subscribe(topic, (error, grants) =>
+            error ? reject(error) : resolve(grants)
+          );
+        }),
+        new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error("subscription acknowledgement timed out")),
+            this.subscriptionTimeoutMs
+          );
+          timer.unref?.();
+        }),
+      ]);
+      if (!this.isCurrentSession(candidate, generation)) return;
+      const accepted =
+        Array.isArray(granted) &&
+        granted.some(
+          (grant) => grant && grant.topic === topic && grant.qos !== 128
+        );
+      if (!accepted)
+        throw new Error("broker did not grant the reply subscription");
+      this.subscriptionReady = true;
+      this.connected = true;
+      this.readyAt = Date.now();
+      this.transitionSessionState("ready", "subscription-acknowledged");
+      this.resolveReadinessWaiters(generation);
+      if (this._connectionIssueActive) {
+        this._connectionIssueActive = false;
+        this._connectionIssueLog?.clear();
+        this.adapter.log.info(
+          `Roborock MQTT connection recovered after the reported outage.`
+        );
+      }
+      this.adapter.log.debug(
+        `MQTT generation ${generation} subscription acknowledged.`
+      );
+    } catch (error) {
+      if (!this.isCurrentSession(candidate, generation)) return;
+      this.subscriptionReady = false;
+      this.connected = false;
+      this.transitionSessionState("disconnected", "subscription-failed");
+      this.logConnectionIssue(
+        `Failed to establish the Roborock MQTT reply subscription: ${error?.message || error}.`
+      );
+      this.rejectReadinessWaiters(
+        new MqttReadinessError(
+          `MQTT generation ${generation} could not establish reply readiness: ${error?.message || error}`,
+          "MQTT_SUBSCRIPTION_FAILED"
+        )
+      );
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   /**
@@ -308,316 +434,651 @@ class roborock_mqtt_connector {
 
   async initMQTT_Message() {
     this.adapter.log.debug(`MQTT initialized.`);
+    this.installClientHandlers(this.client, this.sessionGeneration);
+  }
 
-    client.on("message", (topic, message) => {
-      try {
-        const duid = this.resolveDuidFromTopic(topic);
-        if (!duid) {
-          // Counted, not just logged: this is the one inbound path that drops
-          // a frame silently as far as a user is concerned (decode failures
-          // log at error, a missing localKey warns once). Without a count, a
-          // cloud timeout cannot tell a robot that never answers from one
-          // whose answers we fail to attribute — see #14.
-          if (typeof this.adapter.noteUnattributedCloudMessage === "function") {
-            this.adapter.noteUnattributedCloudMessage(topic);
+  handleMessage(topic, message) {
+    this.lastRawMqttMessageAt = Date.now();
+    try {
+      const duid = this.resolveDuidFromTopic(topic);
+      if (!duid) {
+        // Counted, not just logged: this is the one inbound path that drops
+        // a frame silently as far as a user is concerned (decode failures
+        // log at error, a missing localKey warns once). Without a count, a
+        // cloud timeout cannot tell a robot that never answers from one
+        // whose answers we fail to attribute — see #14.
+        if (typeof this.adapter.noteUnattributedCloudMessage === "function") {
+          this.adapter.noteUnattributedCloudMessage(topic);
+        }
+        this.adapter.log.debug(
+          `Skipping MQTT message with unmatched topic '${topic}'.`
+        );
+        return;
+      }
+      this.lastAttributedCloudMessageAt = Date.now();
+
+      const data = this.adapter.message._decodeMsg(message, duid);
+      if (!data) {
+        return;
+      }
+      this.lastDecodedCloudMessageAt = Date.now();
+      this.lastDecodedCloudMessageAtByDuid.set(
+        duid,
+        this.lastDecodedCloudMessageAt
+      );
+
+      // Counted here and nowhere else: past the topic match AND past
+      // decryption, so the count means the link delivered something real
+      // from this robot. A cloud timeout reads it to tell "nothing came
+      // back" from "something came back that we could not match" — two
+      // causes that a bare timeout leaves indistinguishable (#14).
+      if (typeof this.adapter.noteCloudMessageReceived === "function") {
+        this.adapter.noteCloudMessageReceived(duid);
+      }
+      // this.adapter.log.debug(`MESSAGE RECEIVED for duid ${duid} with key: ${this.adapter.localKeys.get(duid)} data: ${JSON.stringify(data)} raw: ${JSON.stringify(mqttMessageParser.parse(message))} message: ${message}`);
+      // this.adapter.log.debug(`MESSAGE RECEIVED for duid ${duid} with key: ${this.adapter.localKeys.get(duid)} data: ${JSON.stringify(data.toString("hex"))} message: ${message}`);
+      // this.adapter.log.debug(`MESSAGE RECEIVED for duid ${duid} with key: ${this.adapter.localKeys.get(duid)} data: ${JSON.stringify(data)}`);
+
+      // this.adapter.log.debug("Protocol: " + data.protocol);
+      if (data.protocol == 102) {
+        const parsedPayload = JSON.parse(data.payload);
+        let dps;
+        if (typeof parsedPayload.dps["102"] != "undefined") {
+          dps = JSON.parse(parsedPayload.dps["102"]);
+        } else if (typeof parsedPayload.dps["10001"] != "undefined") {
+          if (typeof parsedPayload.dps["10001"] == "string") {
+            dps = JSON.parse(parsedPayload.dps["10001"]);
+          } else {
+            dps = parsedPayload.dps["10001"];
           }
-          this.adapter.log.debug(
-            `Skipping MQTT message with unmatched topic '${topic}'.`
-          );
+        } else {
+          dps = parsedPayload.dps;
+        }
+
+        if (resolveB01PendingResponse(this.adapter, duid, dps)) {
           return;
         }
 
-        const data = this.adapter.message._decodeMsg(message, duid);
-        if (!data) {
-          return;
-        }
-
-        // Counted here and nowhere else: past the topic match AND past
-        // decryption, so the count means the link delivered something real
-        // from this robot. A cloud timeout reads it to tell "nothing came
-        // back" from "something came back that we could not match" — two
-        // causes that a bare timeout leaves indistinguishable (#14).
-        if (typeof this.adapter.noteCloudMessageReceived === "function") {
-          this.adapter.noteCloudMessageReceived(duid);
-        }
-        // this.adapter.log.debug(`MESSAGE RECEIVED for duid ${duid} with key: ${this.adapter.localKeys.get(duid)} data: ${JSON.stringify(data)} raw: ${JSON.stringify(mqttMessageParser.parse(message))} message: ${message}`);
-        // this.adapter.log.debug(`MESSAGE RECEIVED for duid ${duid} with key: ${this.adapter.localKeys.get(duid)} data: ${JSON.stringify(data.toString("hex"))} message: ${message}`);
-        // this.adapter.log.debug(`MESSAGE RECEIVED for duid ${duid} with key: ${this.adapter.localKeys.get(duid)} data: ${JSON.stringify(data)}`);
-
-        // this.adapter.log.debug("Protocol: " + data.protocol);
-        if (data.protocol == 102) {
-          const parsedPayload = JSON.parse(data.payload);
-          let dps;
-          if (typeof parsedPayload.dps["102"] != "undefined") {
-            dps = JSON.parse(parsedPayload.dps["102"]);
-          } else if (typeof parsedPayload.dps["10001"] != "undefined") {
-            if (typeof parsedPayload.dps["10001"] == "string") {
-              dps = JSON.parse(parsedPayload.dps["10001"]);
-            } else {
-              dps = parsedPayload.dps["10001"];
-            }
-          } else {
-            dps = parsedPayload.dps;
-          }
-
-          if (resolveB01PendingResponse(this.adapter, duid, dps)) {
-            return;
-          }
-
-          if (dps.id !== undefined) {
-            // Runs for every cloud message; only pay the stringify cost
-            // when debug logging is actually enabled.
-            if (this.adapter.config.debug) {
-              // A reply with no `result` used to print "Result: undefined",
-              // which reads like a robot that said nothing. It said something;
-              // it just did not say it in `result`. Print the reply itself so
-              // the refusal is on the record even when nobody is waiting for
-              // this id any more.
-              this.adapter.log.debug(
-                typeof dps.result === "undefined"
-                  ? `Cloud message with protocol 102 and id ${dps.id} received. No result; reply was ${JSON.stringify(dps)}`
-                  : `Cloud message with protocol 102 and id ${dps.id} received. Result: ${JSON.stringify(dps.result)}`
-              );
-            }
-            if (typeof dps.result !== "undefined") {
-              this.adapter.setStateAsync("CloudMessage", {
-                duid,
-                payload: dps.result,
-              });
-            }
-          } else {
+        if (dps.id !== undefined) {
+          // Runs for every cloud message; only pay the stringify cost
+          // when debug logging is actually enabled.
+          if (this.adapter.config.debug) {
+            // A reply with no `result` used to print "Result: undefined",
+            // which reads like a robot that said nothing. It said something;
+            // it just did not say it in `result`. Print the reply itself so
+            // the refusal is on the record even when nobody is waiting for
+            // this id any more.
             this.adapter.log.debug(
-              `Cloud message with protocol 102 received. Result: ${data.payload}`
-            );
-
-            if (this.adapter.deviceNotify !== undefined) {
-              this.adapter.deviceNotify("CloudMessage", {
-                duid,
-                payload: JSON.parse(data.payload),
-              });
-            }
-          }
-
-          // Secure requests (get_map_v1 and friends) answer protocol 102 with
-          // a bare acknowledgement and deliver the real payload on protocol
-          // 301, so those must stay pending. Everything else is resolved here.
-          //
-          // This used to be `if (dps.result != "ok")`, which is always true:
-          // the wire format is the ARRAY ["ok"], and `["ok"] != "ok"` is false
-          // only after ToPrimitive — so the guard never fired for the case it
-          // was written for, and instead swallowed the completion of every
-          // ordinary cloud command that answers ["ok"] (app_start, app_stop,
-          // app_pause, app_charge, set_custom_mode, app_segment_clean, ...).
-          // Those requests then sat until the 10 s timeout and failed in Apple
-          // Home even though the robot had already carried them out.
-          const pending = this.adapter.pendingRequests.get(dps.id);
-          if (shouldResolveOn102(pending, dps.result)) {
-            this.adapter.clearTimeout(pending.timeout);
-            this.adapter.pendingRequests.delete(dps.id);
-            // A refusal is a failed request, not an empty one. Resolving it
-            // with `undefined` is indistinguishable from a real empty answer
-            // to every caller upstream — see describeReplyRefusal.
-            const refusal = describeReplyRefusal(dps);
-            if (refusal) {
-              pending.reject(
-                createRefusalError(
-                  `The robot refused ${pending.method || "the request"} (cloud id ${dps.id}): ${refusal}`,
-                  dps
-                )
-              );
-            } else {
-              pending.resolve(dps.result);
-            }
-          }
-          // protocol 300 seems to be for get_photo 0 only. get_photo 0 is for large images. 1 is for small images.
-        } else if (data.protocol == 300) {
-          const photoData = parsePhotoPayload(data.payload);
-          if (photoData) {
-            if (this.adapter.pendingRequests.has(photoData.id)) {
-              this.adapter.log.debug(`First photo gzip chunk detected!`);
-
-              photoGzipChunks.push(data.payload.slice(56));
-              photoChunkID = photoData.id;
-            }
-          } else {
-            this.adapter.log.debug(
-              `Skipping protocol 300 MQTT message for ${duid} because the payload is not a complete Roborock photo header.`
+              typeof dps.result === "undefined"
+                ? `Cloud message with protocol 102 and id ${dps.id} received. No result; reply was ${JSON.stringify(dps)}`
+                : `Cloud message with protocol 102 and id ${dps.id} received. Result: ${JSON.stringify(dps.result)}`
             );
           }
-        } else if (data.protocol == 301) {
-          // B01/Q7 map upload responses arrive on protocol 301 as an opaque
-          // base64 blob. Resolve the per-device pending map request first;
-          // classic v1 photo/map chunk handling continues below otherwise.
-          const pendingMap = this.adapter.pendingB01MapRequests?.get(duid);
-          if (pendingMap) {
-            this.adapter.clearTimeout(pendingMap.timeout);
-            this.adapter.pendingB01MapRequests.delete(duid);
-            pendingMap.resolve(data.payload);
-            return;
-          }
-
-          // `photoGzipChunks != []` compared against a fresh array literal
-          // and was therefore always true, so the guard it was written to be
-          // never guarded anything.
-          if (
-            data.seq == 2 &&
-            photoGzipChunks.length !== 0 &&
-            photoChunkID != 0
-          ) {
-            this.adapter.log.debug(`Second photo gzip chunk detected!`);
-            photoGzipChunks.push(data.payload);
-
-            if (this.adapter.pendingRequests.has(photoChunkID)) {
-              const { resolve, timeout } =
-                this.adapter.pendingRequests.get(photoChunkID);
-              this.adapter.clearTimeout(timeout);
-              this.adapter.pendingRequests.delete(photoChunkID);
-
-              const finalPhotoGzip = Buffer.concat(photoGzipChunks);
-
-              photoGzipChunks = [];
-              photoChunkID = 0;
-
-              resolve(finalPhotoGzip);
-            }
-          } else {
-            const photoData = parsePhotoPayload(data.payload);
-            if (photoData) {
-              this.adapter.log.debug(
-                `Cloud message with protocol 301 and photo id ${photoData.id} received.`
-              );
-
-              if (this.adapter.pendingRequests.has(photoData.id)) {
-                const { resolve, timeout } = this.adapter.pendingRequests.get(
-                  photoData.id
-                );
-                this.adapter.clearTimeout(timeout);
-                this.adapter.pendingRequests.delete(photoData.id);
-                this.adapter.log.debug(
-                  `Cloud message with protocol 301 and photo id ${photoData.id} received.`
-                );
-                resolve(data.payload.slice(56));
-              }
-            } else {
-              const data2 = parseProtocol301Header(data.payload);
-              if (!data2) {
-                this.adapter.log.debug(
-                  `Skipping protocol 301 MQTT message for ${duid} because the payload is shorter than ${PROTOCOL_301_HEADER_LENGTH} bytes.`
-                );
-                return;
-              }
-
-              if (!endpoint.startsWith(data2.endpoint)) {
-                return;
-              }
-
-              const iv = Buffer.alloc(16, 0);
-              const decipher = crypto.createDecipheriv(
-                "aes-128-cbc",
-                this.adapter.nonce,
-                iv
-              );
-              let decrypted = Buffer.concat([
-                decipher.update(data.payload.subarray(24)),
-                decipher.final(),
-              ]);
-              decrypted = zlib.gunzipSync(decrypted);
-              // this.adapter.log.debug("raw 301: " + decrypted);
-
-              if (this.adapter.pendingRequests.has(data2.id)) {
-                const { resolve, timeout } = this.adapter.pendingRequests.get(
-                  data2.id
-                );
-                this.adapter.clearTimeout(timeout);
-                this.adapter.pendingRequests.delete(data2.id);
-                // this.adapter.log.debug("protocol 301 OK check: " + JSON.stringify(decrypted));
-                this.adapter.log.debug(
-                  `Cloud message with protocol 301 and id ${data2.id} received.`
-                );
-                resolve(decrypted);
-              }
-            }
-          }
-        } else if (data.protocol == 500) {
-          // 500 is for general information
-          const dataString = data.payload.toString("utf8");
-          let parsedData;
-
-          try {
-            parsedData = JSON.parse(dataString);
-          } catch (error) {
-            // If parsing fails, the data might be corrupted or in an unexpected format
-            this.adapter.log.warn(
-              `Unable to parse message for ${describeDevice(this.adapter, duid)}. Error: ${error.message}. Data: ${dataString}`
-            );
-            return;
-          }
-
-          // Check if the device is online
-          if (parsedData.online == false) {
-            // A robot dropping off is the single most common thing users open
-            // issues about, and the old wording ("Couldn't process message")
-            // described a failure that did not happen — the message parsed
-            // fine, and what it said was "offline".
-            this.adapter.log.warn(
-              `${describeDevice(this.adapter, duid)} reports itself offline; commands will fail until it reconnects. Check that the robot is powered on and on Wi-Fi.`
-            );
-          } else if (parsedData.online == true) {
-            // The counterpart was commented out, so a robot that dropped and
-            // came back left the log asserting it was offline forever.
-            this.adapter.log.info(
-              `${describeDevice(this.adapter, duid)} is back online.`
-            );
-          } else if (
-            // Check for firmware update information
-            parsedData.mqttOtaData
-          ) {
-            const otaStatus = parsedData.mqttOtaData.mqttOtaStatus?.status;
-            const otaProgress =
-              parsedData.mqttOtaData.mqttOtaProgress?.progress;
-
-            if (otaStatus) {
-              this.adapter.log.info(
-                `${describeDevice(this.adapter, duid)} firmware update status: ${otaStatus}`
-              );
-            }
-
-            if (otaProgress !== undefined) {
-              this.adapter.log.info(
-                `${describeDevice(this.adapter, duid)} firmware update progress: ${otaProgress}%`
-              );
-            }
-          } else {
-            // Received an unrecognized message
-            this.adapter.log.warn(
-              `Received an unrecognized message for ${describeDevice(this.adapter, duid)}. Data: ${dataString}`
-            );
+          if (typeof dps.result !== "undefined") {
+            this.adapter.setStateAsync("CloudMessage", {
+              duid,
+              payload: dps.result,
+            });
           }
         } else {
           this.adapter.log.debug(
-            `Received message with unknown protocol ${data.protocol} data: ${JSON.stringify(data)}.`
+            `Cloud message with protocol 102 received. Result: ${data.payload}`
+          );
+
+          if (this.adapter.deviceNotify !== undefined) {
+            this.adapter.deviceNotify("CloudMessage", {
+              duid,
+              payload: JSON.parse(data.payload),
+            });
+          }
+        }
+
+        // Secure requests (get_map_v1 and friends) answer protocol 102 with
+        // a bare acknowledgement and deliver the real payload on protocol
+        // 301, so those must stay pending. Everything else is resolved here.
+        //
+        // This used to be `if (dps.result != "ok")`, which is always true:
+        // the wire format is the ARRAY ["ok"], and `["ok"] != "ok"` is false
+        // only after ToPrimitive — so the guard never fired for the case it
+        // was written for, and instead swallowed the completion of every
+        // ordinary cloud command that answers ["ok"] (app_start, app_stop,
+        // app_pause, app_charge, set_custom_mode, app_segment_clean, ...).
+        // Those requests then sat until the 10 s timeout and failed in Apple
+        // Home even though the robot had already carried them out.
+        const pending = this.adapter.pendingRequests.get(dps.id);
+        if (shouldResolveOn102(pending, dps.result)) {
+          this.adapter.clearTimeout(pending.timeout);
+          this.adapter.pendingRequests.delete(dps.id);
+          this.noteCorrelatedReply(duid);
+          // A refusal is a failed request, not an empty one. Resolving it
+          // with `undefined` is indistinguishable from a real empty answer
+          // to every caller upstream — see describeReplyRefusal.
+          const refusal = describeReplyRefusal(dps);
+          if (refusal) {
+            pending.reject(
+              createRefusalError(
+                `The robot refused ${pending.method || "the request"} (cloud id ${dps.id}): ${refusal}`,
+                dps
+              )
+            );
+          } else {
+            pending.resolve(dps.result);
+          }
+        }
+        // protocol 300 seems to be for get_photo 0 only. get_photo 0 is for large images. 1 is for small images.
+      } else if (data.protocol == 300) {
+        const photoData = parsePhotoPayload(data.payload);
+        if (photoData) {
+          if (this.adapter.pendingRequests.has(photoData.id)) {
+            this.adapter.log.debug(`First photo gzip chunk detected!`);
+
+            photoGzipChunks.push(data.payload.slice(56));
+            photoChunkID = photoData.id;
+          }
+        } else {
+          this.adapter.log.debug(
+            `Skipping protocol 300 MQTT message for ${duid} because the payload is not a complete Roborock photo header.`
           );
         }
-      } catch (error) {
-        this.adapter.log.error(
-          `client.on message failed for topic '${topic}': ${error.stack || error}`
+      } else if (data.protocol == 301) {
+        // B01/Q7 map upload responses arrive on protocol 301 as an opaque
+        // base64 blob. Resolve the per-device pending map request first;
+        // classic v1 photo/map chunk handling continues below otherwise.
+        const pendingMap = this.adapter.pendingB01MapRequests?.get(duid);
+        if (pendingMap) {
+          this.adapter.clearTimeout(pendingMap.timeout);
+          this.adapter.pendingB01MapRequests.delete(duid);
+          pendingMap.resolve(data.payload);
+          this.noteCorrelatedReply(duid);
+          return;
+        }
+
+        // `photoGzipChunks != []` compared against a fresh array literal
+        // and was therefore always true, so the guard it was written to be
+        // never guarded anything.
+        if (
+          data.seq == 2 &&
+          photoGzipChunks.length !== 0 &&
+          photoChunkID != 0
+        ) {
+          this.adapter.log.debug(`Second photo gzip chunk detected!`);
+          photoGzipChunks.push(data.payload);
+
+          if (this.adapter.pendingRequests.has(photoChunkID)) {
+            const { resolve, timeout } =
+              this.adapter.pendingRequests.get(photoChunkID);
+            this.adapter.clearTimeout(timeout);
+            this.adapter.pendingRequests.delete(photoChunkID);
+
+            const finalPhotoGzip = Buffer.concat(photoGzipChunks);
+
+            photoGzipChunks = [];
+            photoChunkID = 0;
+
+            resolve(finalPhotoGzip);
+            this.noteCorrelatedReply(duid);
+          }
+        } else {
+          const photoData = parsePhotoPayload(data.payload);
+          if (photoData) {
+            this.adapter.log.debug(
+              `Cloud message with protocol 301 and photo id ${photoData.id} received.`
+            );
+
+            if (this.adapter.pendingRequests.has(photoData.id)) {
+              const { resolve, timeout } = this.adapter.pendingRequests.get(
+                photoData.id
+              );
+              this.adapter.clearTimeout(timeout);
+              this.adapter.pendingRequests.delete(photoData.id);
+              this.adapter.log.debug(
+                `Cloud message with protocol 301 and photo id ${photoData.id} received.`
+              );
+              resolve(data.payload.slice(56));
+              this.noteCorrelatedReply(duid);
+            }
+          } else {
+            const data2 = parseProtocol301Header(data.payload);
+            if (!data2) {
+              this.adapter.log.debug(
+                `Skipping protocol 301 MQTT message for ${duid} because the payload is shorter than ${PROTOCOL_301_HEADER_LENGTH} bytes.`
+              );
+              return;
+            }
+
+            if (!this.endpoint.startsWith(data2.endpoint)) {
+              return;
+            }
+
+            const iv = Buffer.alloc(16, 0);
+            const decipher = crypto.createDecipheriv(
+              "aes-128-cbc",
+              this.adapter.nonce,
+              iv
+            );
+            let decrypted = Buffer.concat([
+              decipher.update(data.payload.subarray(24)),
+              decipher.final(),
+            ]);
+            decrypted = zlib.gunzipSync(decrypted);
+            // this.adapter.log.debug("raw 301: " + decrypted);
+
+            if (this.adapter.pendingRequests.has(data2.id)) {
+              const { resolve, timeout } = this.adapter.pendingRequests.get(
+                data2.id
+              );
+              this.adapter.clearTimeout(timeout);
+              this.adapter.pendingRequests.delete(data2.id);
+              // this.adapter.log.debug("protocol 301 OK check: " + JSON.stringify(decrypted));
+              this.adapter.log.debug(
+                `Cloud message with protocol 301 and id ${data2.id} received.`
+              );
+              resolve(decrypted);
+              this.noteCorrelatedReply(duid);
+            }
+          }
+        }
+      } else if (data.protocol == 500) {
+        // 500 is for general information
+        const dataString = data.payload.toString("utf8");
+        let parsedData;
+
+        try {
+          parsedData = JSON.parse(dataString);
+        } catch (error) {
+          // If parsing fails, the data might be corrupted or in an unexpected format
+          this.adapter.log.warn(
+            `Unable to parse message for ${describeDevice(this.adapter, duid)}. Error: ${error.message}. Data: ${dataString}`
+          );
+          return;
+        }
+
+        // Check if the device is online
+        if (parsedData.online == false) {
+          // A robot dropping off is the single most common thing users open
+          // issues about, and the old wording ("Couldn't process message")
+          // described a failure that did not happen — the message parsed
+          // fine, and what it said was "offline".
+          this.adapter.log.warn(
+            `${describeDevice(this.adapter, duid)} reports itself offline; commands will fail until it reconnects. Check that the robot is powered on and on Wi-Fi.`
+          );
+        } else if (parsedData.online == true) {
+          // The counterpart was commented out, so a robot that dropped and
+          // came back left the log asserting it was offline forever.
+          this.adapter.log.info(
+            `${describeDevice(this.adapter, duid)} is back online.`
+          );
+        } else if (
+          // Check for firmware update information
+          parsedData.mqttOtaData
+        ) {
+          const otaStatus = parsedData.mqttOtaData.mqttOtaStatus?.status;
+          const otaProgress = parsedData.mqttOtaData.mqttOtaProgress?.progress;
+
+          if (otaStatus) {
+            this.adapter.log.info(
+              `${describeDevice(this.adapter, duid)} firmware update status: ${otaStatus}`
+            );
+          }
+
+          if (otaProgress !== undefined) {
+            this.adapter.log.info(
+              `${describeDevice(this.adapter, duid)} firmware update progress: ${otaProgress}%`
+            );
+          }
+        } else {
+          // Received an unrecognized message
+          this.adapter.log.warn(
+            `Received an unrecognized message for ${describeDevice(this.adapter, duid)}. Data: ${dataString}`
+          );
+        }
+      } else {
+        this.adapter.log.debug(
+          `Received message with unknown protocol ${data.protocol} data: ${JSON.stringify(data)}.`
         );
       }
-    });
+    } catch (error) {
+      this.adapter.log.error(
+        `client.on message failed for topic '${topic}': ${error.stack || error}`
+      );
+    }
   }
 
   getEndpoint() {
-    return endpoint;
+    return this.endpoint;
+  }
+
+  noteCorrelatedReply(duid) {
+    this.lastCorrelatedCloudReplyAt = Date.now();
+    this.lastCorrelatedCloudReplyAtByDuid.set(
+      duid,
+      this.lastCorrelatedCloudReplyAt
+    );
+  }
+
+  isReady() {
+    return this.sessionState === "ready" && this.subscriptionReady;
+  }
+
+  getSessionGeneration() {
+    return this.sessionGeneration;
+  }
+
+  getSessionHealthSnapshot(duid) {
+    const now = Date.now();
+    const age = (timestamp) =>
+      typeof timestamp === "number" ? Math.max(0, now - timestamp) : null;
+    return {
+      state: this.sessionState,
+      generation: this.sessionGeneration,
+      socketConnected: this.socketConnected,
+      subscriptionReady: this.subscriptionReady,
+      readyAgeMs: age(this.readyAt),
+      lastRawInboundAgeMs: age(this.lastRawMqttMessageAt),
+      lastAttributedInboundAgeMs: age(this.lastAttributedCloudMessageAt),
+      lastDecodedInboundAgeMs: age(
+        duid
+          ? this.lastDecodedCloudMessageAtByDuid.get(duid)
+          : this.lastDecodedCloudMessageAt
+      ),
+      lastCorrelatedReplyAgeMs: age(
+        duid
+          ? this.lastCorrelatedCloudReplyAtByDuid.get(duid)
+          : this.lastCorrelatedCloudReplyAt
+      ),
+    };
   }
 
   sendMessage(duid, roborockMessage) {
-    client.publish(`rr/m/i/${rriot.u}/${mqttUser}/${duid}`, roborockMessage, {
-      qos: 1,
-    });
+    this.client.publish(
+      `rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`,
+      roborockMessage,
+      {
+        qos: 1,
+      }
+    );
   }
 
   isConnected() {
     return this.connected;
+  }
+
+  waitUntilReady({ timeoutMs = 10000, signal } = {}) {
+    if (this.isReady()) return Promise.resolve(this.sessionGeneration);
+    if (this.shuttingDown) {
+      return Promise.reject(
+        new MqttReadinessError(
+          "MQTT readiness was requested during shutdown.",
+          "MQTT_SHUTTING_DOWN"
+        )
+      );
+    }
+    if (signal?.aborted) {
+      return Promise.reject(
+        new MqttReadinessError("MQTT readiness wait was aborted.", "ABORT_ERR")
+      );
+    }
+
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, timer: null, abortHandler: null };
+      const finish = (callback, value) => {
+        if (!this.readinessWaiters.delete(waiter)) return;
+        if (waiter.timer) clearTimeout(waiter.timer);
+        if (waiter.abortHandler) {
+          signal?.removeEventListener("abort", waiter.abortHandler);
+        }
+        callback(value);
+      };
+      waiter.timer = setTimeout(
+        () =>
+          finish(
+            reject,
+            new MqttReadinessError(
+              `MQTT session did not become ready within ${timeoutMs}ms.`,
+              "MQTT_READINESS_TIMEOUT"
+            )
+          ),
+        timeoutMs
+      );
+      waiter.timer.unref?.();
+      if (signal) {
+        waiter.abortHandler = () =>
+          finish(
+            reject,
+            new MqttReadinessError(
+              "MQTT readiness wait was aborted.",
+              "ABORT_ERR"
+            )
+          );
+        signal.addEventListener("abort", waiter.abortHandler, { once: true });
+      }
+      waiter.complete = (generation) => finish(resolve, generation);
+      waiter.fail = (error) => finish(reject, error);
+      this.readinessWaiters.add(waiter);
+      if (this.isReady()) waiter.complete(this.sessionGeneration);
+    });
+  }
+
+  resolveReadinessWaiters(generation) {
+    for (const waiter of [...this.readinessWaiters])
+      waiter.complete(generation);
+  }
+
+  rejectReadinessWaiters(error) {
+    for (const waiter of [...this.readinessWaiters]) waiter.fail(error);
+  }
+
+  pendingCloudRequests(generation = this.sessionGeneration) {
+    return [...(this.adapter.pendingRequests?.entries?.() || [])].filter(
+      ([, pending]) =>
+        pending?.transport === "cloud" &&
+        pending?.sessionGeneration === generation
+    );
+  }
+
+  pendingB01CloudRequests(generation = this.sessionGeneration) {
+    return [...(this.adapter.pendingB01MapRequests?.entries?.() || [])].filter(
+      ([, pending]) => pending?.sessionGeneration === generation
+    );
+  }
+
+  allPendingCloudRequests(generation = this.sessionGeneration) {
+    return [
+      ...this.pendingCloudRequests(generation),
+      ...this.pendingB01CloudRequests(generation),
+    ];
+  }
+
+  rejectGenerationCloudRequests(generation) {
+    let rejected = 0;
+    for (const [id, pending] of this.pendingCloudRequests(generation)) {
+      this.adapter.clearTimeout(pending.timeout);
+      this.adapter.pendingRequests.delete(id);
+      pending.reject(
+        new MqttSessionReplacedError({
+          generation,
+          method: pending.method,
+          operationClass: pending.operationClass,
+        })
+      );
+      rejected += 1;
+    }
+    for (const [
+      duid,
+      pending,
+    ] of this.adapter.pendingB01MapRequests?.entries?.() || []) {
+      if (pending.sessionGeneration !== generation) continue;
+      this.adapter.clearTimeout(pending.timeout);
+      this.adapter.pendingB01MapRequests.delete(duid);
+      pending.reject(
+        new MqttSessionReplacedError({
+          generation,
+          method: pending.method,
+          operationClass: "secure-map",
+        })
+      );
+      rejected += 1;
+    }
+    if (photoChunkID && !this.adapter.pendingRequests?.has(photoChunkID)) {
+      photoGzipChunks = [];
+      photoChunkID = 0;
+    }
+    return rejected;
+  }
+
+  async waitForCloudDrain(generation, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (
+      this.allPendingCloudRequests(generation).length > 0 &&
+      Date.now() < deadline &&
+      !this.shuttingDown
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return this.allPendingCloudRequests(generation);
+  }
+
+  async endClient(candidate, timeoutMs = 2000) {
+    if (!candidate) return;
+    candidate.removeAllListeners();
+    if (typeof candidate.endAsync === "function") {
+      let timer;
+      try {
+        await Promise.race([
+          candidate.endAsync(true),
+          new Promise((resolve) => {
+            timer = setTimeout(resolve, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    } else {
+      candidate.end(true);
+    }
+  }
+
+  reconnectAndWaitReady(options = {}) {
+    if (this.reconnectInProgress) return this.reconnectInProgress;
+    const operation = this.performReconnect(options);
+    this.reconnectInProgress = operation;
+    void operation
+      .finally(() => {
+        if (this.reconnectInProgress === operation)
+          this.reconnectInProgress = null;
+      })
+      .catch(() => undefined);
+    return operation;
+  }
+
+  async performReconnect({
+    reason = "unspecified",
+    mode = "recovery",
+    drainTimeoutMs = 500,
+    connectTimeoutMs = 10000,
+    subscribeTimeoutMs = 10000,
+    force = false,
+  } = {}) {
+    if (this.shuttingDown) {
+      throw new MqttReadinessError(
+        "MQTT reconnect was requested during shutdown.",
+        "MQTT_SHUTTING_DOWN"
+      );
+    }
+    const now = Date.now();
+    if (!force && now < this.nextReconnectAllowedAt) {
+      throw new MqttReadinessError(
+        `MQTT reconnect cooldown remains active for ${this.nextReconnectAllowedAt - now}ms.`,
+        "MQTT_RECONNECT_COOLDOWN"
+      );
+    }
+
+    const startedAt = now;
+    const oldGeneration = this.sessionGeneration;
+    const oldClient = this.client;
+    this.lastReconnectAttemptAt = now;
+    this.connected = false;
+    this.transitionSessionState("draining", reason);
+    const counts = this.allPendingCloudRequests(oldGeneration).reduce(
+      (value, [, request]) => {
+        value[request.operationClass === "write" ? "writes" : "reads"] += 1;
+        return value;
+      },
+      { reads: 0, writes: 0 }
+    );
+    this.adapter.log.info(
+      `MQTT generation ${oldGeneration} entering ${mode}: reason=${reason}; pendingCloudReads=${counts.reads}; pendingCloudWrites=${counts.writes}.`
+    );
+
+    try {
+      const remaining = await this.waitForCloudDrain(
+        oldGeneration,
+        drainTimeoutMs
+      );
+      if (this.shuttingDown) {
+        throw new MqttReadinessError(
+          "MQTT reconnect was cancelled by shutdown.",
+          "MQTT_SHUTTING_DOWN"
+        );
+      }
+      if (mode === "preventive" && remaining.length > 0) {
+        this.connected = this.socketConnected && this.subscriptionReady;
+        this.transitionSessionState(
+          this.connected ? "ready" : "disconnected",
+          "preventive-request-pending"
+        );
+        this.resolveReadinessWaiters(oldGeneration);
+        return {
+          generation: oldGeneration,
+          connected: this.connected,
+          subscriptionAcknowledged: this.subscriptionReady,
+          oldCloudRequestsRejected: 0,
+          durationMs: Date.now() - startedAt,
+          skipped: true,
+        };
+      }
+
+      const rejected =
+        mode === "recovery"
+          ? this.rejectGenerationCloudRequests(oldGeneration)
+          : 0;
+      this.transitionSessionState("reconnecting", reason);
+      await this.endClient(oldClient);
+      this.subscriptionTimeoutMs = subscribeTimeoutMs;
+      this.createClient();
+      const generation = await this.waitUntilReady({
+        timeoutMs: connectTimeoutMs + subscribeTimeoutMs,
+      });
+      this.lastReconnectSucceededAt = Date.now();
+      this.consecutiveReconnectFailures = 0;
+      this.nextReconnectAllowedAt = 0;
+      this.adapter.log.info(
+        `MQTT generation ${generation} recovery completed in ${Date.now() - startedAt}ms; subscriptionAcknowledged=true; oldCloudRequestsRejected=${rejected}.`
+      );
+      return {
+        generation,
+        connected: true,
+        subscriptionAcknowledged: true,
+        oldCloudRequestsRejected: rejected,
+        durationMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      this.lastReconnectFailureAt = Date.now();
+      this.consecutiveReconnectFailures += 1;
+      this.nextReconnectAllowedAt =
+        Date.now() +
+        this.reconnectCooldownMs * this.consecutiveReconnectFailures;
+      this.rejectReadinessWaiters(error);
+      try {
+        await this.endClient(this.client);
+      } catch (cleanupError) {
+        this.adapter.log.debug(
+          `MQTT reconnect cleanup failed: ${cleanupError?.message || cleanupError}.`
+        );
+      }
+      if (!this.shuttingDown) this.markNotReady("reconnect-failed");
+      throw error;
+    }
   }
 
   /**
@@ -635,18 +1096,28 @@ class roborock_mqtt_connector {
    */
   disconnect() {
     this.clearInitialConnectTimeout();
-    if (!client) {
+    this.shuttingDown = true;
+    this.subscriptionReady = false;
+    this.socketConnected = false;
+    this.connected = false;
+    this.transitionSessionState("shutting-down", "shutdown");
+    const shutdownError = new MqttReadinessError(
+      "MQTT session shut down.",
+      "MQTT_SHUTTING_DOWN"
+    );
+    this.rejectReadinessWaiters(shutdownError);
+    this.rejectGenerationCloudRequests(this.sessionGeneration);
+    if (!this.client) {
       return;
     }
     try {
-      client.removeAllListeners();
-      client.end(true);
+      this.client.removeAllListeners();
+      this.client.end(true);
     } catch (error) {
       this.adapter?.log?.debug?.(
         `Closing the MQTT client on shutdown failed: ${error?.message || error}`
       );
     }
-    this.connected = false;
   }
 
   /**
@@ -682,51 +1153,36 @@ class roborock_mqtt_connector {
   }
 
   async ensureConnected() {
-    if (client && this.connected) {
+    if (this.client && this.connected) {
       this.adapter.log.debug("MQTT health check passed. Reconnect skipped.");
       return false;
     }
 
-    await this.reconnectClient(true);
+    await this.reconnectClient(false);
     return true;
   }
 
   async reconnectClient(force = false) {
-    if (client) {
-      try {
-        if (!force && this.connected) {
-          this.adapter.log.debug(
-            "MQTT reconnect skipped because client is already connected."
-          );
-          return false;
-        }
-
-        this.adapter.log.info("Reconnecting mqtt client!");
-        // Force the teardown. An unforced `end()` waits for mqtt.js to emit
-        // `outgoingEmpty` before it will finish, and a link that has just
-        // died still holds unacknowledged messages — so on the only path
-        // this function is ever called from, that event never arrives.
-        // `end()` then never completes, `disconnecting` stays true, and
-        // `reconnect()` declines to act in that state. The latch is
-        // self-sustaining, because every later `end()` short-circuits on the
-        // same flag: the hourly retry becomes a silent no-op and the account
-        // stays offline until the process restarts. Measured in the field on
-        // 25 Aug 2026 — 1070 consecutive status failures, 1 h 44 min of them
-        // after the network was healthy, three retries that did nothing, and
-        // an instant recovery on the same session once the child bridge was
-        // restarted.
-        await client.endAsync(true);
-        client.reconnect();
-        return true;
-      } catch (error) {
-        this.adapter.catchError(
-          `Failed to reconnect with error: ${error}`,
-          `reconnectClient`
-        );
-      }
+    if (!force && this.isReady()) {
+      this.adapter.log.debug(
+        "MQTT reconnect skipped because client is already ready."
+      );
+      return false;
     }
-
-    return false;
+    try {
+      await this.reconnectAndWaitReady({
+        reason: "connectivity-check",
+        mode: "recovery",
+        force,
+      });
+      return true;
+    } catch (error) {
+      this.adapter.catchError(
+        `Failed to reconnect with error: ${error}`,
+        `reconnectClient`
+      );
+      return false;
+    }
   }
 }
 
@@ -748,6 +1204,7 @@ function resolveB01PendingResponse(adapter, duid, dps) {
   if (pendingB01) {
     adapter.clearTimeout(pendingB01.timeout);
     adapter.pendingRequests.delete(b01Key);
+    adapter.rr_mqtt_connector?.noteCorrelatedReply?.(duid);
     if (dps.code !== undefined && dps.code !== 0) {
       pendingB01.reject(
         new Error(
