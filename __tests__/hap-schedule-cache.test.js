@@ -275,7 +275,7 @@ describe("HAP schedule coordinator cache", () => {
     expect(coordinator.nextRefreshAttemptAt).toBe(0);
   });
 
-  test("ten-minute cache absorbs frequent independent readers", async () => {
+  test("five-minute cache absorbs frequent independent readers", async () => {
     const coordinator = makeCoordinator();
 
     getServerTimers.mockResolvedValue([["timer-1", "on"]]);
