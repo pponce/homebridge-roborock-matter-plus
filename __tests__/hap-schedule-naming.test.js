@@ -377,6 +377,7 @@ describe("HAP schedule names and stable group identity", () => {
         [["timer-complex", "on"]],
         {
           requestTimeoutMs: 10000,
+          operationClass: "write",
           preferCloud: true,
           waitForResult: true,
           throwOnError: true,
@@ -387,6 +388,54 @@ describe("HAP schedule names and stable group identity", () => {
         expect.objectContaining({ preferCloud: true })
       );
       expect(timer).toEqual(["timer-complex", "off", 1]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("presents a schedule press immediately and suppresses repeats while it is pending", async () => {
+    jest.useFakeTimers();
+
+    try {
+      const platform = makePlatform();
+      const command = jest.fn().mockResolvedValue("ok");
+      platform.roborockAPI = {
+        getServerTimers: jest
+          .fn()
+          .mockResolvedValue([["timer-pending", "off"]]),
+        vacuums: {
+          "device-1": { command },
+        },
+      };
+
+      const accessory = new FakeAccessory("Test Vacuum Schedules");
+      const coordinator = makeCoordinator(platform, accessory);
+      coordinator.sync([schedule("timer-pending", true)]);
+      const onCharacteristic = switchService(
+        accessory,
+        "timer-pending"
+      ).getCharacteristic(Characteristic.On);
+
+      const presses = [
+        onCharacteristic.setHandler(false),
+        onCharacteristic.setHandler(false),
+        onCharacteristic.setHandler(false),
+        onCharacteristic.setHandler(false),
+      ];
+
+      expect(onCharacteristic.value).toBe(false);
+      expect(
+        platform.log.info.mock.calls.filter(([message]) =>
+          message.includes("Schedule command: queueing disable")
+        )
+      ).toHaveLength(1);
+
+      await jest.advanceTimersByTimeAsync(4000);
+      await Promise.all(presses);
+
+      expect(command).toHaveBeenCalledTimes(1);
+      expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(1);
+      expect(onCharacteristic.value).toBe(false);
     } finally {
       jest.useRealTimers();
     }
