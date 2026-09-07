@@ -210,9 +210,7 @@ describe("both connectors tag the refusal rather than throwing a bare Error", ()
     const source = connectorSource("roborock_mqtt_connector.js");
 
     expect(source).toContain("createRefusalError");
-    expect(source).toContain(
-      "pending.reject(\n                createRefusalError("
-    );
+    expect(source).toMatch(/pending\.reject\(\s+createRefusalError\(/);
   });
 
   test("the local connector builds a tagged refusal", () => {

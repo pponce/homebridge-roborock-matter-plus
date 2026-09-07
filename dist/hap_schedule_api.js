@@ -28,7 +28,7 @@ function scheduleRequestOptions(options = {}) {
     };
 }
 async function getServerTimers(api, duid, options = {}) {
-    return api.getServerTimers(duid, scheduleRequestOptions(options));
+    return api.getServerTimers(duid, scheduleRequestOptions({ ...options, operationClass: "read" }));
 }
 async function updateServerTimer(api, duid, timer, enabled, options = {}) {
     var _a;
@@ -38,6 +38,7 @@ async function updateServerTimer(api, duid, timer, enabled, options = {}) {
     }
     const requestOptions = scheduleRequestOptions({
         ...options,
+        operationClass: "write",
         waitForResult: true,
         throwOnError: true,
     });
@@ -73,6 +74,7 @@ async function updateTimer(api, duid, timer, enabled, options = {}) {
     }
     const requestOptions = scheduleRequestOptions({
         ...options,
+        operationClass: "write",
         waitForResult: true,
         throwOnError: true,
     });

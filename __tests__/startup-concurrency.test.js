@@ -199,7 +199,7 @@ describe("periodic status refresh actually fires", () => {
       ["get_status"],
       false,
       false,
-      {}
+      { operationClass: "read" }
     );
 
     await robot.getParameter("duid-1", "get_status", "state");
