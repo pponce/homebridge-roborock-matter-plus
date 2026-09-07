@@ -141,9 +141,9 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).not.toContain("stopPolling");
   });
 
-  test("schedule refresh uses a ten-minute cache and no permanent polling", () => {
+  test("schedule refresh uses a five-minute cache and no permanent polling", () => {
     expect(scheduleSource).toMatch(
-      /const SCHEDULE_CACHE_TTL_MS = 10 \* 60 \* 1000;/
+      /const SCHEDULE_CACHE_TTL_MS = 5 \* 60 \* 1000;/
     );
 
     expect(scheduleSource).toMatch(
@@ -264,7 +264,7 @@ describe("HomeKit schedule settings contract", () => {
       "await this.refreshDetailed(primaryStartedAt, true);"
     );
     expect(scheduleSource).toContain(
-      "await this.refreshDetailed(fallbackStartedAt, true);"
+      "const finalVerification = await this.refreshDetailed("
     );
   });
 
@@ -456,9 +456,9 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).toContain(
       "await this.refreshDetailed(primaryStartedAt, true);"
     );
-    expect(scheduleSource).toContain("const unconfirmed = primarySent.filter(");
+    expect(scheduleSource).toContain("const unconfirmed = candidates.filter(");
     expect(scheduleSource).toContain(
-      "await this.refreshDetailed(fallbackStartedAt, true);"
+      "const finalVerification = await this.refreshDetailed("
     );
     expect(scheduleSource).toContain("this.cachedScheduleMatches(request)");
   });
