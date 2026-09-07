@@ -25,11 +25,11 @@ const MAX_REPORTED_STATUS_VALUE_LENGTH = 60;
  * project keeps finding: the copies drift, and the one nobody looked at goes
  * on sending requests the caller never asked for.
  *
- * @param {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number }} [options]
- * @returns {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number }}
+ * @param {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number, cloudGateTimeoutMs?: number, operationClass?: "read" | "write" | "fire-and-forget" | "secure-map" }} [options]
+ * @returns {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number, cloudGateTimeoutMs?: number, operationClass?: "read" | "write" | "fire-and-forget" | "secure-map" }}
  */
 function buildForwardedRequestOptions(options = {}) {
-  /** @type {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number }} */
+  /** @type {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number, cloudGateTimeoutMs?: number, operationClass?: "read" | "write" | "fire-and-forget" | "secure-map" }} */
   const requestOptions = {};
 
   if (options.preferCloud) {
@@ -50,6 +50,20 @@ function buildForwardedRequestOptions(options = {}) {
     options.requestTimeoutMs > 0
   ) {
     requestOptions.requestTimeoutMs = options.requestTimeoutMs;
+  }
+  if (
+    typeof options.cloudGateTimeoutMs === "number" &&
+    Number.isFinite(options.cloudGateTimeoutMs) &&
+    options.cloudGateTimeoutMs > 0
+  ) {
+    requestOptions.cloudGateTimeoutMs = options.cloudGateTimeoutMs;
+  }
+  if (
+    ["read", "write", "fire-and-forget", "secure-map"].includes(
+      options.operationClass
+    )
+  ) {
+    requestOptions.operationClass = options.operationClass;
   }
 
   return requestOptions;
@@ -229,6 +243,7 @@ class vacuum {
   async command(duid, parameter, value, options = {}) {
     try {
       const requestOptions = buildForwardedRequestOptions(options);
+      requestOptions.operationClass = "write";
       const hasRequestOptions = Object.keys(requestOptions).length > 0;
       const sendCommandRequest = (method, params) =>
         hasRequestOptions
@@ -459,6 +474,7 @@ class vacuum {
   async getServerTimers(duid, options = {}) {
     try {
       const requestOptions = buildForwardedRequestOptions(options);
+      requestOptions.operationClass = "read";
 
       return await this.adapter.messageQueueHandler.sendRequest(
         duid,
@@ -477,6 +493,7 @@ class vacuum {
   async updateServerTimer(duid, timerId, enabled, options = {}) {
     try {
       const requestOptions = buildForwardedRequestOptions(options);
+      requestOptions.operationClass = "write";
 
       return await this.adapter.messageQueueHandler.sendRequest(
         duid,
@@ -503,6 +520,7 @@ class vacuum {
     // did, by hand, and every other branch reverted to the local transport and
     // the ten-second default however the caller had been configured (#8).
     const requestOptions = buildForwardedRequestOptions(options);
+    requestOptions.operationClass = "read";
     /**
      * @param {string} method
      * @param {unknown} params

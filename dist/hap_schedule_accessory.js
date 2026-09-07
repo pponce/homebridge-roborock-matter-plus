@@ -1363,7 +1363,7 @@ class RoborockHapScheduleSwitchAccessory {
         }
         service
             .getCharacteristic(this.platform.Characteristic.On)
-            .onSet((value) => this.setSchedule(Boolean(value)))
+            .onSet((value) => this.acceptScheduleChange(Boolean(value)))
             .onGet(() => {
             void this.coordinator.refreshIfNeeded();
             return this.schedule.enabled;
@@ -1390,13 +1390,36 @@ class RoborockHapScheduleSwitchAccessory {
     }
     dispose() {
         this.disposed = true;
+        this.pendingCommand = undefined;
         this.suppression.clear();
         this.failedCommands.clear();
     }
+    /**
+     * A HomeKit write must be acknowledged immediately. Roborock's cloud write
+     * and read-back verification can take several seconds, and returning that
+     * promise from `onSet` makes Home keep the tile in its pending state for the
+     * entire round trip. Present the requested value synchronously, start the
+     * durable write in the background, and let `setSchedule` roll the value back
+     * (and log the reason) if Roborock ultimately refuses or cannot confirm it.
+     */
+    acceptScheduleChange(enabled) {
+        void this.setSchedule(enabled).catch(() => {
+            // setSchedule has already restored the characteristic and logged the
+            // actionable error. Consume the background rejection so it cannot turn
+            // into an unhandled promise rejection after HomeKit was acknowledged.
+        });
+    }
     async setSchedule(enabled) {
+        var _a, _b, _c, _d, _e;
         const previous = this.schedule.enabled;
         const now = Date.now();
         const last = this.suppression.get(this.scheduleId);
+        if (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.enabled) === enabled) {
+            // Reassert the optimistic value in case a controller refreshed its stale
+            // copy while the original command was still being reconciled.
+            this.presentScheduleState(enabled);
+            return;
+        }
         if (last &&
             last.enabled === enabled &&
             now - last.timestamp < WRITE_SUPPRESSION_MS) {
@@ -1410,29 +1433,35 @@ class RoborockHapScheduleSwitchAccessory {
             this.updateService(previous);
             return;
         }
+        const command = { enabled, token: Symbol("schedule-command") };
+        this.pendingCommand = command;
+        this.presentScheduleState(enabled);
         try {
             this.platform.log.info(`Schedule command: queueing ${enabled ? "enable" : "disable"} for ${this.duid}/${this.scheduleId}.`);
             const executed = await this.coordinator.enqueueScheduleWrite(this.scheduleId, enabled);
             if (!executed) {
+                if (((_b = this.pendingCommand) === null || _b === void 0 ? void 0 : _b.token) === command.token) {
+                    this.presentScheduleState(previous);
+                }
                 return;
             }
-            if (this.disposed) {
+            if (this.disposed || ((_c = this.pendingCommand) === null || _c === void 0 ? void 0 : _c.token) !== command.token) {
                 return;
             }
-            this.schedule.enabled = enabled;
-            this.schedule.timer[1] = enabled ? "on" : "off";
             this.failedCommands.delete(this.scheduleId);
             this.suppression.set(this.scheduleId, {
                 enabled,
                 timestamp: Date.now(),
             });
-            this.updateService(enabled);
+            this.presentScheduleState(enabled);
         }
         catch (error) {
             if (this.disposed) {
                 return;
             }
-            this.updateService(previous);
+            if (((_d = this.pendingCommand) === null || _d === void 0 ? void 0 : _d.token) === command.token) {
+                this.presentScheduleState(previous);
+            }
             this.failedCommands.set(this.scheduleId, {
                 enabled,
                 timestamp: Date.now(),
@@ -1441,7 +1470,19 @@ class RoborockHapScheduleSwitchAccessory {
             this.platform.log.warn(`Unable to ${enabled ? "enable" : "disable"} Roborock schedule ${this.scheduleId}: ${message}. ` +
                 `Further attempts for this same state are suppressed for ` +
                 `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`);
+            throw error;
         }
+        finally {
+            if (((_e = this.pendingCommand) === null || _e === void 0 ? void 0 : _e.token) === command.token) {
+                this.pendingCommand = undefined;
+            }
+        }
+    }
+    presentScheduleState(enabled) {
+        this.schedule.enabled = enabled;
+        this.schedule.timer[1] = enabled ? "on" : "off";
+        this.coordinator.recordScheduleUpdate(this.schedule);
+        this.updateService(enabled);
     }
     updateService(enabled) {
         const service = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
@@ -1486,7 +1527,7 @@ class RoborockHapRoutineSwitch {
             // when there is no schedule switch to prompt a refresh.
             void this.coordinator.refreshIfNeeded();
             return false;
-        }).onSet((value) => this.handlePress(Boolean(value)));
+        }).onSet((value) => this.acceptPress(Boolean(value)));
         // Whatever the cache remembered, a momentary switch starts off.
         service.updateCharacteristic(this.platform.Characteristic.On, false);
     }
@@ -1522,6 +1563,14 @@ class RoborockHapRoutineSwitch {
             (0, timers_1.clearTimer)(this.resetTimer);
             this.resetTimer = undefined;
         }
+    }
+    /** A Routine switch acknowledges the momentary press immediately. */
+    acceptPress(value) {
+        void this.handlePress(value).catch((error) => {
+            // runRoutine owns expected cloud errors. Keep an unexpected background
+            // failure from becoming an unhandled rejection after HAP was answered.
+            this.platform.log.warn(`Unable to accept Roborock routine "${this.displayName}": ${error instanceof Error ? error.message : String(error)}`);
+        });
     }
     async handlePress(value) {
         if (!value || this.disposed) {
