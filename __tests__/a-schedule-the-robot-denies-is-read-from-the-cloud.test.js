@@ -457,8 +457,8 @@ describe("switching a cloud schedule from HomeKit", () => {
       Characteristic.On
     );
     const write = on.setHandler(false);
+    expect(write).toBeUndefined();
     await flushTimers(5000);
-    await write;
 
     expect(on.value).toBe(true);
     expect(platform.log.warn).toHaveBeenCalledWith(
@@ -477,8 +477,8 @@ describe("switching a cloud schedule from HomeKit", () => {
       Characteristic.On
     );
     const write = on.setHandler(false);
+    expect(write).toBeUndefined();
     await flushTimers(5000);
-    await write;
 
     expect(cloud.updateCloudSceneParam).not.toHaveBeenCalled();
     expect(platform.log.warn).toHaveBeenCalledWith(
@@ -630,7 +630,8 @@ describe("the Routines accessory", () => {
     const on = routineSwitch(routineAccessory, "1").getCharacteristic(
       Characteristic.On
     );
-    await on.setHandler(true);
+    expect(on.setHandler(true)).toBeUndefined();
+    await Promise.resolve();
 
     expect(cloud.executeCloudScene).toHaveBeenCalledWith("1");
     expect(platform.log.info).toHaveBeenCalledWith(
@@ -640,7 +641,7 @@ describe("the Routines accessory", () => {
     await flushTimers(1500);
     expect(on.value).toBe(false);
     // Turning it off is not a command.
-    await on.setHandler(false);
+    expect(on.setHandler(false)).toBeUndefined();
     expect(cloud.executeCloudScene).toHaveBeenCalledTimes(1);
   });
 
@@ -663,7 +664,7 @@ describe("the Routines accessory", () => {
     expect(routineCounts).toEqual([2, 0]);
   });
 
-  test("a failed run is a warning, not a thrown handler", async () => {
+  test("a failed run is a warning after an immediate acknowledgement", async () => {
     const cloud = makeCloud({ scenes: [scene({ id: 1, name: "Saugen+" })] });
     cloud.executeCloudScene.mockRejectedValue(new Error("device offline"));
     const { coordinator, routineAccessory, platform } = makeCoordinator(cloud, {
@@ -674,7 +675,8 @@ describe("the Routines accessory", () => {
     const on = routineSwitch(routineAccessory, "1").getCharacteristic(
       Characteristic.On
     );
-    await expect(on.setHandler(true)).resolves.toBeUndefined();
+    expect(on.setHandler(true)).toBeUndefined();
+    await flushTimers(0);
     expect(platform.log.warn).toHaveBeenCalledWith(
       expect.stringMatching(
         /Unable to run Roborock routine "Saugen\+": device offline/
