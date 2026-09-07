@@ -186,6 +186,7 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
  * @property {(duid?: string) => Record<string, unknown>} [getSessionHealthSnapshot]
  * @property {(options?: {timeoutMs?: number, signal?: AbortSignal}) => Promise<number>} [waitUntilReady]
  * @property {() => number} [getSessionGeneration]
+ * @property {(failure: {duid: string, method: string, operationClass?: string, sessionGeneration?: number, publishedAt?: number | null}) => boolean} [noteSilentCloudReadTimeout]
  * @property {(duid: string, message: Buffer) => void} sendMessage
  */
 
@@ -573,11 +574,17 @@ class messageQueueHandler {
             if (useCloudConnection) {
               const sessionHealth =
                 this.adapter.rr_mqtt_connector.getSessionHealthSnapshot?.(duid);
-              reject(
-                new Error(
-                  `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${mqttConnectionState}${sessionHealth ? `; session health: ${JSON.stringify(sessionHealth)}` : ""}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`
-                )
+              const timeoutError = new Error(
+                `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${mqttConnectionState}${sessionHealth ? `; session health: ${JSON.stringify(sessionHealth)}` : ""}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`
               );
+              reject(timeoutError);
+              this.adapter.rr_mqtt_connector.noteSilentCloudReadTimeout?.({
+                duid,
+                method,
+                operationClass: pendingRequest.operationClass,
+                sessionGeneration: pendingRequest.sessionGeneration,
+                publishedAt: pendingRequest.publishedAt,
+              });
             } else {
               // A socket that keeps reporting itself connected while every
               // request dies of silence is not a transport worth retrying

@@ -1517,13 +1517,21 @@ class RoborockHapScheduleSwitchAccessory {
     }
     dispose() {
         this.disposed = true;
+        this.pendingCommand = undefined;
         this.suppression.clear();
         this.failedCommands.clear();
     }
     async setSchedule(enabled) {
+        var _a, _b, _c, _d, _e;
         const previous = this.schedule.enabled;
         const now = Date.now();
         const last = this.suppression.get(this.scheduleId);
+        if (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.enabled) === enabled) {
+            // Reassert the optimistic value in case a controller refreshed its stale
+            // copy while the original command was still being reconciled.
+            this.presentScheduleState(enabled);
+            return;
+        }
         if (last &&
             last.enabled === enabled &&
             now - last.timestamp < WRITE_SUPPRESSION_MS) {
@@ -1537,6 +1545,9 @@ class RoborockHapScheduleSwitchAccessory {
             this.updateService(previous);
             return;
         }
+        const command = { enabled, token: Symbol("schedule-command") };
+        this.pendingCommand = command;
+        this.presentScheduleState(enabled);
         try {
             // Report the requested value immediately instead of leaving Apple Home
             // displaying the old position throughout the batch window, propagation
@@ -1547,25 +1558,28 @@ class RoborockHapScheduleSwitchAccessory {
             this.platform.log.info(`Schedule command: queueing ${enabled ? "enable" : "disable"} for ${this.duid}/${this.scheduleId}.`);
             const executed = await this.coordinator.enqueueScheduleWrite(this.scheduleId, enabled);
             if (!executed) {
+                if (((_b = this.pendingCommand) === null || _b === void 0 ? void 0 : _b.token) === command.token) {
+                    this.presentScheduleState(previous);
+                }
                 return;
             }
-            if (this.disposed) {
+            if (this.disposed || ((_c = this.pendingCommand) === null || _c === void 0 ? void 0 : _c.token) !== command.token) {
                 return;
             }
-            this.schedule.enabled = enabled;
-            this.schedule.timer[1] = enabled ? "on" : "off";
             this.failedCommands.delete(this.scheduleId);
             this.suppression.set(this.scheduleId, {
                 enabled,
                 timestamp: Date.now(),
             });
-            this.updateService(enabled);
+            this.presentScheduleState(enabled);
         }
         catch (error) {
             if (this.disposed) {
                 return;
             }
-            this.updateService(previous);
+            if (((_d = this.pendingCommand) === null || _d === void 0 ? void 0 : _d.token) === command.token) {
+                this.presentScheduleState(previous);
+            }
             this.failedCommands.set(this.scheduleId, {
                 enabled,
                 timestamp: Date.now(),
@@ -1576,6 +1590,17 @@ class RoborockHapScheduleSwitchAccessory {
                 `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`);
             throw error;
         }
+        finally {
+            if (((_e = this.pendingCommand) === null || _e === void 0 ? void 0 : _e.token) === command.token) {
+                this.pendingCommand = undefined;
+            }
+        }
+    }
+    presentScheduleState(enabled) {
+        this.schedule.enabled = enabled;
+        this.schedule.timer[1] = enabled ? "on" : "off";
+        this.coordinator.recordScheduleUpdate(this.schedule);
+        this.updateService(enabled);
     }
     updateService(enabled) {
         const service = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);

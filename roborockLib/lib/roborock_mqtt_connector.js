@@ -18,6 +18,9 @@ const {
 const PHOTO_MAGIC = "ROBOROCK";
 const PHOTO_HEADER_MIN_LENGTH = 9;
 const PROTOCOL_301_HEADER_LENGTH = 24;
+const SILENT_READ_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
+const SILENT_READ_RECOVERY_SAME_ROBOT_THRESHOLD = 3;
+const SILENT_READ_RECOVERY_DISTINCT_ROBOT_THRESHOLD = 2;
 
 const protocol301Parser = new Parser()
   .endianess("little")
@@ -139,6 +142,7 @@ class roborock_mqtt_connector {
     this.nextReconnectAllowedAt = 0;
     this.reconnectCooldownMs = 30000;
     this.initialConnectTimeout = null;
+    this.silentCloudReadTimeouts = [];
 
     // NOTE: this class previously generated its own RSA-2048 keypair here,
     // but nothing ever read it — the protocol keypair lives in message.js
@@ -439,6 +443,12 @@ class roborock_mqtt_connector {
 
   handleMessage(topic, message) {
     this.lastRawMqttMessageAt = Date.now();
+    if (this.silentCloudReadTimeouts.length > 0) {
+      this.silentCloudReadTimeouts = [];
+      this.adapter.log.debug(
+        "Cleared silent cloud-read recovery evidence after inbound MQTT activity."
+      );
+    }
     try {
       const duid = this.resolveDuidFromTopic(topic);
       if (!duid) {
@@ -753,6 +763,75 @@ class roborock_mqtt_connector {
     this.lastCorrelatedCloudReplyAtByDuid.set(
       duid,
       this.lastCorrelatedCloudReplyAt
+    );
+  }
+
+  noteSilentCloudReadTimeout({
+    duid,
+    method,
+    operationClass,
+    sessionGeneration,
+    publishedAt,
+  }) {
+    if (
+      operationClass !== "read" ||
+      !duid ||
+      sessionGeneration !== this.sessionGeneration ||
+      !Number.isFinite(publishedAt) ||
+      (this.lastRawMqttMessageAt !== null &&
+        this.lastRawMqttMessageAt > publishedAt)
+    ) {
+      return false;
+    }
+
+    const now = Date.now();
+    this.silentCloudReadTimeouts = this.silentCloudReadTimeouts.filter(
+      (failure) =>
+        failure.generation === sessionGeneration &&
+        now - failure.at <= SILENT_READ_RECOVERY_WINDOW_MS
+    );
+    this.silentCloudReadTimeouts.push({
+      at: now,
+      duid,
+      method,
+      generation: sessionGeneration,
+    });
+
+    const distinctRobots = new Set(
+      this.silentCloudReadTimeouts.map((failure) => failure.duid)
+    ).size;
+    const sameRobotCount = this.silentCloudReadTimeouts.filter(
+      (failure) => failure.duid === duid
+    ).length;
+    if (
+      distinctRobots < SILENT_READ_RECOVERY_DISTINCT_ROBOT_THRESHOLD &&
+      sameRobotCount < SILENT_READ_RECOVERY_SAME_ROBOT_THRESHOLD
+    ) {
+      return false;
+    }
+
+    const evidenceCount = this.silentCloudReadTimeouts.length;
+    this.silentCloudReadTimeouts = [];
+    this.adapter.log.info(
+      `Repeated silent cloud reads detected on MQTT generation ${sessionGeneration}: failures=${evidenceCount}; distinctRobots=${distinctRobots}; lastMethod=${method}. Starting account session recovery.`
+    );
+    void this.reconnectAndWaitReady({
+      reason: "repeated-silent-cloud-reads",
+      mode: "recovery",
+      drainTimeoutMs: 2000,
+    }).catch((error) => {
+      this.adapter.log.warn(
+        `MQTT recovery after repeated silent cloud reads failed: ${error?.message || error}.`
+      );
+    });
+    return true;
+  }
+
+  isPreventiveReconnectDue(minimumReadyAgeMs) {
+    return (
+      this.isReady() &&
+      this.readyAt !== null &&
+      Date.now() - this.readyAt >= minimumReadyAgeMs
     );
   }
 

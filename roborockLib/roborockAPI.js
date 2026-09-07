@@ -448,6 +448,10 @@ const MATTER_CLEAN_TYPE_PREP_LABELS = new Set(["water mode", "clean type"]);
 // return room segments. Retrying lets newly named/segmented maps appear without
 // switching maps on every poll cycle.
 const SERVICE_AREA_ROOM_MAP_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
+// Check often enough that a preventive refresh skipped for active cloud work
+// is retried soon, rather than waiting another full four-hour age interval.
+const MQTT_MAINTENANCE_INTERVAL_MS = 15 * 60 * 1000;
+const MQTT_PREVENTIVE_SESSION_AGE_MS = 4 * 60 * 60 * 1000;
 
 class Roborock {
   constructor(options) {
@@ -2050,12 +2054,32 @@ class Roborock {
           }
           this.log.debug(`RoomIDs debug: ${JSON.stringify(this.roomIDs)}`);
 
-          // Perform a periodic MQTT health check. Reconnect only if needed.
+          // Perform connectivity checks and, once a healthy-looking session is
+          // four hours old, safely refresh it while the cloud queue is idle.
+          // A preventive skip is reconsidered on the next 15-minute tick.
           this.reconnectIntervall = this.setInterval(async () => {
-            this.log.debug(`Running MQTT health check.`);
+            try {
+              this.log.debug(`Running MQTT health check.`);
 
-            await this.rr_mqtt_connector.ensureConnected();
-          }, 3600 * 1000);
+              const repaired = await this.rr_mqtt_connector.ensureConnected();
+              if (
+                !repaired &&
+                this.rr_mqtt_connector.isPreventiveReconnectDue(
+                  MQTT_PREVENTIVE_SESSION_AGE_MS
+                )
+              ) {
+                await this.rr_mqtt_connector.reconnectAndWaitReady({
+                  reason: "four-hour-preventive-refresh",
+                  mode: "preventive",
+                  drainTimeoutMs: 2000,
+                });
+              }
+            } catch (error) {
+              this.log.warn(
+                `MQTT maintenance attempt failed: ${error?.message || error}.`
+              );
+            }
+          }, MQTT_MAINTENANCE_INTERVAL_MS);
 
           this.homedataInterval = this.setInterval(
             this.updateHomeData.bind(this),

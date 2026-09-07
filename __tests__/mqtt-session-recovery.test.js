@@ -1,5 +1,8 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
+
 const mockClients = [];
 jest.mock("mqtt", () => ({
   connect: jest.fn(() => {
@@ -173,6 +176,97 @@ describe("account MQTT session recovery", () => {
     expect(connector.adapter.pendingRequests.has(1)).toBe(true);
     expect(connector.isReady()).toBe(true);
     clearTimeout(timer);
+  });
+
+  test("two silent read timeouts from different robots replace the stale generation", async () => {
+    const connector = await makeConnector();
+    await acknowledge(mockClients[0]);
+    connector.lastRawMqttMessageAt = 100;
+
+    expect(
+      connector.noteSilentCloudReadTimeout({
+        duid: "robot-1",
+        method: "get_prop",
+        operationClass: "read",
+        sessionGeneration: 1,
+        publishedAt: 200,
+      })
+    ).toBe(false);
+    expect(
+      connector.noteSilentCloudReadTimeout({
+        duid: "robot-2",
+        method: "get_prop",
+        operationClass: "read",
+        sessionGeneration: 1,
+        publishedAt: 200,
+      })
+    ).toBe(true);
+
+    const recovery = connector.reconnectInProgress;
+    await tick();
+    expect(mockClients).toHaveLength(2);
+    await acknowledge(mockClients[1]);
+    await expect(recovery).resolves.toEqual(
+      expect.objectContaining({ generation: 2, connected: true })
+    );
+    expect(connector.adapter.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("distinctRobots=2")
+    );
+  });
+
+  test("silent write timeouts and reads with intervening inbound activity do not recover", async () => {
+    const connector = await makeConnector();
+    await acknowledge(mockClients[0]);
+    connector.lastRawMqttMessageAt = 300;
+
+    expect(
+      connector.noteSilentCloudReadTimeout({
+        duid: "robot-1",
+        method: "upd_server_timer",
+        operationClass: "write",
+        sessionGeneration: 1,
+        publishedAt: 200,
+      })
+    ).toBe(false);
+    expect(
+      connector.noteSilentCloudReadTimeout({
+        duid: "robot-1",
+        method: "get_prop",
+        operationClass: "read",
+        sessionGeneration: 1,
+        publishedAt: 200,
+      })
+    ).toBe(false);
+    expect(mockClients).toHaveLength(1);
+  });
+
+  test("a preventive refresh becomes due at four hours of session age", async () => {
+    const connector = await makeConnector();
+    await acknowledge(mockClients[0]);
+    const readyAt = connector.readyAt;
+    const now = jest.spyOn(Date, "now");
+
+    now.mockReturnValue(readyAt + 4 * 60 * 60 * 1000 - 1);
+    expect(connector.isPreventiveReconnectDue(4 * 60 * 60 * 1000)).toBe(false);
+    now.mockReturnValue(readyAt + 4 * 60 * 60 * 1000);
+    expect(connector.isPreventiveReconnectDue(4 * 60 * 60 * 1000)).toBe(true);
+    now.mockRestore();
+  });
+
+  test("preventive maintenance retries a skipped four-hour refresh within fifteen minutes", () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, "../roborockLib/roborockAPI.js"),
+      "utf8"
+    );
+
+    expect(source).toContain(
+      "const MQTT_MAINTENANCE_INTERVAL_MS = 15 * 60 * 1000;"
+    );
+    expect(source).toContain(
+      "const MQTT_PREVENTIVE_SESSION_AGE_MS = 4 * 60 * 60 * 1000;"
+    );
+    expect(source).toContain("}, MQTT_MAINTENANCE_INTERVAL_MS);");
+    expect(source).toContain('mode: "preventive"');
   });
 
   test("shutdown rejects gate waiters and prevents replacement clients", async () => {

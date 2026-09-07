@@ -1,4 +1,5 @@
 const net = require("net");
+const { EventEmitter } = require("events");
 
 // Create a simple server for testing TCP probes
 function createTestServer(port, delayMs = 0) {
@@ -26,10 +27,15 @@ function destroyTestServer(server) {
 }
 
 // Implement probeTcp matching the one from src/ui/index.ts
-function probeTcp(host, port, timeoutMs) {
+function probeTcp(
+  host,
+  port,
+  timeoutMs,
+  createSocket = () => new net.Socket()
+) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
-    const socket = new net.Socket();
+    const socket = createSocket();
     let settled = false;
 
     const finish = (error) => {
@@ -213,15 +219,22 @@ describe("UI Server Local Probe - TCP Connection Testing", () => {
   });
 
   test("handles timeout properly and cleans up socket", async () => {
-    // This test verifies that even on timeout, socket is properly destroyed
+    // A TEST-NET address is not a deterministic timeout: some hosts immediately
+    // return ENETUNREACH. Use a socket that deliberately stays silent so this
+    // test exercises the timeout cleanup path on every CI network.
     const port = TEST_PORT_BASE + testPortCounter;
+    const socket = new EventEmitter();
+    socket.connect = jest.fn();
+    socket.destroy = jest.fn();
 
     try {
-      await probeTcp("192.0.2.1", port, 500);
+      await probeTcp("192.0.2.1", port, 50, () => socket);
       fail("Expected probe to timeout");
     } catch (error) {
       expect(error.message).toContain("Timed out");
     }
+    expect(socket.connect).toHaveBeenCalledWith(port, "192.0.2.1");
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
 
     // After timeout, subsequent operations should work normally
     const port2 = TEST_PORT_BASE + testPortCounter + 300;
