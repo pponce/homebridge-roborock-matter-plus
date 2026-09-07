@@ -138,11 +138,13 @@ describe("a state refresh never spends the caller's budget", () => {
     expect(transport.optionsFor("set_water_box_custom_mode")).toEqual({
       preferCloud: true,
       requestTimeoutMs: PREP_WINDOW_MS,
+      operationClass: "write",
     });
     // Same robot, same setting, so the same transport — a caller that asked for
     // cloud must not be handed a local request it never asked for.
     expect(transport.optionsFor("get_water_box_custom_mode")).toEqual({
       preferCloud: true,
+      operationClass: "read",
     });
     transport.cleanup();
   });
@@ -192,6 +194,7 @@ describe("a state refresh never spends the caller's budget", () => {
     expect(transport.optionsFor("get_water_box_mode")).toEqual({
       preferCloud: true,
       requestTimeoutMs: 1234,
+      operationClass: "read",
     });
     transport.cleanup();
   });

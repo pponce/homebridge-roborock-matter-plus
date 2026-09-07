@@ -10,6 +10,10 @@ const {
   describeReplyRefusal,
   createRefusalError,
 } = require("./describeReplyRefusal");
+const {
+  MqttSessionReplacedError,
+  MqttReadinessError,
+} = require("./mqttSessionErrors");
 
 const PHOTO_MAGIC = "ROBOROCK";
 const PHOTO_HEADER_MIN_LENGTH = 9;
@@ -126,6 +130,14 @@ class roborock_mqtt_connector {
     this.subscriptionTimeoutMs = 10000;
     this.shuttingDown = false;
     this.handlersInstalledFor = null;
+    this.readinessWaiters = new Set();
+    this.reconnectInProgress = null;
+    this.lastReconnectAttemptAt = null;
+    this.lastReconnectSucceededAt = null;
+    this.lastReconnectFailureAt = null;
+    this.consecutiveReconnectFailures = 0;
+    this.nextReconnectAllowedAt = 0;
+    this.reconnectCooldownMs = 30000;
     this.initialConnectTimeout = null;
 
     // NOTE: this class previously generated its own RSA-2048 keypair here,
@@ -147,14 +159,32 @@ class roborock_mqtt_connector {
     this.mqttPassword = roborockCrypto
       .md5hex(this.rriot.s + ":" + this.rriot.k)
       .substring(16);
+    this.createClient();
+  }
+
+  createClient() {
+    if (this.shuttingDown) {
+      throw new MqttReadinessError(
+        "Cannot create an MQTT session during shutdown.",
+        "MQTT_SHUTTING_DOWN"
+      );
+    }
     this.sessionGeneration += 1;
+    this.socketConnected = false;
+    this.subscriptionReady = false;
+    this.connected = false;
+    this.readyAt = null;
     this.transitionSessionState("connecting", "client-created");
-    this.client = mqtt.connect(this.rriot.r.m, {
+    const candidate = mqtt.connect(this.rriot.r.m, {
       clientId: this.mqttUser,
       username: this.mqttUser,
       password: this.mqttPassword,
       keepalive: 30,
     });
+    this.client = candidate;
+    this.handlersInstalledFor = null;
+    this.installClientHandlers(candidate, this.sessionGeneration);
+    return candidate;
   }
 
   async initMQTT_Subscribe() {
@@ -292,6 +322,7 @@ class roborock_mqtt_connector {
       this.connected = true;
       this.readyAt = Date.now();
       this.transitionSessionState("ready", "subscription-acknowledged");
+      this.resolveReadinessWaiters(generation);
       if (this._connectionIssueActive) {
         this._connectionIssueActive = false;
         this._connectionIssueLog?.clear();
@@ -309,6 +340,12 @@ class roborock_mqtt_connector {
       this.transitionSessionState("disconnected", "subscription-failed");
       this.logConnectionIssue(
         `Failed to establish the Roborock MQTT reply subscription: ${error?.message || error}.`
+      );
+      this.rejectReadinessWaiters(
+        new MqttReadinessError(
+          `MQTT generation ${generation} could not establish reply readiness: ${error?.message || error}`,
+          "MQTT_SUBSCRIPTION_FAILED"
+        )
       );
     } finally {
       if (timer) clearTimeout(timer);
@@ -766,6 +803,284 @@ class roborock_mqtt_connector {
     return this.connected;
   }
 
+  waitUntilReady({ timeoutMs = 10000, signal } = {}) {
+    if (this.isReady()) return Promise.resolve(this.sessionGeneration);
+    if (this.shuttingDown) {
+      return Promise.reject(
+        new MqttReadinessError(
+          "MQTT readiness was requested during shutdown.",
+          "MQTT_SHUTTING_DOWN"
+        )
+      );
+    }
+    if (signal?.aborted) {
+      return Promise.reject(
+        new MqttReadinessError("MQTT readiness wait was aborted.", "ABORT_ERR")
+      );
+    }
+
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, timer: null, abortHandler: null };
+      const finish = (callback, value) => {
+        if (!this.readinessWaiters.delete(waiter)) return;
+        if (waiter.timer) clearTimeout(waiter.timer);
+        if (waiter.abortHandler) {
+          signal?.removeEventListener("abort", waiter.abortHandler);
+        }
+        callback(value);
+      };
+      waiter.timer = setTimeout(
+        () =>
+          finish(
+            reject,
+            new MqttReadinessError(
+              `MQTT session did not become ready within ${timeoutMs}ms.`,
+              "MQTT_READINESS_TIMEOUT"
+            )
+          ),
+        timeoutMs
+      );
+      waiter.timer.unref?.();
+      if (signal) {
+        waiter.abortHandler = () =>
+          finish(
+            reject,
+            new MqttReadinessError(
+              "MQTT readiness wait was aborted.",
+              "ABORT_ERR"
+            )
+          );
+        signal.addEventListener("abort", waiter.abortHandler, { once: true });
+      }
+      waiter.complete = (generation) => finish(resolve, generation);
+      waiter.fail = (error) => finish(reject, error);
+      this.readinessWaiters.add(waiter);
+      if (this.isReady()) waiter.complete(this.sessionGeneration);
+    });
+  }
+
+  resolveReadinessWaiters(generation) {
+    for (const waiter of [...this.readinessWaiters])
+      waiter.complete(generation);
+  }
+
+  rejectReadinessWaiters(error) {
+    for (const waiter of [...this.readinessWaiters]) waiter.fail(error);
+  }
+
+  pendingCloudRequests(generation = this.sessionGeneration) {
+    return [...(this.adapter.pendingRequests?.entries?.() || [])].filter(
+      ([, pending]) =>
+        pending?.transport === "cloud" &&
+        pending?.sessionGeneration === generation
+    );
+  }
+
+  pendingB01CloudRequests(generation = this.sessionGeneration) {
+    return [...(this.adapter.pendingB01MapRequests?.entries?.() || [])].filter(
+      ([, pending]) => pending?.sessionGeneration === generation
+    );
+  }
+
+  allPendingCloudRequests(generation = this.sessionGeneration) {
+    return [
+      ...this.pendingCloudRequests(generation),
+      ...this.pendingB01CloudRequests(generation),
+    ];
+  }
+
+  rejectGenerationCloudRequests(generation) {
+    let rejected = 0;
+    for (const [id, pending] of this.pendingCloudRequests(generation)) {
+      this.adapter.clearTimeout(pending.timeout);
+      this.adapter.pendingRequests.delete(id);
+      pending.reject(
+        new MqttSessionReplacedError({
+          generation,
+          method: pending.method,
+          operationClass: pending.operationClass,
+        })
+      );
+      rejected += 1;
+    }
+    for (const [
+      duid,
+      pending,
+    ] of this.adapter.pendingB01MapRequests?.entries?.() || []) {
+      if (pending.sessionGeneration !== generation) continue;
+      this.adapter.clearTimeout(pending.timeout);
+      this.adapter.pendingB01MapRequests.delete(duid);
+      pending.reject(
+        new MqttSessionReplacedError({
+          generation,
+          method: pending.method,
+          operationClass: "secure-map",
+        })
+      );
+      rejected += 1;
+    }
+    if (photoChunkID && !this.adapter.pendingRequests?.has(photoChunkID)) {
+      photoGzipChunks = [];
+      photoChunkID = 0;
+    }
+    return rejected;
+  }
+
+  async waitForCloudDrain(generation, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (
+      this.allPendingCloudRequests(generation).length > 0 &&
+      Date.now() < deadline &&
+      !this.shuttingDown
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return this.allPendingCloudRequests(generation);
+  }
+
+  async endClient(candidate, timeoutMs = 2000) {
+    if (!candidate) return;
+    candidate.removeAllListeners();
+    if (typeof candidate.endAsync === "function") {
+      let timer;
+      try {
+        await Promise.race([
+          candidate.endAsync(true),
+          new Promise((resolve) => {
+            timer = setTimeout(resolve, timeoutMs);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    } else {
+      candidate.end(true);
+    }
+  }
+
+  reconnectAndWaitReady(options = {}) {
+    if (this.reconnectInProgress) return this.reconnectInProgress;
+    const operation = this.performReconnect(options);
+    this.reconnectInProgress = operation;
+    void operation
+      .finally(() => {
+        if (this.reconnectInProgress === operation)
+          this.reconnectInProgress = null;
+      })
+      .catch(() => undefined);
+    return operation;
+  }
+
+  async performReconnect({
+    reason = "unspecified",
+    mode = "recovery",
+    drainTimeoutMs = 500,
+    connectTimeoutMs = 10000,
+    subscribeTimeoutMs = 10000,
+    force = false,
+  } = {}) {
+    if (this.shuttingDown) {
+      throw new MqttReadinessError(
+        "MQTT reconnect was requested during shutdown.",
+        "MQTT_SHUTTING_DOWN"
+      );
+    }
+    const now = Date.now();
+    if (!force && now < this.nextReconnectAllowedAt) {
+      throw new MqttReadinessError(
+        `MQTT reconnect cooldown remains active for ${this.nextReconnectAllowedAt - now}ms.`,
+        "MQTT_RECONNECT_COOLDOWN"
+      );
+    }
+
+    const startedAt = now;
+    const oldGeneration = this.sessionGeneration;
+    const oldClient = this.client;
+    this.lastReconnectAttemptAt = now;
+    this.connected = false;
+    this.transitionSessionState("draining", reason);
+    const counts = this.allPendingCloudRequests(oldGeneration).reduce(
+      (value, [, request]) => {
+        value[request.operationClass === "write" ? "writes" : "reads"] += 1;
+        return value;
+      },
+      { reads: 0, writes: 0 }
+    );
+    this.adapter.log.info(
+      `MQTT generation ${oldGeneration} entering ${mode}: reason=${reason}; pendingCloudReads=${counts.reads}; pendingCloudWrites=${counts.writes}.`
+    );
+
+    try {
+      const remaining = await this.waitForCloudDrain(
+        oldGeneration,
+        drainTimeoutMs
+      );
+      if (this.shuttingDown) {
+        throw new MqttReadinessError(
+          "MQTT reconnect was cancelled by shutdown.",
+          "MQTT_SHUTTING_DOWN"
+        );
+      }
+      if (mode === "preventive" && remaining.length > 0) {
+        this.connected = this.socketConnected && this.subscriptionReady;
+        this.transitionSessionState(
+          this.connected ? "ready" : "disconnected",
+          "preventive-request-pending"
+        );
+        this.resolveReadinessWaiters(oldGeneration);
+        return {
+          generation: oldGeneration,
+          connected: this.connected,
+          subscriptionAcknowledged: this.subscriptionReady,
+          oldCloudRequestsRejected: 0,
+          durationMs: Date.now() - startedAt,
+          skipped: true,
+        };
+      }
+
+      const rejected =
+        mode === "recovery"
+          ? this.rejectGenerationCloudRequests(oldGeneration)
+          : 0;
+      this.transitionSessionState("reconnecting", reason);
+      await this.endClient(oldClient);
+      this.subscriptionTimeoutMs = subscribeTimeoutMs;
+      this.createClient();
+      const generation = await this.waitUntilReady({
+        timeoutMs: connectTimeoutMs + subscribeTimeoutMs,
+      });
+      this.lastReconnectSucceededAt = Date.now();
+      this.consecutiveReconnectFailures = 0;
+      this.nextReconnectAllowedAt = 0;
+      this.adapter.log.info(
+        `MQTT generation ${generation} recovery completed in ${Date.now() - startedAt}ms; subscriptionAcknowledged=true; oldCloudRequestsRejected=${rejected}.`
+      );
+      return {
+        generation,
+        connected: true,
+        subscriptionAcknowledged: true,
+        oldCloudRequestsRejected: rejected,
+        durationMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      this.lastReconnectFailureAt = Date.now();
+      this.consecutiveReconnectFailures += 1;
+      this.nextReconnectAllowedAt =
+        Date.now() +
+        this.reconnectCooldownMs * this.consecutiveReconnectFailures;
+      this.rejectReadinessWaiters(error);
+      try {
+        await this.endClient(this.client);
+      } catch (cleanupError) {
+        this.adapter.log.debug(
+          `MQTT reconnect cleanup failed: ${cleanupError?.message || cleanupError}.`
+        );
+      }
+      if (!this.shuttingDown) this.markNotReady("reconnect-failed");
+      throw error;
+    }
+  }
+
   /**
    * Close the MQTT session on shutdown.
    *
@@ -786,6 +1101,12 @@ class roborock_mqtt_connector {
     this.socketConnected = false;
     this.connected = false;
     this.transitionSessionState("shutting-down", "shutdown");
+    const shutdownError = new MqttReadinessError(
+      "MQTT session shut down.",
+      "MQTT_SHUTTING_DOWN"
+    );
+    this.rejectReadinessWaiters(shutdownError);
+    this.rejectGenerationCloudRequests(this.sessionGeneration);
     if (!this.client) {
       return;
     }
@@ -837,46 +1158,31 @@ class roborock_mqtt_connector {
       return false;
     }
 
-    await this.reconnectClient(true);
+    await this.reconnectClient(false);
     return true;
   }
 
   async reconnectClient(force = false) {
-    if (this.client) {
-      try {
-        if (!force && this.connected) {
-          this.adapter.log.debug(
-            "MQTT reconnect skipped because client is already connected."
-          );
-          return false;
-        }
-
-        this.adapter.log.info("Reconnecting mqtt client!");
-        // Force the teardown. An unforced `end()` waits for mqtt.js to emit
-        // `outgoingEmpty` before it will finish, and a link that has just
-        // died still holds unacknowledged messages — so on the only path
-        // this function is ever called from, that event never arrives.
-        // `end()` then never completes, `disconnecting` stays true, and
-        // `reconnect()` declines to act in that state. The latch is
-        // self-sustaining, because every later `end()` short-circuits on the
-        // same flag: the hourly retry becomes a silent no-op and the account
-        // stays offline until the process restarts. Measured in the field on
-        // 25 Aug 2026 — 1070 consecutive status failures, 1 h 44 min of them
-        // after the network was healthy, three retries that did nothing, and
-        // an instant recovery on the same session once the child bridge was
-        // restarted.
-        await this.client.endAsync(true);
-        this.client.reconnect();
-        return true;
-      } catch (error) {
-        this.adapter.catchError(
-          `Failed to reconnect with error: ${error}`,
-          `reconnectClient`
-        );
-      }
+    if (!force && this.isReady()) {
+      this.adapter.log.debug(
+        "MQTT reconnect skipped because client is already ready."
+      );
+      return false;
     }
-
-    return false;
+    try {
+      await this.reconnectAndWaitReady({
+        reason: "connectivity-check",
+        mode: "recovery",
+        force,
+      });
+      return true;
+    } catch (error) {
+      this.adapter.catchError(
+        `Failed to reconnect with error: ${error}`,
+        `reconnectClient`
+      );
+      return false;
+    }
   }
 }
 

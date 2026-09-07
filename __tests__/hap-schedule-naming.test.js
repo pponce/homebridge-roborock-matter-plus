@@ -377,6 +377,7 @@ describe("HAP schedule names and stable group identity", () => {
         [["timer-complex", "on"]],
         {
           requestTimeoutMs: 10000,
+          operationClass: "write",
           preferCloud: true,
           waitForResult: true,
           throwOnError: true,

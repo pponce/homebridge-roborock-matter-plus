@@ -2239,6 +2239,18 @@ class Roborock {
   }
 
   /**
+   * Account-scoped MQTT recovery facade used by transaction owners. Keeping
+   * the connector behind this narrow method prevents schedule code from
+   * reaching into transport lifecycle details.
+   */
+  async recoverMqttSession(options = {}) {
+    if (this.stopped) {
+      throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
+    }
+    return this.rr_mqtt_connector.reconnectAndWaitReady(options);
+  }
+
+  /**
    * Schedule a debounced disk flush for a chatty persisted state. The
    * in-memory copy is already current; the trailing flush (unref'd so it
    * never keeps the process alive) writes the LATEST value at most once
@@ -5867,6 +5879,10 @@ class Roborock {
       return existing.promise;
     }
 
+    const sessionGeneration = this.rr_mqtt_connector.waitUntilReady
+      ? await this.rr_mqtt_connector.waitUntilReady({ timeoutMs: 10000 })
+      : this.rr_mqtt_connector.getSessionGeneration?.();
+
     const messageID = b01Q7Adapter.createB01MessageId();
     const timestamp = Math.floor(Date.now() / 1000);
     const payload = await this.message.buildPayload(
@@ -5892,22 +5908,33 @@ class Roborock {
 
     let entry;
     const promise = new Promise((resolve, reject) => {
-      const timeout = this.setTimeout(() => {
-        this.pendingB01MapRequests.delete(duid);
-        reject(
-          new Error(
-            `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
-          )
-        );
-      }, 20000);
-      if (typeof timeout?.unref === "function") {
-        timeout.unref();
-      }
-      entry = { resolve, reject, timeout };
+      entry = {
+        resolve,
+        reject,
+        timeout: null,
+        duid,
+        transport: "cloud",
+        operationClass: "secure-map",
+        sessionGeneration,
+        method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD,
+        publishedAt: null,
+      };
     });
     entry.promise = promise;
     this.pendingB01MapRequests.set(duid, entry);
     this.rr_mqtt_connector.sendMessage(duid, roborockMessage);
+    entry.publishedAt = Date.now();
+    entry.timeout = this.setTimeout(() => {
+      this.pendingB01MapRequests.delete(duid);
+      entry.reject(
+        new Error(
+          `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
+        )
+      );
+    }, 20000);
+    if (typeof entry.timeout?.unref === "function") {
+      entry.timeout.unref();
+    }
     return promise;
   }
 
