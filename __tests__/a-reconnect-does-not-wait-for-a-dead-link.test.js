@@ -59,6 +59,8 @@ function makeAdapter() {
       error: jest.fn(),
     },
     catchError: jest.fn(),
+    pendingRequests: new Map(),
+    clearTimeout,
   };
 }
 
@@ -68,6 +70,7 @@ function makeAdapter() {
  * nothing left in the outgoing queue.
  */
 function makeClient({ outgoingMessages = 1 } = {}) {
+  const handlers = new Map();
   const client = {
     outgoing: {},
     tornDown: false,
@@ -102,11 +105,19 @@ function makeClient({ outgoingMessages = 1 } = {}) {
       return this;
     },
 
-    on() {
+    on(event, handler) {
+      handlers.set(event, handler);
+      if (event === "connect") {
+        queueMicrotask(() => handler({ sessionPresent: false }));
+      }
       return this;
     },
-    subscribe() {
+    subscribe(topic, callback) {
+      queueMicrotask(() => callback(null, [{ topic, qos: 1 }]));
       return this;
+    },
+    removeAllListeners() {
+      handlers.clear();
     },
   };
 
@@ -123,34 +134,48 @@ describe("a reconnect does not wait for a dead link", () => {
   });
 
   test("tears the client down even when the outgoing queue can never drain", async () => {
-    const client = makeClient({ outgoingMessages: 3 });
-    mqtt.connect.mockReturnValue(client);
+    const clients = [];
+    mqtt.connect.mockImplementation(() => {
+      const client = makeClient({ outgoingMessages: 3 });
+      clients.push(client);
+      return client;
+    });
 
     const connector = new roborock_mqtt_connector(makeAdapter());
     await connector.initUser(USERDATA);
+    await Promise.resolve();
+    await Promise.resolve();
 
     await connector.reconnectClient(true);
 
-    expect(client.stillWaitingToDrain).toBe(false);
-    expect(client.tornDown).toBe(true);
-    expect(client.reconnectCalls).toBe(1);
+    expect(clients[0].stillWaitingToDrain).toBe(false);
+    expect(clients[0].tornDown).toBe(true);
+    expect(clients).toHaveLength(2);
+    expect(connector.getSessionGeneration()).toBe(2);
   });
 
   test("a second attempt still does real work instead of silently doing nothing", async () => {
-    const client = makeClient({ outgoingMessages: 2 });
-    mqtt.connect.mockReturnValue(client);
+    const clients = [];
+    mqtt.connect.mockImplementation(() => {
+      const client = makeClient({ outgoingMessages: 2 });
+      clients.push(client);
+      return client;
+    });
 
     const connector = new roborock_mqtt_connector(makeAdapter());
     await connector.initUser(USERDATA);
+    await Promise.resolve();
+    await Promise.resolve();
 
     await connector.reconnectClient(true);
-    client.tornDown = false;
     await connector.reconnectClient(true);
 
     // The field symptom was an hourly retry that had become a no-op: the
     // connection stayed down for as long as the process lived.
-    expect(client.tornDown).toBe(true);
-    expect(client.reconnectCalls).toBe(2);
+    expect(clients[0].tornDown).toBe(true);
+    expect(clients[1].tornDown).toBe(true);
+    expect(clients).toHaveLength(3);
+    expect(connector.getSessionGeneration()).toBe(3);
   });
 
   test("mqtt.js still refuses to finish an unforced end while messages are queued", () => {

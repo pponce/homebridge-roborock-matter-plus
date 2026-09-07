@@ -1865,6 +1865,10 @@ class RoborockHapScheduleSwitchAccessory {
 
   private schedule: RoborockSchedule;
   private disposed = false;
+  // Home may repeat the same set while the first request is still waiting for
+  // cloud acknowledgement/reconciliation. Keep the requested presentation
+  // immediate, but do not turn those repeated UI taps into duplicate writes.
+  private pendingCommand: { enabled: boolean; token: symbol } | undefined;
 
   constructor(
     private readonly platform: RoborockPlatform,
@@ -1971,6 +1975,7 @@ class RoborockHapScheduleSwitchAccessory {
 
   dispose(): void {
     this.disposed = true;
+    this.pendingCommand = undefined;
     this.suppression.clear();
     this.failedCommands.clear();
   }
@@ -1979,6 +1984,13 @@ class RoborockHapScheduleSwitchAccessory {
     const previous = this.schedule.enabled;
     const now = Date.now();
     const last = this.suppression.get(this.scheduleId);
+
+    if (this.pendingCommand?.enabled === enabled) {
+      // Reassert the optimistic value in case a controller refreshed its stale
+      // copy while the original command was still being reconciled.
+      this.presentScheduleState(enabled);
+      return;
+    }
 
     if (
       last &&
@@ -1999,6 +2011,10 @@ class RoborockHapScheduleSwitchAccessory {
       return;
     }
 
+    const command = { enabled, token: Symbol("schedule-command") };
+    this.pendingCommand = command;
+    this.presentScheduleState(enabled);
+
     try {
       this.platform.log.info(
         `Schedule command: queueing ${enabled ? "enable" : "disable"} for ${this.duid}/${this.scheduleId}.`
@@ -2009,27 +2025,30 @@ class RoborockHapScheduleSwitchAccessory {
       );
 
       if (!executed) {
+        if (this.pendingCommand?.token === command.token) {
+          this.presentScheduleState(previous);
+        }
         return;
       }
 
-      if (this.disposed) {
+      if (this.disposed || this.pendingCommand?.token !== command.token) {
         return;
       }
 
-      this.schedule.enabled = enabled;
-      this.schedule.timer[1] = enabled ? "on" : "off";
       this.failedCommands.delete(this.scheduleId);
       this.suppression.set(this.scheduleId, {
         enabled,
         timestamp: Date.now(),
       });
-      this.updateService(enabled);
+      this.presentScheduleState(enabled);
     } catch (error) {
       if (this.disposed) {
         return;
       }
 
-      this.updateService(previous);
+      if (this.pendingCommand?.token === command.token) {
+        this.presentScheduleState(previous);
+      }
 
       this.failedCommands.set(this.scheduleId, {
         enabled,
@@ -2043,7 +2062,18 @@ class RoborockHapScheduleSwitchAccessory {
           `Further attempts for this same state are suppressed for ` +
           `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`
       );
+    } finally {
+      if (this.pendingCommand?.token === command.token) {
+        this.pendingCommand = undefined;
+      }
     }
+  }
+
+  private presentScheduleState(enabled: boolean): void {
+    this.schedule.enabled = enabled;
+    this.schedule.timer[1] = enabled ? "on" : "off";
+    this.coordinator.recordScheduleUpdate(this.schedule);
+    this.updateService(enabled);
   }
 
   private updateService(enabled: boolean): void {

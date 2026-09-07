@@ -98,7 +98,7 @@ describe("the secure flag reaches the pending request", () => {
     // without it every secure request would resolve on its ack and the 301
     // payload would arrive with nobody waiting.
     expect(source).toMatch(
-      /pendingRequests\.set\(\s*messageID,\s*\{[^}]*\bsecure\b/s
+      /const pendingRequest = \{[^}]*\bsecure\b[^}]*\};\s*this\.adapter\.pendingRequests\.set\(messageID, pendingRequest\)/s
     );
   });
 });
