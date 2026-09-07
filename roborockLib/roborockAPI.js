@@ -2238,7 +2238,11 @@ class Roborock {
       // mid-shutdown reads it as already set.
       this.stopped = true;
       this.flushPendingPersistedStates();
-      await this.clearTimersAndIntervals();
+      // This helper is synchronous. Do not await it: Homebridge's SHUTDOWN
+      // event is not an awaited lifecycle hook, so even a resolved-value await
+      // would defer transport teardown to a later microtask. Close MQTT and
+      // local sockets in the same turn in which shutdown is announced.
+      this.clearTimersAndIntervals();
       // Timers were the only thing shutdown used to stop. Both transports
       // stayed open, so frames kept arriving into disposed accessories and
       // the process could only ever be killed rather than exit.

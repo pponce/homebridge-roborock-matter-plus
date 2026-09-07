@@ -1660,7 +1660,7 @@ class RoborockHapRoutineSwitch {
             // when there is no schedule switch to prompt a refresh.
             void this.coordinator.refreshIfNeeded();
             return false;
-        }).onSet((value) => this.handlePress(Boolean(value)));
+        }).onSet((value) => this.acceptPress(Boolean(value)));
         // Whatever the cache remembered, a momentary switch starts off.
         service.updateCharacteristic(this.platform.Characteristic.On, false);
     }
@@ -1696,6 +1696,14 @@ class RoborockHapRoutineSwitch {
             (0, timers_1.clearTimer)(this.resetTimer);
             this.resetTimer = undefined;
         }
+    }
+    /** A Routine switch acknowledges the momentary press immediately. */
+    acceptPress(value) {
+        void this.handlePress(value).catch((error) => {
+            // runRoutine owns expected cloud errors. Keep an unexpected background
+            // failure from becoming an unhandled rejection after HAP was answered.
+            this.platform.log.warn(`Unable to accept Roborock routine "${this.displayName}": ${error instanceof Error ? error.message : String(error)}`);
+        });
     }
     async handlePress(value) {
         if (!value || this.disposed) {

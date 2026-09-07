@@ -92,10 +92,15 @@ describe("shutdown actually stops things", () => {
       reject: (error) => rejected.push(error.message),
     });
 
-    await api.stopService();
+    const stopping = api.stopService();
 
+    // APIEvent.SHUTDOWN does not await listeners. Transport close must begin
+    // before stopService returns its promise, not in a later microtask.
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(destroyAllClients).toHaveBeenCalledTimes(1);
+
+    await stopping;
+
     expect(rejected).toEqual(["Homebridge is shutting down."]);
     expect(api.pendingRequests.size).toBe(0);
     expect(api.bInited).toBe(false);
