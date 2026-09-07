@@ -2,6 +2,9 @@
 
 const RoborockHapScheduleAccessory =
   require("../src/hap_schedule_accessory.ts").default;
+const {
+  isRecoverableScheduleCloudFailure,
+} = require("../src/hap_schedule_accessory.ts");
 
 const Characteristic = {
   Name: "Name",
@@ -138,6 +141,64 @@ function switchService(accessory, id) {
 }
 
 describe("HAP schedule names and stable group identity", () => {
+  test("classifies only silent cloud timeouts and replaced writes for recovery", () => {
+    expect(
+      isRecoverableScheduleCloudFailure(
+        new Error(
+          "Cloud request with id 7 with method get_server_timer timed out after 10 seconds. No Roborock message reached the plugin"
+        )
+      )
+    ).toBe(true);
+    expect(
+      isRecoverableScheduleCloudFailure(
+        Object.assign(new Error("replaced"), {
+          code: "MQTT_SESSION_REPLACED",
+          ambiguousWrite: true,
+        })
+      )
+    ).toBe(true);
+    expect(isRecoverableScheduleCloudFailure(new Error("invalid params"))).toBe(
+      false
+    );
+    expect(
+      isRecoverableScheduleCloudFailure(
+        Object.assign(new Error("Too many requests"), { status: 429 })
+      )
+    ).toBe(false);
+  });
+
+  test("a schedule switch presents the requested state while verification is pending", async () => {
+    const platform = makePlatform();
+    let finishWrite;
+    const pendingWrite = new Promise((resolve) => {
+      finishWrite = resolve;
+    });
+    platform.roborockAPI = {
+      getServerTimers: jest.fn(),
+      vacuums: {
+        "device-1": {
+          command: jest.fn(() => pendingWrite),
+        },
+      },
+    };
+
+    const accessory = new FakeAccessory("Test Vacuum Schedules");
+    const coordinator = makeCoordinator(platform, accessory);
+    coordinator.sync([schedule("timer-1", true)]);
+    const characteristic = switchService(
+      accessory,
+      "timer-1"
+    ).getCharacteristic(Characteristic.On);
+
+    const setting = characteristic.setHandler(false);
+
+    expect(characteristic.value).toBe(false);
+
+    coordinator.stopRuntime();
+    finishWrite("ok");
+    await setting;
+  });
+
   test("multiple schedules cannot overwrite their shared group identity", () => {
     const platform = makePlatform();
     const accessory = new FakeAccessory("Test Vacuum Schedules");
@@ -654,6 +715,87 @@ describe("HAP schedule names and stable group identity", () => {
         switchService(accessory, "timer-2").getCharacteristic(Characteristic.On)
           .value
       ).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("an ambiguous write reconnects once and is not repeated when read-back shows it applied", async () => {
+    jest.useFakeTimers();
+
+    try {
+      const platform = makePlatform();
+      const timeout = new Error(
+        "Cloud request with id 7 with method upd_server_timer timed out after 10 seconds. No Roborock message reached the plugin"
+      );
+      const command = jest.fn().mockRejectedValue(timeout);
+      const recoverMqttSession = jest.fn().mockResolvedValue({ generation: 2 });
+      platform.roborockAPI = {
+        getServerTimers: jest
+          .fn()
+          .mockResolvedValueOnce([["timer-1", "off"]])
+          .mockResolvedValueOnce([["timer-1", "on"]]),
+        recoverMqttSession,
+        vacuums: { "device-1": { command } },
+      };
+
+      const accessory = new FakeAccessory("Test Vacuum Schedules");
+      const coordinator = makeCoordinator(platform, accessory);
+      coordinator.sync([schedule("timer-1", false)]);
+
+      const setting = switchService(accessory, "timer-1")
+        .getCharacteristic(Characteristic.On)
+        .setHandler(true);
+
+      await jest.advanceTimersByTimeAsync(3500);
+      await setting;
+
+      expect(recoverMqttSession).toHaveBeenCalledTimes(1);
+      expect(command).toHaveBeenCalledTimes(1);
+      expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(2);
+      expect(platform.log.info).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Schedule recovery batch: requested=1; primaryAcked=0; ambiguous=1; reconnectGeneration=2; alreadyAppliedAfterReconnect=1; retried=0; finalConfirmed=1; failed=0."
+        )
+      );
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test("a silent verification timeout reconnects once before accepting the confirmed write", async () => {
+    jest.useFakeTimers();
+
+    try {
+      const platform = makePlatform();
+      const timeout = new Error(
+        "Cloud request with id 8 with method get_server_timer timed out after 10 seconds. No Roborock message reached the plugin"
+      );
+      const command = jest.fn().mockResolvedValue("ok");
+      const recoverMqttSession = jest.fn().mockResolvedValue({ generation: 2 });
+      platform.roborockAPI = {
+        getServerTimers: jest
+          .fn()
+          .mockRejectedValueOnce(timeout)
+          .mockResolvedValueOnce([["timer-1", "on"]]),
+        recoverMqttSession,
+        vacuums: { "device-1": { command } },
+      };
+
+      const accessory = new FakeAccessory("Test Vacuum Schedules");
+      const coordinator = makeCoordinator(platform, accessory);
+      coordinator.sync([schedule("timer-1", false)]);
+
+      const setting = switchService(accessory, "timer-1")
+        .getCharacteristic(Characteristic.On)
+        .setHandler(true);
+
+      await jest.advanceTimersByTimeAsync(3500);
+      await setting;
+
+      expect(recoverMqttSession).toHaveBeenCalledTimes(1);
+      expect(command).toHaveBeenCalledTimes(1);
+      expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(2);
     } finally {
       jest.useRealTimers();
     }
