@@ -177,6 +177,7 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
 /**
  * @typedef {Object} MqttConnector
  * @property {() => boolean} isConnected
+ * @property {(duid?: string) => Record<string, unknown>} [getSessionHealthSnapshot]
  * @property {(duid: string, message: Buffer) => void} sendMessage
  */
 
@@ -541,9 +542,11 @@ class messageQueueHandler {
             this.adapter.pendingRequests.delete(messageID);
             this.adapter.localConnector.clearChunkBuffer(duid);
             if (useCloudConnection) {
+              const sessionHealth =
+                this.adapter.rr_mqtt_connector.getSessionHealthSnapshot?.(duid);
               reject(
                 new Error(
-                  `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${mqttConnectionState}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`
+                  `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${mqttConnectionState}${sessionHealth ? `; session health: ${JSON.stringify(sessionHealth)}` : ""}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`
                 )
               );
             } else {
