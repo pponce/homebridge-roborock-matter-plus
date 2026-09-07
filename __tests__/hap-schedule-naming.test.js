@@ -484,6 +484,7 @@ describe("HAP schedule names and stable group identity", () => {
         onCharacteristic.setHandler(false),
       ];
 
+      expect(presses).toEqual([undefined, undefined, undefined, undefined]);
       expect(onCharacteristic.value).toBe(false);
       expect(
         platform.log.info.mock.calls.filter(([message]) =>
@@ -492,7 +493,6 @@ describe("HAP schedule names and stable group identity", () => {
       ).toHaveLength(1);
 
       await jest.advanceTimersByTimeAsync(4000);
-      await Promise.all(presses);
 
       expect(command).toHaveBeenCalledTimes(1);
       expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(1);
@@ -533,8 +533,9 @@ describe("HAP schedule names and stable group identity", () => {
       const second = onCharacteristic.setHandler(false);
       const final = onCharacteristic.setHandler(true);
 
+      expect([first, second, final]).toEqual([undefined, undefined, undefined]);
+
       await jest.advanceTimersByTimeAsync(3500);
-      await Promise.all([first, second, final]);
 
       expect(command).toHaveBeenCalledTimes(1);
       expect(command).toHaveBeenCalledWith(
@@ -591,8 +592,8 @@ describe("HAP schedule names and stable group identity", () => {
       await jest.advanceTimersByTimeAsync(1);
       expect(command).toHaveBeenCalledTimes(2);
 
+      expect([first, second]).toEqual([undefined, undefined]);
       await jest.advanceTimersByTimeAsync(3000);
-      await Promise.all([first, second]);
 
       expect(command).toHaveBeenCalledTimes(2);
       expect(command.mock.calls.map((call) => call[2])).toEqual([
@@ -634,13 +635,9 @@ describe("HAP schedule names and stable group identity", () => {
       const second = switchService(accessory, "timer-2")
         .getCharacteristic(Characteristic.On)
         .setHandler(true);
-      const settled = Promise.allSettled([first, second]);
+      expect([first, second]).toEqual([undefined, undefined]);
 
       await jest.advanceTimersByTimeAsync(500);
-      await expect(settled).resolves.toEqual([
-        { status: "rejected", reason: throttle },
-        { status: "rejected", reason: throttle },
-      ]);
 
       expect(command).toHaveBeenCalledTimes(1);
       expect(platform.roborockAPI.getServerTimers).not.toHaveBeenCalled();
@@ -703,8 +700,8 @@ describe("HAP schedule names and stable group identity", () => {
         expect.objectContaining({ preferCloud: true, waitForResult: true })
       );
 
+      expect([first, second]).toEqual([undefined, undefined]);
       await jest.advanceTimersByTimeAsync(3000);
-      await Promise.all([first, second]);
 
       expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(2);
       expect(platform.log.info).toHaveBeenCalledWith(
@@ -837,13 +834,9 @@ describe("HAP schedule names and stable group identity", () => {
       const second = switchService(accessory, "timer-2")
         .getCharacteristic(Characteristic.On)
         .setHandler(true);
-      const settled = Promise.allSettled([first, second]);
+      expect([first, second]).toEqual([undefined, undefined]);
 
       await jest.advanceTimersByTimeAsync(4000);
-      await expect(settled).resolves.toEqual([
-        { status: "rejected", reason: primaryFailure },
-        { status: "fulfilled", value: undefined },
-      ]);
 
       expect(command).toHaveBeenCalledTimes(2);
       expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(1);

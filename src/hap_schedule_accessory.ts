@@ -2096,7 +2096,7 @@ class RoborockHapScheduleSwitchAccessory {
 
     service
       .getCharacteristic(this.platform.Characteristic.On)
-      .onSet((value) => this.setSchedule(Boolean(value)))
+      .onSet((value) => this.acceptScheduleChange(Boolean(value)))
       .onGet(() => {
         void this.coordinator.refreshIfNeeded();
         return this.schedule.enabled;
@@ -2151,6 +2151,22 @@ class RoborockHapScheduleSwitchAccessory {
     this.pendingCommand = undefined;
     this.suppression.clear();
     this.failedCommands.clear();
+  }
+
+  /**
+   * A HomeKit write must be acknowledged immediately. Roborock's cloud write
+   * and read-back verification can take several seconds, and returning that
+   * promise from `onSet` makes Home keep the tile in its pending state for the
+   * entire round trip. Present the requested value synchronously, start the
+   * durable write in the background, and let `setSchedule` roll the value back
+   * (and log the reason) if Roborock ultimately refuses or cannot confirm it.
+   */
+  private acceptScheduleChange(enabled: boolean): void {
+    void this.setSchedule(enabled).catch(() => {
+      // setSchedule has already restored the characteristic and logged the
+      // actionable error. Consume the background rejection so it cannot turn
+      // into an unhandled promise rejection after HomeKit was acknowledged.
+    });
   }
 
   private async setSchedule(enabled: boolean): Promise<void> {
