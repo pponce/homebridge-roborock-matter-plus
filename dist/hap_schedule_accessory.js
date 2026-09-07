@@ -1455,6 +1455,7 @@ class RoborockHapScheduleSwitchAccessory {
             this.platform.log.warn(`Unable to ${enabled ? "enable" : "disable"} Roborock schedule ${this.scheduleId}: ${message}. ` +
                 `Further attempts for this same state are suppressed for ` +
                 `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`);
+            throw error;
         }
         finally {
             if (((_e = this.pendingCommand) === null || _e === void 0 ? void 0 : _e.token) === command.token) {
