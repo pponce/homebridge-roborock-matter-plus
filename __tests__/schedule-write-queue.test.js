@@ -137,7 +137,7 @@ describe("account-wide schedule coordination", () => {
       throttleAvoidedOperations: 1,
     });
     expect(coordinator.policyDescription()).toContain(
-      "cache=10m; batchWindow=500ms; writeSpacing=500ms; throttleCooldown=65m"
+      "cache=5m; batchWindow=500ms; writeSpacing=500ms; throttleCooldown=65m"
     );
   });
 });
