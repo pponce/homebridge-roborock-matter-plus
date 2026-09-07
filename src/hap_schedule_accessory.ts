@@ -2241,6 +2241,7 @@ class RoborockHapScheduleSwitchAccessory {
           `Further attempts for this same state are suppressed for ` +
           `${RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS / 1000}s.`
       );
+      throw error;
     } finally {
       if (this.pendingCommand?.token === command.token) {
         this.pendingCommand = undefined;
