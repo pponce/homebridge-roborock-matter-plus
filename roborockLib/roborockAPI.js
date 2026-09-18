@@ -26,6 +26,7 @@ const {
   parseCloudSceneSchedules,
 } = require("./lib/parseCloudSceneSchedules");
 const b01Q7Adapter = require("./lib/b01Q7Adapter");
+const { UnansweredMethodBreaker } = require("./lib/unansweredMethodBreaker");
 
 // v1 states in which the robot is actively doing something and state
 // transitions are imminent (cleaning, returning, spot/zone/segment runs,
@@ -523,6 +524,10 @@ class Roborock {
     this.skippedDialectPolls = new Set();
     /** @type {Map<string, number>} duid -> when its slow lane last ran */
     this.lastSlowParameterPollAt = new Map();
+    // One register for "this robot has stopped answering this request", so a
+    // silent method costs 4 requests a day instead of 8,640. See
+    // lib/unansweredMethodBreaker.js for the measurements behind it.
+    this.unansweredMethods = new UnansweredMethodBreaker();
     this.baseURL = options.baseURL || "usiot.roborock.com";
 
     this.userData = options.userData || null;
@@ -3396,7 +3401,70 @@ class Roborock {
       return undefined;
     }
 
-    return vacuum.getParameter(duid, method);
+    if (this.unansweredMethods.shouldSkip(duid, method)) {
+      return undefined;
+    }
+
+    try {
+      const answer = await vacuum.getParameter(duid, method);
+      this.noteMethodAnswered(duid, method);
+      return answer;
+    } catch (error) {
+      this.noteMethodUnanswered(duid, method, error);
+      throw error;
+    }
+  }
+
+  /**
+   * A request answered: clear its silence, and say so if it had been left
+   * alone.
+   *
+   * @param {string} duid
+   * @param {string} method
+   * @returns {void}
+   */
+  noteMethodAnswered(duid, method) {
+    if (this.unansweredMethods.recordAnswer(duid, method)) {
+      this.log.info(
+        `${this.describeDevice(duid)} answers ${method} again; it is back in the normal poll cycle.`
+      );
+    }
+  }
+
+  /**
+   * A request drew no answer. Counted per robot per method; once it is
+   * conclusive the method is left alone for a while and said so once.
+   *
+   * @param {string} duid
+   * @param {string} method
+   * @param {unknown} error
+   * @returns {boolean} whether the breaker opened on this failure
+   */
+  noteMethodUnanswered(duid, method, error) {
+    const outcome = this.unansweredMethods.recordFailure(duid, method, error);
+    if (!outcome.opened) {
+      return false;
+    }
+
+    const hours = Math.round(outcome.retryInMs / (60 * 60 * 1000));
+    // Into the diagnostics report too: "this robot stopped answering X" is
+    // exactly the kind of fact a pasted report should carry, and it is
+    // otherwise only visible in a log line that scrolled past hours ago.
+    void this.updateRoborockDiagnostics(String(duid), "unansweredMethods", {
+      recordedAt: new Date().toISOString(),
+      open: this.unansweredMethods
+        .describeOpen()
+        .filter((entry) => entry.duid === duid)
+        .map((entry) => ({
+          method: entry.method,
+          failures: entry.failures,
+          retryInMinutes: Math.round(entry.retryInMs / 60000),
+        })),
+    });
+    this.log.info(
+      `${this.describeDevice(duid)} has not answered ${method} ${outcome.failures} times in a row, so the plugin stops asking for about ${hours} hour(s) and then tries once more. Everything else about this robot is unaffected, and one answer puts it straight back in the normal cycle. This is the robot or the Roborock cloud declining to reply, not a connection failure — those are reported separately.`
+    );
+    return true;
   }
 
   startMainUpdateInterval(duid, online) {
@@ -3607,6 +3675,21 @@ class Roborock {
           vacuum.getStatusIntervalHandle = null;
           vacuum.mainUpdateIntervalHandle = null;
         } else if (onlineState && !vacuum.mainUpdateIntervalHandle) {
+          // A robot that has just come back starts with clean counters.
+          // Without this, `forgetDevice` had no call site at all: a robot
+          // that was offline for hours kept the no-answer counts it collected
+          // while it was unreachable, and because `shouldSkip` deliberately
+          // KEEPS the counter when it lets one request through, a single
+          // probe timing out during the reconnect — likely, while the robot
+          // is still booting and its MQTT session re-establishing — closed
+          // the method for another six hours. Coming back online is exactly
+          // the moment the old evidence stops meaning anything.
+          const forgotten = this.unansweredMethods.forgetDevice(duid);
+          if (forgotten > 0) {
+            this.log.debug(
+              `${this.describeDevice(duid)} is back online; forgetting ${forgotten} unanswered-request counter(s) so it starts from a clean slate.`
+            );
+          }
           vacuum.getStatusIntervall();
           this.startMainUpdateInterval(duid, onlineState);
         }
@@ -3790,8 +3873,14 @@ class Roborock {
     // it run behind the tile instead of in front of it. Only a robot the
     // plugin has never seen rooms for is worth waiting on.
     const refresh = async () => {
-      await vacuum.getParameter(duid, "get_multi_maps_list");
-      await vacuum.getParameter(duid, "get_room_mapping");
+      // Through pollParameter, not straight to getParameter. These two were
+      // the only polls outside the register, and they are two of the seven
+      // methods named in the 647 suppressed timeouts in #22/#24 — so the one
+      // robot whose numbers motivated the rule was still being asked these
+      // two every cycle regardless. `isB01` is false here: this branch is the
+      // classic path, and the B01 branch above has its own.
+      await this.pollParameter(duid, vacuum, "get_multi_maps_list", false);
+      await this.pollParameter(duid, vacuum, "get_room_mapping", false);
       await this.cacheMissingMatterServiceAreaRoomMappings(duid, vacuum);
     };
 
@@ -3846,7 +3935,7 @@ class Roborock {
 
         try {
           if (map.mapId === originalMapId) {
-            await vacuum.getParameter(duid, "get_room_mapping");
+            await this.pollParameter(duid, vacuum, "get_room_mapping", false);
           } else {
             this.log.info(
               `Loading Roborock map '${map.name}' for ${this.describeDevice(duid)} to cache Matter Service Area rooms.`
@@ -6063,6 +6152,19 @@ class Roborock {
     ) {
       return liveState.current;
     }
+    // A robot that has stopped answering the map request is not asked again
+    // every ten seconds of every clean. Measured before this existed: 95
+    // failures in a row on my own a70, 225 twelve days earlier, 40 on the
+    // a75 in #9.
+    if (
+      this.unansweredMethods.shouldSkip(duid, "get_map_list") ||
+      this.unansweredMethods.shouldSkip(
+        duid,
+        b01Q7Adapter.B01_MAP_UPLOAD_METHOD
+      )
+    ) {
+      return liveState.current;
+    }
     liveState.lastAttemptAt = Date.now();
 
     liveState.inflight = (async () => {
@@ -6072,12 +6174,32 @@ class Roborock {
           "get_map_list",
           {}
         );
+        // Acknowledge THIS request here, not at the bottom. Until 3.31.0 the
+        // acknowledgement sat after the map upload, the decode and a cache
+        // write, so a robot that answered get_map_list in 200 ms never had
+        // its counter reset while the heavy upload leg was silent.
+        this.noteMethodAnswered(duid, "get_map_list");
         const mapId = b01Q7Adapter.findCurrentMapId(mapListData);
         if (mapId === null) {
           return liveState.current;
         }
 
-        const rawPayload = await this.sendB01MapRequest(duid, mapId);
+        // And count the second leg on its own. `sendB01MapRequest` has its
+        // own 20-second timeout and its own method on the wire; recording it
+        // as get_map_list would close a channel the robot answers, and point
+        // the diagnostics at the wrong request.
+        let rawPayload;
+        try {
+          rawPayload = await this.sendB01MapRequest(duid, mapId);
+        } catch (error) {
+          this.noteLiveRoomFetchFailed(
+            duid,
+            liveState,
+            error,
+            b01Q7Adapter.B01_MAP_UPLOAD_METHOD
+          );
+          return liveState.current;
+        }
         const serial = this.getVacuumDeviceInfo(duid, "sn");
         const model = this.getProductAttribute(duid, "model");
         const mapKey = b01Q7Adapter.createMapKey(serial, model);
@@ -6102,6 +6224,7 @@ class Roborock {
 
         const resolution2 = b01Q7Adapter.describeLiveRoomResolution(parsed);
         const roomId = resolution2.roomId;
+        this.noteMethodAnswered(duid, b01Q7Adapter.B01_MAP_UPLOAD_METHOD);
         this.noteLiveRoomFetchRecovered(duid, liveState);
 
         if (roomId === null) {
@@ -6176,17 +6299,7 @@ class Roborock {
 
         return liveState.current;
       } catch (error) {
-        liveState.consecutiveFailures += 1;
-        const message = error?.message || String(error);
-        if (liveState.consecutiveFailures % 5 === 0) {
-          this.log.warn(
-            `Live-room map fetch has failed ${liveState.consecutiveFailures} times in a row for ${this.describeDevice(duid)}. Last error: ${message}`
-          );
-        } else {
-          this.log.debug(
-            `Live-room map fetch attempt failed for ${duid}: ${message}`
-          );
-        }
+        this.noteLiveRoomFetchFailed(duid, liveState, error, "get_map_list");
         return liveState.current;
       } finally {
         liveState.inflight = null;
@@ -6205,6 +6318,43 @@ class Roborock {
    */
   getB01LiveRoomForDevice(duid) {
     return this._b01LiveRoomState?.get(duid)?.current || null;
+  }
+
+  /**
+   * One live-room fetch drew no answer.
+   *
+   * Both live-room paths (classic `get_map_v1`, B01 `get_map_list`) share
+   * this so the give-up rule, and the sentence the user reads, exist once.
+   * The breaker owns the decision; this owns the wording and the fact that
+   * only live-room tracking is affected.
+   *
+   * @param {string} duid
+   * @param {{consecutiveFailures: number}} liveState
+   * @param {unknown} error
+   * @param {string} method the request that was not answered
+   * @returns {void}
+   */
+  noteLiveRoomFetchFailed(duid, liveState, error, method) {
+    liveState.consecutiveFailures += 1;
+    const message = error?.message || String(error);
+
+    if (this.noteMethodUnanswered(duid, method, error)) {
+      this.log.info(
+        `Live-room tracking is paused for ${this.describeDevice(duid)}: the robot did not answer the map request ${liveState.consecutiveFailures} times in a row. Everything else keeps working — starting a room clean from Apple Home, the room list and the progress a run reports are all unaffected — only "which room is it in right now" stops updating. Nothing to do: the plugin tries again by itself, and one answer puts it straight back.`
+      );
+      return;
+    }
+
+    if (liveState.consecutiveFailures % 5 === 0) {
+      this.log.warn(
+        `Live-room map fetch has failed ${liveState.consecutiveFailures} times in a row for ${this.describeDevice(duid)}. Last error: ${message}`
+      );
+      return;
+    }
+
+    this.log.debug(
+      `Live-room map fetch attempt failed for ${duid}: ${message}`
+    );
   }
 
   /**
@@ -6334,6 +6484,13 @@ class Roborock {
     if (Date.now() - liveState.lastAttemptAt < B01_LIVE_ROOM_MIN_FETCH_GAP_MS) {
       return liveState.current;
     }
+    // A robot that has stopped answering the map request is not asked again
+    // every ten seconds of every clean. Measured before this existed: 95
+    // failures in a row on my own a70, 225 twelve days earlier, 40 on the
+    // a75 in #9.
+    if (this.unansweredMethods.shouldSkip(duid, "get_map_v1")) {
+      return liveState.current;
+    }
     liveState.lastAttemptAt = Date.now();
 
     liveState.inflight = (async () => {
@@ -6357,6 +6514,7 @@ class Roborock {
         // microseconds).
         const segmentId =
           RRMapParser.resolveLiveSegmentFromMapBuffer(mapBuffer);
+        this.noteMethodAnswered(duid, "get_map_v1");
         this.noteLiveRoomFetchRecovered(duid, liveState);
 
         if (segmentId === null) {
@@ -6387,17 +6545,7 @@ class Roborock {
 
         return liveState.current;
       } catch (error) {
-        liveState.consecutiveFailures += 1;
-        const message = error?.message || String(error);
-        if (liveState.consecutiveFailures % 5 === 0) {
-          this.log.warn(
-            `Live-room map fetch has failed ${liveState.consecutiveFailures} times in a row for ${this.describeDevice(duid)}. Last error: ${message}`
-          );
-        } else {
-          this.log.debug(
-            `Live-room map fetch attempt failed for ${duid}: ${message}`
-          );
-        }
+        this.noteLiveRoomFetchFailed(duid, liveState, error, "get_map_v1");
         return liveState.current;
       } finally {
         liveState.inflight = null;

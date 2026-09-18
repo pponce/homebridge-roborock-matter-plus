@@ -42,8 +42,18 @@ const photoParser = new Parser()
   })
   .uint8("id");
 
-let photoGzipChunks = [];
-let photoChunkID = 0;
+// Per robot, not per process. A transfer that starts and never finishes must
+// not leave one robot's chunk state able to consume another robot's map reply.
+const photoBuffers = new Map();
+
+function photoBufferFor(duid) {
+  let entry = photoBuffers.get(duid);
+  if (!entry) {
+    entry = { chunks: [], chunkId: 0 };
+    photoBuffers.set(duid, entry);
+  }
+  return entry;
+}
 
 /**
  * True when a protocol-102 result is a bare "command accepted" acknowledgement
@@ -585,8 +595,9 @@ class roborock_mqtt_connector {
           if (this.adapter.pendingRequests.has(photoData.id)) {
             this.adapter.log.debug(`First photo gzip chunk detected!`);
 
-            photoGzipChunks.push(data.payload.slice(56));
-            photoChunkID = photoData.id;
+            const photoBuffer = photoBufferFor(duid);
+            photoBuffer.chunks.push(data.payload.slice(56));
+            photoBuffer.chunkId = photoData.id;
           }
         } else {
           this.adapter.log.debug(
@@ -606,27 +617,39 @@ class roborock_mqtt_connector {
           return;
         }
 
-        // `photoGzipChunks != []` compared against a fresh array literal
-        // and was therefore always true, so the guard it was written to be
-        // never guarded anything.
+        const photoBuffer = photoBufferFor(duid);
+        // A request that timed out or was rejected during session replacement
+        // no longer owns subsequent protocol 301 frames.
+        if (
+          photoBuffer.chunkId !== 0 &&
+          !this.adapter.pendingRequests.has(photoBuffer.chunkId)
+        ) {
+          this.adapter.log.debug(
+            `Discarding a stale photo chunk buffer for ${duid}: request ${photoBuffer.chunkId} is no longer waiting, so the transfer never completed.`
+          );
+          photoBuffer.chunks = [];
+          photoBuffer.chunkId = 0;
+        }
+
         if (
           data.seq == 2 &&
-          photoGzipChunks.length !== 0 &&
-          photoChunkID != 0
+          photoBuffer.chunks.length !== 0 &&
+          photoBuffer.chunkId != 0
         ) {
           this.adapter.log.debug(`Second photo gzip chunk detected!`);
-          photoGzipChunks.push(data.payload);
+          photoBuffer.chunks.push(data.payload);
 
-          if (this.adapter.pendingRequests.has(photoChunkID)) {
-            const { resolve, timeout } =
-              this.adapter.pendingRequests.get(photoChunkID);
+          if (this.adapter.pendingRequests.has(photoBuffer.chunkId)) {
+            const { resolve, timeout } = this.adapter.pendingRequests.get(
+              photoBuffer.chunkId
+            );
             this.adapter.clearTimeout(timeout);
-            this.adapter.pendingRequests.delete(photoChunkID);
+            this.adapter.pendingRequests.delete(photoBuffer.chunkId);
 
-            const finalPhotoGzip = Buffer.concat(photoGzipChunks);
+            const finalPhotoGzip = Buffer.concat(photoBuffer.chunks);
 
-            photoGzipChunks = [];
-            photoChunkID = 0;
+            photoBuffer.chunks = [];
+            photoBuffer.chunkId = 0;
 
             resolve(finalPhotoGzip);
             this.noteCorrelatedReply(duid);
@@ -659,7 +682,13 @@ class roborock_mqtt_connector {
               return;
             }
 
-            if (!this.endpoint.startsWith(data2.endpoint)) {
+            // The received 15-byte field may contain our 8-character
+            // endpoint followed by non-NUL padding. Compare received-to-ours,
+            // matching python-roborock, and make every rejected frame visible.
+            if (!String(data2.endpoint || "").startsWith(this.endpoint)) {
+              this.adapter.log.debug(
+                `Dropped a protocol 301 message for ${duid}: it is addressed to endpoint '${data2.endpoint}', and this plugin's endpoint is '${this.endpoint}'. The reply was received and decrypted but is not ours, so the request that is waiting will time out.`
+              );
               return;
             }
 
@@ -675,6 +704,12 @@ class roborock_mqtt_connector {
             ]);
             decrypted = zlib.gunzipSync(decrypted);
             // this.adapter.log.debug("raw 301: " + decrypted);
+
+            if (!this.adapter.pendingRequests.has(data2.id)) {
+              this.adapter.log.debug(
+                `Received a protocol 301 message for ${duid} with id ${data2.id}, but no request is waiting for that id. It was decrypted successfully, so the robot did answer something; either this is an unsolicited map push, or a reply arrived after its request had already timed out.`
+              );
+            }
 
             if (this.adapter.pendingRequests.has(data2.id)) {
               const { resolve, timeout } = this.adapter.pendingRequests.get(
@@ -1020,9 +1055,13 @@ class roborock_mqtt_connector {
       );
       rejected += 1;
     }
-    if (photoChunkID && !this.adapter.pendingRequests?.has(photoChunkID)) {
-      photoGzipChunks = [];
-      photoChunkID = 0;
+    for (const [duid, photoBuffer] of photoBuffers.entries()) {
+      if (
+        photoBuffer.chunkId === 0 ||
+        !this.adapter.pendingRequests?.has(photoBuffer.chunkId)
+      ) {
+        photoBuffers.delete(duid);
+      }
     }
     return rejected;
   }

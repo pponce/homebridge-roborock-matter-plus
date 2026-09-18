@@ -1,5 +1,143 @@
 # Changelog
 
+## 3.31.0
+
+**Six bugs, three of them mine from last week. And the oldest unexplained failure in this project finally has an instrument pointed at it.**
+
+### The give-up rule tripped on network trouble — the exact thing it promised not to do
+
+3.30.0 added a register that stops asking a robot a request it never answers, and said, in the source and in the line the user reads: it never trips on a transport error, because those come back on their own.
+
+It did. The exclusion was dead code.
+
+`messageQueueHandler` builds its two timeout messages with the connection state interpolated as a **boolean**:
+
+```
+… timed out after 10 seconds. MQTT connection state: false
+… timed out after 10 seconds Local connect state: false
+```
+
+The rule looked for `EAI_AGAIN`, `ENOTFOUND`, `ECONNREFUSED`, `ECONNRESET`, "not connected", "offline" — every one of which belongs to an error that never contains "timed out after" in the first place, and so had already been excluded a line earlier. The second gate had nothing left to exclude.
+
+A four-minute network blip during a clean is 24 failed live-room polls at 10-second intervals. Six is all it takes. Live-room tracking then died for six hours, under a log line telling you this was not a connection failure.
+
+It now reads the boolean, and also stands down when the cloud timeout reports that nothing is coming back over MQTT at all. The tests use the exact strings the plugin emits — 3.30.0's used hand-written messages the code cannot produce, which is precisely why they passed against a broken rule.
+
+### A robot was punished for a request it answered perfectly
+
+The B01/Q7 live-room fetch is two requests: `get_map_list` (cheap) and `service.upload_by_mapid` (the heavy map payload, with its own 20-second timeout). 3.30.0 wrapped both in one try, acknowledged `get_map_list` only after the second had been fetched, decoded and cached, and recorded every failure — including the upload leg's own timeout — against `get_map_list`.
+
+So a robot answering `get_map_list` in 200 ms every time, with a silent upload channel, had the wrong counter climb to six. The diagnostics then named `get_map_list`: the one channel that was working.
+
+Each leg is now counted on its own.
+
+### The heartbeat stopped healing a write that never landed
+
+Suppressing an unchanged `operationalState` is what stopped the tank notification repeating every 2 minutes. It also broke the safety net the whole publish-dedup design rests on.
+
+A cluster write can be rejected by matter.js **after** `updateAccessoryState` has resolved — this codebase has documented that for months: `#assertCurrentPhase` throws, Homebridge swallows the throw, and the controller keeps what it last accepted. From 3.30.0, one such rejection made the plugin believe a value was published that never was, and nothing wrote that attribute again. A permanently stale tile, recoverable only by the robot reaching a different state, or a restart. Before 3.30.0 the heartbeat repaired it inside a minute.
+
+A forced heartbeat now re-asserts `operationalState` once every 10 cycles — about once every 10 minutes. Measured: 6 re-assertions an hour instead of 60, the stale tile heals within 10 minutes, and the notification stays gone.
+
+### A map reply can be thrown away in silence — and now it says so
+
+This is the one I care most about.
+
+`get_map_v1` on a classic robot times out after 10 seconds, forever, while the same robot answers everything else. 95 times in a row on my own a70, 225 twelve days earlier, 40 on the a75 in #9. Nobody has ever been able to say why.
+
+Map replies do not come back on the ordinary reply path — they arrive as protocol 301 frames. The 301 handler had several ways to drop one, every one of them a bare `return`. No log, no counter, nothing. A dropped 301 leaves the request to die on its timer, which looks **exactly** like a robot that never answered. There was nothing to diagnose it with.
+
+One of those drops was also wrong:
+
+```js
+if (!endpoint.startsWith(data2.endpoint)) return;
+```
+
+`endpoint` is our own 8-character key. `data2.endpoint` is a 15-byte wire field with only _trailing_ nulls stripped. python-roborock, the reference implementation, compares it the other way round — `received.startswith(ours)`. As written, a robot that echoes our 8 characters followed by anything that is not a trailing null leaves a longer string, and an 8-character string can never `startsWith` a longer one. It failed closed, on a reply addressed to us, without a word.
+
+The comparison now matches the reference, and **every** 301 drop explains itself and names the robot. I am not claiming this is the cause of the a70's timeouts. I am saying that from this release, if it is, the log says so.
+
+### One robot's unfinished photo could swallow every other robot's map
+
+`photoGzipChunks` and `photoChunkID` were module-level variables shared by every robot on the account, cleared only when a photo transfer **completed**. A robot going offline between chunk 1 and chunk 2 left the id set forever — and from then on every 301 frame with `seq == 2`, from any robot, was swallowed into that stale buffer instead of being decoded as a map reply. A permanent, silent map outage on a multi-robot account, with no error anywhere.
+
+The buffer is now per robot, and one whose request is no longer waiting is discarded.
+
+### Smaller things
+
+- **A robot that comes back online starts with clean counters.** `forgetDevice` existed since 3.30.0 and was never called once. A robot offline for hours kept the counts it collected while unreachable, and because the rule deliberately keeps the counter when it lets one request through, a single probe timing out during the reconnect closed the method for another six hours.
+- **Three polls were bypassing the register entirely** — `get_multi_maps_list` and `get_room_mapping`, two of the seven methods named in the 647 suppressed timeouts that motivated the rule. The test that was supposed to catch this asserted "exactly 3 call sites", a number that silently excluded them. It now asserts the rule instead: no optional poll reaches the robot except through the register.
+- **`cleaning_info` is printed in full while a robot is cleaning.** Not a feature — a measurement. Every status poll already receives this object and throws it away, and it is documented as carrying `{target_segment_id, segment_id, …}`. If `segment_id` tracks the room, live-room tracking on classic robots needs no map at all, which would route around the timeout above entirely. One clean answers it.
+
+2031 tests, 33 of them new.
+
+## 3.30.0
+
+**The water-tank notification that repeated every two minutes was us. Three people reported it, and for three releases this project told them it was Apple.**
+
+### The bug, and the measurement that had been wrong since 3.14.0
+
+#5 (Wazza151, a70), #9 (vp-debug12, a75, with the screenshot and the Spanish wording) and #26 (n0rt0nthec4t, Q Revo S) all reported the same thing: with the clean-water tank empty, the Home app repeats _"fill the water tank — <robot> will start cleaning when the tank is filled"_ roughly every 2 minutes.
+
+The answer here was that Apple re-raises a standing block and nothing on this side can stop it. That answer had a measurement behind it, which is why it survived so long: writing the same `{ errorStateId: 68 }` three times in a row produces one change event, so the plugin could not be the source. The measurement was correct. **The premise was not.** It was taken against `@matter/main` **0.18.0-alpha**. Homebridge 2.4.0 ships **0.17.9**, and 0.17.9 does not behave the same way.
+
+Measured on 17 Sep 2026 against 0.17.9, one attribute at a time, with a standing `operationalError: 68`:
+
+```
+operationalState, same value (0x42) ....... 68 -> 0   WIPED
+operationalState, different value (0x41) .. 68 -> 0   WIPED
+currentPhase, same value .................. 68 -> 68  kept
+currentPhase, different value ............. 68 -> 68  kept
+phaseList ................................. 68 -> 68  kept
+operationalStateList ...................... 68 -> 68  kept
+```
+
+**Any write of `operationalState` clears `operationalError`, including a write of the value already stored.** This plugin's 60-second heartbeat re-writes the whole cluster as a self-healing safety net, so every minute it was clearing the tank fault and re-raising it — and matter.js emits the cluster's `OperationalError` event on the `0 -> 68` edge. Six heartbeats produced six attribute changes and three events: one roughly every two minutes.
+
+That is the notification. It was not Apple re-raising a block. It was the plugin raising it again, sixty times an hour.
+
+### The fix
+
+`operationalState` and `operationalError` are now written in separate transactions, error last, and **an unchanged `operationalState` is not written at all** — the one place where the forced heartbeat is deliberately overruled, because forcing it there can only wipe the fault. Re-measured with the rule in place: 20 heartbeats with a standing tank fault produce **0 attribute changes and 0 events**. Clearing the tank and emptying it again still produce exactly one each, and a genuine state change still re-asserts the fault, because matter.js really did clear it.
+
+If you turned `enableMatterTankFaultReporting` off to stop the notifications, you can turn it back on.
+
+### A robot that stops answering is left alone
+
+A Roborock request that draws no reply costs a full 10-second pending request, and nothing here noticed that the same request had failed the same way a hundred times before. Measured on robots that were otherwise working perfectly:
+
+- `Stueetage` (`a70`) on my own server: `get_map_v1` had failed **95 times in a row** when I looked, and 225 twelve days earlier. That robot has never answered the request; it was asked every ten seconds of every clean regardless.
+- #9 (`a75`): 40 in a row, while the robot answered everything else.
+- #22 (`a144`) and #24 (`a51`): **647** suppressed timeout warnings in a single session, across seven different methods.
+
+There is now one register that counts consecutive no-answers per robot per method. Six in a row and that one request is left alone for six hours, then tried once more; one answer puts it straight back. A permanently silent method costs **9 requests a day instead of 8,640**.
+
+Three things it deliberately never does. It never trips on a **refusal** — a robot that answers "I do not support that" has answered, and conflating the two would hide a real reply behind a silence. It never trips on a **transport error** — `EAI_AGAIN`, a dropped MQTT link or "not connected" is the network's problem and it comes back on its own. And it is **not wired to `get_status` or to the command path**: the Home tile lives on `get_status`, and a command you just pressed must always be sent.
+
+When it does give up it says so once, in full sentences, and writes it into the diagnostic report — so "this robot stopped answering X" survives in something you can paste, rather than only in a log line that scrolled past hours ago.
+
+### Unchecking the switch settings now actually removes the tiles
+
+From #22, in the reporter's words: _"When unchecking schedules / routines, the cache does not get deleted. So, although unchecked, tiles still appear in HomeKit."_
+
+He was right. The removal walked the coordinators that run had built — a list that is **empty at startup**, because they are built further down the same function, after the branch that handles the setting being off returns. So on the restart after unchecking the box, the only thing holding the tiles — the accessory Homebridge restored from its own cache — was never looked at. The switches went on working because Homebridge had restored them, and the setting appeared to do nothing.
+
+The other half of the same report: _"initially I had schedules checked. Then I checked routines and got the error. There were still only tiles for schedules. After that I reset the whole plugin and had tiles for both."_ Registration only ever happened on the path that **creates** a coordinator. One that survived took the reuse path on the next sync, and the reuse path registered nothing — switches were added to an accessory the bridge no longer knew about. Resetting the plugin worked because it emptied the cache and forced the creation path.
+
+Both halves are fixed, and both are pinned by tests that use a cached accessory rather than a fresh one, because that is the case that was broken.
+
+### iOS 27
+
+Released 14 September. The Home changes are cameras, Apple Intelligence summaries, 4K HomeKit Secure Video, energy monitoring, Apple TV, Thread 1.4 and a simplified Matter configuration interface. **Nothing documented touches robot vacuums, the RVC clusters or bridges.**
+
+Measured rather than assumed, on my own hardware after updating: `Subscription … reported invalid by peer` still fired nine times in three minutes on 16 September, and the only "reestablished" lines followed a Homebridge restart. So the hope in #7 that iOS 27 would fix the stuck "Updating…" tile is **not** supported by what my own controller does. Nothing in this release depends on iOS 27, and nothing in it is needed by it.
+
+### Smaller things
+
+- **Renaming a Routine in the Roborock app** now says, once, that the new name reached Homebridge and that the Home app keeps the name it stored when the switch first appeared — so a stale name in Apple Home has a visible reason and a one-second fix, instead of looking like the rename was lost (#22).
+- **"No room mappings returned"** now says what to do about it: the usual reason is that the rooms on the map have not been named yet. Open the Roborock app, edit the map, name each room. From #25, which the reporter closed himself with exactly that discovery.
+- **The Q7 fault list was left alone on purpose.** Eight days of measurement suggested widening the informational set from `{0, 407, 2100, 2102}` to eleven codes. Two guard tests refused it — one says 501 is not shared across B01 families, the other says codes upstream cannot explain must keep surfacing, because silencing them would be a guess. On inspection the unmapped-code notice already logs once per code per session, so the noise was a fraction of what it looked like, and the guards were right. The change was reverted. That is what those tests are for.
+
 ## 3.29.0
 
 **Schedules that live on your Routines, Routines you can run from Apple Home — and a debug log that is safe to paste.**
