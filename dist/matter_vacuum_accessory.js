@@ -214,6 +214,21 @@ const DOCK_ERROR_CLEAN_WATER_TANK_EMPTY = 38;
  * robot. Until somebody looks at a tile with 76 on it, the 1.2 set is what
  * gets published, and the accurate 1.5 name goes in the log line instead.
  */
+/**
+ * The Matter cluster whose writes have to be ordered by hand. See
+ * writeOperationalStateCluster().
+ */
+const OPERATIONAL_STATE_CLUSTER = "rvcOperationalState";
+/**
+ * How many forced publishes (heartbeats) may pass before `operationalState`
+ * is re-written even though it has not changed.
+ *
+ * 10 heartbeats is about 10 minutes. That restores the self-healing the
+ * heartbeat provided before 3.30.0, at a rate far too low for the
+ * wipe/raise pair matter.js 0.17.9 performs to become a notification anyone
+ * notices — the fault cycle needed one every single minute.
+ */
+const RESYNC_OPERATIONAL_STATE_EVERY_FORCED_WRITES = 10;
 const RVC_OPERATIONAL_ERROR = {
     NO_ERROR: 0,
     UNABLE_TO_START_OR_RESUME: 1,
@@ -660,6 +675,10 @@ class RoborockMatterVacuumAccessory {
         // dropped on failure, and (c) the heartbeat performs a forced full publish
         // every cycle, self-healing any residual divergence within a minute.
         this.lastPublishedClusterJson = new Map();
+        // How many forced publishes in a row have skipped operationalState. See
+        // writeOperationalStateCluster(): without this, a write matter.js rejects
+        // silently can never come back.
+        this.forcedWritesSinceOperationalState = 0;
         this.serviceAreaProgress = [];
         this.selectedCleanMode = CLEAN_MODE_VACUUM;
         this.selectedCleanModeNeedsApply = false;
@@ -955,21 +974,24 @@ class RoborockMatterVacuumAccessory {
      * when a warning is welcome — the plugin was asserting a block that did not
      * exist.
      *
-     * WHERE THE 2-MINUTE REPEAT COMES FROM, AND WHY IT IS NOT FIXABLE HERE.
-     * Measured against matter.js 0.18.0-alpha, the build Homebridge ships:
-     * writing the same `{ errorStateId: 68 }` three times in a row produces one
-     * change event and one attribute report, and the 2nd and 3rd writes are
-     * dropped in the store. The cluster's `OperationalError` event — the more
-     * likely trigger for a phone notification than the attribute — fires on the
-     * change only, for the same reason. This plugin also has no 2-minute timer
-     * anywhere in it; the only periodic write is the 60-second heartbeat above,
-     * which by that same measurement generates no traffic when nothing moved.
-     * So the repeat is Apple re-raising a block that is still standing, and the
-     * only lever on this side is not to assert the block. No timer in this
-     * plugin can produce a 68 → 0 → 68 cycle: the fault is computed from live
-     * data only, and the 2-minute OPTIMISTIC_STATE_TTL_MS is armed by a command,
-     * overlaid on the cluster payload after this has already run, and never
-     * carries operationalError.
+     * WHERE THE 2-MINUTE REPEAT CAME FROM. It was us, and for three releases
+     * this comment said it could not be. The old text is worth keeping as a
+     * warning about the measurement, not just the conclusion: it read "measured
+     * against matter.js 0.18.0-alpha, the build Homebridge ships … no timer in
+     * this plugin can produce a 68 -> 0 -> 68 cycle". The measurement was
+     * sound. The premise was not — Homebridge 2.4.0 ships @matter/main 0.17.9,
+     * not 0.18.0-alpha, and 0.17.9 CLEARS `operationalError` on every write of
+     * `operationalState`, including a write of the value already stored. The
+     * 60-second heartbeat re-writes the whole cluster, so the plugin was
+     * clearing the fault and re-raising it once a minute, and matter.js emits
+     * the cluster's `OperationalError` event on the 0 -> 68 edge: one
+     * notification per two heartbeats. Two minutes.
+     *
+     * Fixed in 3.30.0 by writing the two attributes apart and never re-writing
+     * an unchanged `operationalState`; the measurement table is in
+     * writeOperationalStateCluster(). What remains true below is the part about
+     * the tank reading and the authority flapping — those are the robot's own
+     * data moving, and they are still the two ways a genuine repeat can happen.
      *
      * BUT THERE ARE EXACTLY TWO WAYS IT CAN STILL FLAP, and the second one is
      * easy to miss because it is not in isWaterTankEmpty() at all. First, the
@@ -1208,6 +1230,9 @@ class RoborockMatterVacuumAccessory {
         this.registered = true;
         // Fresh registration: nothing is published on the new node yet.
         this.lastPublishedClusterJson.clear();
+        this.publishedOperationalState = undefined;
+        this.publishedOperationalError = undefined;
+        this.forcedWritesSinceOperationalState = 0;
         // …and nothing has been stated about it either, so the evidence line is
         // restated for the new node instead of being suppressed as unchanged.
         this.lastLoggedMatterPublishLine = null;
@@ -1710,7 +1735,117 @@ class RoborockMatterVacuumAccessory {
         return (Date.now() - this.lastCleaningCommandAt <
             RECENT_CLEANING_COMMAND_WINDOW_MS);
     }
-    async updateMatterState(partialClusters, reason = "state update") {
+    /**
+     * Write the RvcOperationalState cluster, one attribute group at a time.
+     *
+     * THE BUG THIS EXISTS FOR, MEASURED. In @matter/main 0.17.9 — the build
+     * Homebridge 2.4.0 actually ships — writing `operationalState` CLEARS
+     * `operationalError` to `{ errorStateId: 0 }`. Every time, including a
+     * write of the value the store already holds. Measured on 17 Sep 2026
+     * against 0.17.9, one attribute at a time, with a standing
+     * `operationalError: 68` (Clean water tank empty):
+     *
+     *   operationalState, same value (0x42) ....... 68 -> 0   WIPED
+     *   operationalState, different value (0x41) .. 68 -> 0   WIPED
+     *   currentPhase, same value .................. 68 -> 68  kept
+     *   currentPhase, different value ............. 68 -> 68  kept
+     *   phaseList ................................. 68 -> 68  kept
+     *   operationalStateList ...................... 68 -> 68  kept
+     *
+     * So the plugin's own 60-second heartbeat, which re-writes the whole
+     * cluster with force=true, was clearing the tank fault and re-raising it
+     * once a minute — and matter.js emits the cluster's `OperationalError`
+     * EVENT on the 0 -> 68 edge. Six heartbeats produced six attribute changes
+     * and three events: one roughly every two minutes.
+     *
+     * That is the notification vp-debug12 reported in #9 ("Rellena el depósito
+     * de agua…", repeating every 2 minutes), Wazza151 in #5, and
+     * n0rt0nthec4t in #26 ("repeated notifications in Home App"). Apple was not
+     * re-raising a standing block, as the comment on isWaterTankEmpty() said
+     * for three releases: the plugin was genuinely re-raising it, through a
+     * matter.js behaviour nobody had measured on the version people run. The
+     * earlier measurement that said otherwise was taken against 0.18.0-alpha,
+     * which does not behave this way.
+     *
+     * THE RULE, and why force does not apply to this one cluster:
+     *
+     * 1. `operationalState` is written only when it differs from the last value
+     *    written. A forced re-write cannot help here and can only wipe the
+     *    fault, so force is deliberately ignored for this attribute.
+     * 2. Everything else in the cluster is written normally — none of it
+     *    touches the error.
+     * 3. `operationalError` is written LAST, in its own transaction, and only
+     *    when it differs from what is believed published. Writing
+     *    `operationalState` invalidates that belief, because the store just
+     *    cleared it, so the error is re-asserted right after a state change.
+     *
+     * Measured again with this rule in place: 20 heartbeats with a standing
+     * tank fault produce 0 attribute changes and 0 events; a genuine state
+     * change keeps the fault (2 attribute changes, 1 event, unavoidable —
+     * the store really was cleared); clearing and re-raising the tank still
+     * produce exactly one event each.
+     */
+    async writeOperationalStateCluster(matter, attributes, options = {}) {
+        const { operationalState, operationalError, ...rest } = attributes;
+        const first = { ...rest };
+        let stateChanged = operationalState !== undefined &&
+            operationalState !== this.publishedOperationalState;
+        // THE HOLE 3.30.0 LEFT, AND WHY IT NEEDED CLOSING.
+        //
+        // Suppressing an unchanged `operationalState` is what stops the tank
+        // fault being cleared and re-raised every minute. But the whole dedup
+        // design rests on the heartbeat being a forced full write that self-heals
+        // any divergence within a minute — and a cluster write can be rejected by
+        // matter.js AFTER `updateAccessoryState` has already resolved. This file
+        // documents that elsewhere: `OperationalStateServer.#assertCurrentPhase`
+        // throws, and Homebridge swallows the throw, so the whole cluster write
+        // is silently rejected and the controller keeps what it last accepted.
+        //
+        // Believing such a write landed and then never writing that attribute
+        // again turns a one-off rejection into a permanently stale tile,
+        // recoverable only by the robot reaching a different state or a restart.
+        // Before 3.30.0 the heartbeat repaired it inside a minute.
+        //
+        // So: never on an ordinary publish, but a forced write re-asserts it once
+        // every RESYNC_OPERATIONAL_STATE_EVERY_FORCED_WRITES heartbeats.
+        if (!stateChanged &&
+            options.force === true &&
+            operationalState !== undefined) {
+            this.forcedWritesSinceOperationalState += 1;
+            if (this.forcedWritesSinceOperationalState >=
+                RESYNC_OPERATIONAL_STATE_EVERY_FORCED_WRITES) {
+                stateChanged = true;
+            }
+        }
+        if (stateChanged) {
+            first.operationalState = operationalState;
+            this.forcedWritesSinceOperationalState = 0;
+        }
+        if (Object.keys(first).length > 0) {
+            await matter.updateAccessoryState(this.accessory.UUID, OPERATIONAL_STATE_CLUSTER, first);
+        }
+        if (stateChanged) {
+            this.publishedOperationalState = operationalState;
+            // matter.js has just cleared it, so what we believed is no longer true.
+            // Deliberately UNKNOWN rather than 0: the error is then always
+            // re-asserted after a state change, which restores a standing fault and,
+            // when there is none, writes a 0 onto a 0 — which matter.js drops, at no
+            // cost. Assuming 0 here would be right about the store and wrong about
+            // the contract: "the plugin publishes NoError when the robot is healthy"
+            // is a promise several tests and one field report depend on.
+            this.publishedOperationalError = undefined;
+        }
+        if (operationalError === undefined) {
+            return;
+        }
+        const errorStateId = operationalError === null || operationalError === void 0 ? void 0 : operationalError.errorStateId;
+        if (errorStateId === this.publishedOperationalError) {
+            return;
+        }
+        await matter.updateAccessoryState(this.accessory.UUID, OPERATIONAL_STATE_CLUSTER, { operationalError });
+        this.publishedOperationalError = errorStateId;
+    }
+    async updateMatterState(partialClusters, reason = "state update", options = {}) {
         if (!this.registered) {
             return false;
         }
@@ -1736,13 +1871,28 @@ class RoborockMatterVacuumAccessory {
             const failures = [];
             await Promise.all(clusterEntries.map(async ([cluster, attributes]) => {
                 try {
-                    await matter.updateAccessoryState(this.accessory.UUID, cluster, attributes);
+                    if (cluster === OPERATIONAL_STATE_CLUSTER) {
+                        await this.writeOperationalStateCluster(matter, attributes, {
+                            force: options.force === true,
+                        });
+                    }
+                    else {
+                        await matter.updateAccessoryState(this.accessory.UUID, cluster, attributes);
+                    }
                     this.lastPublishedClusterJson.set(cluster, JSON.stringify(attributes));
                 }
                 catch (error) {
                     // Drop the record so the cluster is retried on the next snapshot
                     // even if its payload is unchanged.
                     this.lastPublishedClusterJson.delete(cluster);
+                    if (cluster === OPERATIONAL_STATE_CLUSTER) {
+                        // A half-written cluster leaves the store in a state nothing
+                        // here can describe, so forget both and let the next snapshot
+                        // re-assert them.
+                        this.publishedOperationalState = undefined;
+                        this.publishedOperationalError = undefined;
+                        this.forcedWritesSinceOperationalState = 0;
+                    }
                     failures.push(error);
                     this.platform.log.debug(`Matter publish for cluster ${cluster} on ${this.accessory.UUID} failed: ${error instanceof Error ? error.message : String(error)}`);
                 }
@@ -1840,7 +1990,12 @@ class RoborockMatterVacuumAccessory {
                 },
             }, "Battery resync nudge");
         }
-        const updated = await this.updateMatterState(clusters, reason);
+        // `force` is carried down so writeOperationalStateCluster can tell a
+        // heartbeat from an ordinary publish; it is the only cluster for which
+        // the distinction still means anything.
+        const updated = await this.updateMatterState(clusters, reason, {
+            force: options.force === true,
+        });
         if (updated) {
             this.logMatterPublishIfChanged(snapshot, reason);
         }
