@@ -97,8 +97,16 @@ describe("the secure flag reaches the pending request", () => {
     // shouldResolveOn102 is only correct if `secure` is actually recorded;
     // without it every secure request would resolve on its ack and the 301
     // payload would arrive with nobody waiting.
-    expect(source).toMatch(
-      /const pendingRequest = \{[^}]*\bsecure\b[^}]*\};\s*this\.adapter\.pendingRequests\.set\(messageID, pendingRequest\)/s
+    const at = source.indexOf("const pendingRequest = {");
+    expect(at).toBeGreaterThan(-1);
+    const end = source.indexOf(
+      "this.adapter.pendingRequests.set(messageID, pendingRequest)",
+      at
     );
+    expect(end).toBeGreaterThan(at);
+    const entry = source.slice(at, end);
+    expect(entry).toMatch(/\bsecure\b/);
+    expect(entry).toMatch(/\bmethod\b/);
+    expect(entry).toMatch(/noteRequestAnswered/);
   });
 });

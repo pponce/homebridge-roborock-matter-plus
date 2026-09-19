@@ -46,6 +46,29 @@ const photoParser = new Parser()
 // not leave one robot's chunk state able to consume another robot's map reply.
 const photoBuffers = new Map();
 
+// Count protocol-301 frames discarded per robot so the normal info-level
+// give-up message can distinguish a silent robot from a plugin-side drop.
+const droppedFrames = new Map();
+
+function noteDroppedFrame(duid, reason) {
+  let entry = droppedFrames.get(duid);
+  if (!entry) {
+    entry = { total: 0, byReason: {} };
+    droppedFrames.set(duid, entry);
+  }
+  entry.total += 1;
+  entry.byReason[reason] = (entry.byReason[reason] || 0) + 1;
+  return entry;
+}
+
+/**
+ * @param {string} duid
+ * @returns {{total: number, byReason: Record<string, number>}}
+ */
+function describeDroppedFrames(duid) {
+  return droppedFrames.get(duid) || { total: 0, byReason: {} };
+}
+
 function photoBufferFor(duid) {
   let entry = photoBuffers.get(duid);
   if (!entry) {
@@ -686,6 +709,7 @@ class roborock_mqtt_connector {
             // endpoint followed by non-NUL padding. Compare received-to-ours,
             // matching python-roborock, and make every rejected frame visible.
             if (!String(data2.endpoint || "").startsWith(this.endpoint)) {
+              noteDroppedFrame(duid, "addressed-elsewhere");
               this.adapter.log.debug(
                 `Dropped a protocol 301 message for ${duid}: it is addressed to endpoint '${data2.endpoint}', and this plugin's endpoint is '${this.endpoint}'. The reply was received and decrypted but is not ours, so the request that is waiting will time out.`
               );
@@ -706,6 +730,7 @@ class roborock_mqtt_connector {
             // this.adapter.log.debug("raw 301: " + decrypted);
 
             if (!this.adapter.pendingRequests.has(data2.id)) {
+              noteDroppedFrame(duid, "no-request-waiting");
               this.adapter.log.debug(
                 `Received a protocol 301 message for ${duid} with id ${data2.id}, but no request is waiting for that id. It was decrypted successfully, so the robot did answer something; either this is an unsolicited map push, or a reply arrived after its request had already timed out.`
               );
@@ -1367,6 +1392,7 @@ function resolveB01PendingResponse(adapter, duid, dps) {
 }
 
 module.exports = {
+  describeDroppedFrames,
   resolveB01PendingResponse,
   roborock_mqtt_connector,
   parseProtocol301Header,

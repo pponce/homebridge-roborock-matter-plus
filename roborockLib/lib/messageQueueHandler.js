@@ -202,6 +202,30 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
  */
 
 /**
+ * A request that was sent and drew no reply, carrying what the transport knew
+ * at the moment it gave up. The give-up register reads these fields instead of
+ * parsing the message text — twice now a prose-matching rule has turned out to
+ * be dead code against a string the plugin cannot produce.
+ *
+ * @param {string} message
+ * @param {boolean} transportWasUp whether the link was up AT REJECTION TIME
+ * @param {boolean} [accountSessionWasSilent=false] whether no MQTT frame
+ *   arrived after this read was published
+ * @returns {Error & {unansweredRequest: boolean, transportWasUp: boolean, accountSessionWasSilent: boolean}}
+ */
+function unansweredRequestError(
+  message,
+  transportWasUp,
+  accountSessionWasSilent = false
+) {
+  return Object.assign(new Error(message), {
+    unansweredRequest: true,
+    transportWasUp,
+    accountSessionWasSilent,
+  });
+}
+
+/**
  * @typedef {Object} MessageQueueAdapter
  * @property {RoborockConfig} [config]
  * @property {(duid: string) => Promise<boolean>} isRemoteDevice
@@ -218,6 +242,8 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
  * @property {(duid: string, update: TransportDiagnosticsUpdate) => Promise<void>} updateTransportDiagnostics
  * @property {(duid: string) => Promise<boolean>} [ensureLocalConnection]
  * @property {(duid: string, method?: string) => Promise<void>} [noteLocalRequestTimedOut]
+ * @property {(duid: string, method: string) => void} [noteRequestAnswered]
+ * @property {(duid: string, method: string, error: unknown) => void} [noteRequestUnanswered]
  * @property {(duid: string) => number} [getCloudMessageReceiptCount] How many
  *   decoded MQTT messages have been attributed to this robot since startup.
  *   Optional so an adapter that cannot count them keeps the old timeout text.
@@ -572,10 +598,34 @@ class messageQueueHandler {
             this.adapter.pendingRequests.delete(messageID);
             this.adapter.localConnector.clearChunkBuffer(duid);
             if (useCloudConnection) {
+              // Read link and session evidence at rejection time. A link can
+              // die, or a subscribed MQTT session can go silent, mid-flight.
+              const transportWasUp = Boolean(
+                this.adapter.rr_mqtt_connector?.isConnected?.()
+              );
               const sessionHealth =
                 this.adapter.rr_mqtt_connector.getSessionHealthSnapshot?.(duid);
-              const timeoutError = new Error(
-                `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${mqttConnectionState}${sessionHealth ? `; session health: ${JSON.stringify(sessionHealth)}` : ""}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`
+              const requestAgeMs = Number.isFinite(
+                pendingRequest.publishedAt
+              )
+                ? Math.max(0, Date.now() - pendingRequest.publishedAt)
+                : null;
+              const accountSessionWasSilent =
+                pendingRequest.operationClass === "read" &&
+                requestAgeMs !== null &&
+                sessionHealth !== undefined &&
+                (sessionHealth.lastRawInboundAgeMs === null ||
+                  (Number.isFinite(sessionHealth.lastRawInboundAgeMs) &&
+                    sessionHealth.lastRawInboundAgeMs >= requestAgeMs));
+              const timeoutError = unansweredRequestError(
+                `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${transportWasUp}${sessionHealth ? `; session health: ${JSON.stringify(sessionHealth)}` : ""}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`,
+                transportWasUp,
+                accountSessionWasSilent
+              );
+              this.adapter.noteRequestUnanswered?.(
+                duid,
+                method,
+                timeoutError
               );
               reject(timeoutError);
               this.adapter.rr_mqtt_connector.noteSilentCloudReadTimeout?.({
@@ -595,11 +645,15 @@ class messageQueueHandler {
                   this.adapter.noteLocalRequestTimedOut(duid, method)
                 ).catch(() => {});
               }
-              reject(
-                new Error(
-                  `Local request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds Local connect state: ${localConnectionState}`
-                )
+              const transportWasUp = Boolean(
+                this.adapter.localConnector?.isConnected?.(duid)
               );
+              const error = unansweredRequestError(
+                `Local request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds Local connect state: ${transportWasUp}`,
+                transportWasUp
+              );
+              this.adapter.noteRequestUnanswered?.(duid, method, error);
+              reject(error);
             }
           };
 
@@ -611,7 +665,18 @@ class messageQueueHandler {
           // the string "ok", which silently never matched.
           /** @type {PendingRequest} */
           const pendingRequest = {
-            resolve,
+            // Wrapped so the give-up register learns of an answer HERE, in the
+            // one place that knows a reply arrived. Until 3.32.0 the register
+            // was told by `pollParameter`, whose try/catch never fired:
+            // `vacuum.getParameter` swallows its own errors (it calls
+            // catchError, which only logs) and resolves `undefined`. So every
+            // poll looked like a success, the failure branch was unreachable,
+            // and the register never counted a single one — including all
+            // seven methods in #22/#24 that it was built for.
+            resolve: (value) => {
+              this.adapter.noteRequestAnswered?.(duid, method);
+              resolve(value);
+            },
             reject,
             timeout: null,
             secure,
