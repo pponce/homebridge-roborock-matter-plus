@@ -924,7 +924,7 @@ export default class RoborockHapScheduleAccessory {
     const startedAt = Date.now();
     const generation = ++this.refreshGeneration;
 
-    const refresh = this.performRefresh(generation, accountCoordinatorHeld);
+    const refresh = this.performRefresh(generation, accountCoordinatorHeld, forceFresh);
 
     this.refreshInProgress = refresh;
     this.refreshInProgressStartedAt = startedAt;
@@ -958,7 +958,8 @@ export default class RoborockHapScheduleAccessory {
    */
   private async performRefresh(
     generation: number,
-    accountCoordinatorHeld: boolean
+    accountCoordinatorHeld: boolean,
+    includeVerifiedSources = false
   ): Promise<RoborockScheduleRefreshResult> {
     const preserved = () => ({
       success: false,
@@ -1019,18 +1020,14 @@ export default class RoborockHapScheduleAccessory {
         (!timerSchedules.ok && this.lastServerTimerSchedules === undefined) ||
         (!sceneSchedules.ok && this.lastCloudSceneSchedules === undefined);
 
+      const throttled = [readings.timers, readings.scenes].find(
+        reading => reading.state === "failed" && isDefiniteScheduleThrottle(reading.error)
+      );
+      if (throttled && throttled.state === "failed") this.recordScheduleThrottle(throttled.error);
+
       if (unrecoverable) {
         // Keep every switch and back off.
-        const throttled = [readings.timers, readings.scenes].find(
-          (reading) =>
-            reading.state === "failed" &&
-            isDefiniteScheduleThrottle(reading.error)
-        );
-        if (throttled && throttled.state === "failed") {
-          this.recordScheduleThrottle(throttled.error);
-        } else {
-          this.recordRefreshFailure();
-        }
+        if (!throttled) this.recordRefreshFailure();
 
         const reasons = [timerSchedules, sceneSchedules]
           .filter((outcome) => !outcome.ok && outcome.reason)
@@ -1097,10 +1094,10 @@ export default class RoborockHapScheduleAccessory {
       // different from a failed/untrusted cloud response.
       return {
         success: true,
-        verifiedSources: [
+        ...(includeVerifiedSources ? { verifiedSources: [
           ...(readings.timers.state === "read" && timerSchedules.ok ? ["serverTimer" as const] : []),
           ...(readings.scenes.state === "read" && sceneSchedules.ok ? ["cloudScene" as const] : []),
-        ],
+        ] } : {}),
         hasSchedules: this.exposeSchedules !== false && merged.length > 0,
       };
     } catch (error) {
