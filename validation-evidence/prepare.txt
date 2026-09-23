@@ -1,0 +1,20 @@
+src/hap_schedule_accessory.ts 562ms (unchanged)
+src/schedule_write_reconciliation.ts 6ms (unchanged)
+__tests__/schedule-write-reconciliation.test.js 95ms (unchanged)
+__tests__/schedule-scene-reconciliation.test.js 29ms
+docs/schedule-write-reconciliation.md 33ms (unchanged)
+__tests__/schedule-settings-contract.test.js 48ms
+__tests__/hap-schedule-naming.test.js 52ms
+.github/workflows/schedule-reconciliation-verification.yml 29ms
+[schedule-reconciliation-validation 77ed472] Format breaker integration for validation [skip ci]
+ 11 files changed, 105 insertions(+), 353 deletions(-)
+ delete mode 100644 validation-evidence/build.txt
+ delete mode 100644 validation-evidence/full.json
+ delete mode 100644 validation-evidence/green.json
+ delete mode 100644 validation-evidence/lint.txt
+ delete mode 100644 validation-evidence/prepare.txt
+ delete mode 100644 validation-evidence/recreation.json
+ delete mode 100644 validation-evidence/release.json
+ delete mode 100644 validation-evidence/typecheck.txt
+To https://github.com/pponce/homebridge-roborock-matter-plus
+   d4c9ae9..77ed472  schedule-reconciliation-validation -> schedule-reconciliation-validation

@@ -1,0 +1,135 @@
+{
+  "passed": 4,
+  "failed": 21,
+  "runtimeErrors": 0,
+  "suites": 2,
+  "failures": [
+    {
+      "name": "lost acknowledgement, assignment applied (true): read confirms it without retry",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:214:27)"
+      ]
+    },
+    {
+      "name": "lost acknowledgement, assignment applied (false): read confirms it without retry",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:214:27)"
+      ]
+    },
+    {
+      "name": "lost acknowledgement, assignment not applied: read precedes one fallback and final verification",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:226:25)"
+      ]
+    },
+    {
+      "name": "a lost fallback acknowledgement is also read back, without a third write",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:237:30)"
+      ]
+    },
+    {
+      "name": "a fallback that never applies stops after one attempt",
+      "messages": [
+        "Error: expect(received).toHaveLength(expected)\n\nExpected length: 2\nReceived length: 1\nReceived array:  [{\"id\": 1, \"method\": \"upd_server_timer\", \"params\": [[\"timer-1\", \"on\"]]}]\n    at Object.toHaveLength (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:245:25)"
+      ]
+    },
+    {
+      "name": "failed verification cannot use an old matching cache as confirmation",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:253:40)"
+      ]
+    },
+    {
+      "name": "failed verification cannot use an old mismatching cache to authorize fallback",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:260:40)"
+      ]
+    },
+    {
+      "name": "missing or malformed read does not authorize another write: []",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:269:42)"
+      ]
+    },
+    {
+      "name": "missing or malformed read does not authorize another write: \"invalid\"",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:269:42)"
+      ]
+    },
+    {
+      "name": "missing or malformed read does not authorize another write: [[null]]",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:269:42)"
+      ]
+    },
+    {
+      "name": "failure of the unrelated cloud-scene read does not invalidate a fresh timer confirmation",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:279:30)"
+      ]
+    },
+    {
+      "name": "final failed read cannot turn a stale desired state into success",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:295:40)"
+      ]
+    },
+    {
+      "name": "a mixed batch retries only the assignment proved not applied",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:317:67)"
+      ]
+    },
+    {
+      "name": "shutdown during verification prevents fallback",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:344:40)"
+      ]
+    },
+    {
+      "name": "verification does not adopt a read started before the write completed",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:356:30)"
+      ]
+    },
+    {
+      "name": "a real MQTT session replacement is reconciled after its existing recovery finishes",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-write-reconciliation.test.js:380:30)"
+      ]
+    },
+    {
+      "name": "a scene PUT that applies before its socket drops is confirmed without another PUT",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-scene-reconciliation.test.js:136:30)\n    at processTicksAndRejections (node:internal/process/task_queues:103:5)"
+      ]
+    },
+    {
+      "name": "a dropped scene PUT that did not apply is retried once from fresh scene data",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-scene-reconciliation.test.js:144:30)\n    at processTicksAndRejections (node:internal/process/task_queues:103:5)"
+      ]
+    },
+    {
+      "name": "a partial scene enable finishes the top-level flag only after read-back",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: 1\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-scene-reconciliation.test.js:153:30)\n    at processTicksAndRejections (node:internal/process/task_queues:103:5)"
+      ]
+    },
+    {
+      "name": "an acknowledged scene PUT is not confirmed using cached state after a failed read",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: false\n    at Object.toBe (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-scene-reconciliation.test.js:167:40)\n    at processTicksAndRejections (node:internal/process/task_queues:103:5)"
+      ]
+    },
+    {
+      "name": "a scene-read throttle stops timer fallback even when the timer source answered",
+      "messages": [
+        "Error: expect(jest.fn()).toHaveBeenCalledTimes(expected)\n\nExpected number of calls: 1\nReceived number of calls: 2\n    at Object.toHaveBeenCalledTimes (/tmp/tmp.DfZQNBUwlf/__tests__/schedule-scene-reconciliation.test.js:188:19)\n    at processTicksAndRejections (node:internal/process/task_queues:103:5)"
+      ]
+    }
+  ],
+  "suiteErrors": []
+}
