@@ -598,7 +598,9 @@ class messageQueueHandler {
               );
               this.adapter.noteRequestUnanswered?.(duid, method, error);
               reject(error);
-              this.adapter.rr_mqtt_connector.recovery?.observeTimeout(sessionHealth);
+              this.adapter.rr_mqtt_connector.recovery?.observeTimeout(
+                sessionHealth
+              );
             } else {
               // A socket that keeps reporting itself connected while every
               // request dies of silence is not a transport worth retrying

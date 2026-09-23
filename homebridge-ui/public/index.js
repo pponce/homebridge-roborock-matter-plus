@@ -41,8 +41,12 @@ const elements = {
   preferCloudForMatterCommands: document.getElementById(
     "prefer-cloud-for-matter-commands"
   ),
-  enableMqttSessionRecovery: document.getElementById("enableMqttSessionRecovery"),
-  enableMqttPreventiveRefresh: document.getElementById("enableMqttPreventiveRefresh"),
+  enableMqttSessionRecovery: document.getElementById(
+    "enableMqttSessionRecovery"
+  ),
+  enableMqttPreventiveRefresh: document.getElementById(
+    "enableMqttPreventiveRefresh"
+  ),
   cloudOnlyMode: document.getElementById("cloud-only-mode"),
   transientWarningThrottleHours: document.getElementById(
     "transient-warning-throttle-hours"
@@ -217,8 +221,12 @@ async function loadConfig() {
     elements.preferCloudForMatterCommands.checked = Boolean(
       config.preferCloudForMatterCommands
     );
-    if (elements.enableMqttSessionRecovery) elements.enableMqttSessionRecovery.checked = config.enableMqttSessionRecovery === true;
-    if (elements.enableMqttPreventiveRefresh) elements.enableMqttPreventiveRefresh.checked = config.enableMqttPreventiveRefresh === true;
+    if (elements.enableMqttSessionRecovery)
+      elements.enableMqttSessionRecovery.checked =
+        config.enableMqttSessionRecovery === true;
+    if (elements.enableMqttPreventiveRefresh)
+      elements.enableMqttPreventiveRefresh.checked =
+        config.enableMqttPreventiveRefresh === true;
     elements.cloudOnlyMode.checked = Boolean(config.cloudOnlyMode);
     elements.advancedSettings.open = Boolean(
       config.debugMode ||
@@ -690,8 +698,12 @@ function getFormValues() {
     ),
     matterChargedBatteryThreshold: getMatterChargedBatteryThreshold(),
     preferCloudForMatterCommands: getPreferCloudForMatterCommands(),
-    enableMqttSessionRecovery: Boolean(elements.enableMqttSessionRecovery?.checked),
-    enableMqttPreventiveRefresh: Boolean(elements.enableMqttPreventiveRefresh?.checked),
+    enableMqttSessionRecovery: Boolean(
+      elements.enableMqttSessionRecovery?.checked
+    ),
+    enableMqttPreventiveRefresh: Boolean(
+      elements.enableMqttPreventiveRefresh?.checked
+    ),
     cloudOnlyMode: getCloudOnlyMode(),
     transientWarningThrottleHours: getTransientWarningThrottleHours(),
   };
@@ -1931,8 +1943,12 @@ function init() {
   elements.preferCloudForMatterCommands.addEventListener("change", () =>
     autoSave()
   );
-  elements.enableMqttSessionRecovery?.addEventListener("change", () => autoSave());
-  elements.enableMqttPreventiveRefresh?.addEventListener("change", () => autoSave());
+  elements.enableMqttSessionRecovery?.addEventListener("change", () =>
+    autoSave()
+  );
+  elements.enableMqttPreventiveRefresh?.addEventListener("change", () =>
+    autoSave()
+  );
   elements.cloudOnlyMode.addEventListener("change", () => autoSave());
   elements.transientWarningThrottleHours.addEventListener("change", () =>
     autoSave()
@@ -1953,4 +1969,3 @@ if (window.homebridge) {
 } else {
   document.addEventListener("DOMContentLoaded", init);
 }
-
