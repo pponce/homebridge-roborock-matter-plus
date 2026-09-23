@@ -64,6 +64,7 @@ that particular request qualified; the persisted account snapshot remains
 request-independent.
 
 This is the second change in the four-part series discussed in issue #27:
+
 1. Session instrumentation and diagnostics (#29).
 2. Feed correlated silence into the breaker (this change).
 3. Opt-in bounded session recreation, with separately switchable preventive refresh.

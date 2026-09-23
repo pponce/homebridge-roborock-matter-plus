@@ -130,9 +130,16 @@ beforeEach(() => {
   breaker = new UnansweredMethodBreaker();
   outcomes = [];
   adapter.noteRequestUnanswered.mockImplementation((duid, method, error) => {
-    outcomes.push({ duid, method, error, ...breaker.recordFailure(duid, method, error) });
+    outcomes.push({
+      duid,
+      method,
+      error,
+      ...breaker.recordFailure(duid, method, error),
+    });
   });
-  adapter.noteRequestAnswered.mockImplementation((duid, method) => breaker.recordAnswer(duid, method));
+  adapter.noteRequestAnswered.mockImplementation((duid, method) =>
+    breaker.recordAnswer(duid, method)
+  );
 });
 function govern(duid = "robot-a", method = "get_consumable") {
   breaker.govern(duid, method);
@@ -144,7 +151,8 @@ async function establishSilence() {
 }
 
 test("correlated cloud failures do not open per-robot methods after six strikes", async () => {
-  govern("robot-a"); govern("robot-b");
+  govern("robot-a");
+  govern("robot-b");
   for (let i = 0; i < 8; i++) {
     await timeout("robot-a", "get_consumable");
     await timeout("robot-b", "get_consumable");
@@ -153,7 +161,10 @@ test("correlated cloud failures do not open per-robot methods after six strikes"
   expect(breaker.shouldSkip("robot-b", "get_consumable")).toBe(false);
   expect(outcomes.filter((o) => o.counted)).toHaveLength(1);
   expect(outcomes[1].error.accountSessionWasSilent).toBe(true);
-  expect(outcomes[1].error).toMatchObject({ unansweredRequest: true, transportWasUp: true });
+  expect(outcomes[1].error).toMatchObject({
+    unansweredRequest: true,
+    transportWasUp: true,
+  });
   expect(mockClient.publish).toHaveBeenCalledTimes(16);
   expect(mockClient.reconnect).not.toHaveBeenCalled();
   expect(mockClient.end).not.toHaveBeenCalled();
@@ -206,13 +217,15 @@ test("other inbound traffic prevents account suppression of a silent method", as
   for (let i = 0; i < 6; i++) {
     const pending = await startRequest("robot-a", "get_consumable");
     receive(reply(999), "robot-b");
-    await jest.advanceTimersByTimeAsync(10_000); await pending.result;
+    await jest.advanceTimersByTimeAsync(10_000);
+    await pending.result;
   }
   expect(breaker.shouldSkip("robot-a", "get_consumable")).toBe(true);
 });
 
 test("local failures still count even while cloud correlation exists", async () => {
-  await establishSilence(); govern();
+  await establishSilence();
+  govern();
   adapter.localConnector.isConnected.mockReturnValue(true);
   const error = await timeout("robot-a", "get_consumable");
   expect(error.message).toContain("Local request");
@@ -232,9 +245,12 @@ test("an ambiguous cloud write cannot inherit the account observation", async ()
 
 test("a previous-generation read cannot inherit new-generation silence", async () => {
   govern();
-  const old = await startRequest("robot-a", "get_consumable", { requestTimeoutMs: 50_000 });
+  const old = await startRequest("robot-a", "get_consumable", {
+    requestTimeoutMs: 50_000,
+  });
   mockHandlers.get("close")();
-  mockHandlers.get("connect")({ sessionPresent: false }); acknowledge();
+  mockHandlers.get("connect")({ sessionPresent: false });
+  acknowledge();
   await establishSilence();
   await jest.advanceTimersByTimeAsync(30_000);
   const error = await old.result;
@@ -245,7 +261,9 @@ test("a previous-generation read cannot inherit new-generation silence", async (
 
 test("a read with inbound activity cannot inherit later silence on other reads", async () => {
   govern();
-  const pending = await startRequest("robot-a", "get_consumable", { requestTimeoutMs: 50_000 });
+  const pending = await startRequest("robot-a", "get_consumable", {
+    requestTimeoutMs: 50_000,
+  });
   receive(null, "unknown-robot");
   await establishSilence();
   await jest.advanceTimersByTimeAsync(30_000);
@@ -256,7 +274,8 @@ test("a read with inbound activity cannot inherit later silence on other reads",
 });
 
 test("expired cross-robot evidence allows ordinary counting again", async () => {
-  govern(); await establishSilence();
+  govern();
+  await establishSilence();
   await jest.advanceTimersByTimeAsync(60_001);
   const error = await timeout("robot-a", "get_consumable");
   expect(isUnansweredRequest(error)).toBe(true);
@@ -264,7 +283,8 @@ test("expired cross-robot evidence allows ordinary counting again", async () => 
 });
 
 test("subscription failure cannot create the signal used to suppress counts", async () => {
-  govern("robot-a"); govern("robot-b");
+  govern("robot-a");
+  govern("robot-b");
   mockHandlers.get("connect")({ sessionPresent: false });
   mockSubscriptions.at(-1)(null, [{ qos: 128 }]);
   await timeout("robot-a", "get_consumable");
@@ -276,7 +296,10 @@ test("subscription failure cannot create the signal used to suppress counts", as
 
 test("missing instrumentation keeps the existing timeout classification", async () => {
   govern();
-  adapter.rr_mqtt_connector = { isConnected: () => true, sendMessage: jest.fn() };
+  adapter.rr_mqtt_connector = {
+    isConnected: () => true,
+    sendMessage: jest.fn(),
+  };
   const error = await timeout("robot-a", "get_consumable");
   expect(isUnansweredRequest(error)).toBe(true);
   expect(outcomes.at(-1).counted).toBe(true);

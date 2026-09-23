@@ -89,7 +89,10 @@ function isUnansweredRequest(error) {
     // A connected socket is not enough: the request layer may have
     // measured correlated account-wide silence on this particular read.
     // Keep the timeout visible to its caller, but do not blame the method.
-    if ("accountSessionWasSilent" in error && error.accountSessionWasSilent === true) {
+    if (
+      "accountSessionWasSilent" in error &&
+      error.accountSessionWasSilent === true
+    ) {
       return false;
     }
     return error.transportWasUp !== false;

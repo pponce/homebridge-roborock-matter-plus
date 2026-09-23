@@ -90,11 +90,11 @@ class MqttSessionDiagnostics {
     // can contribute. A write may have succeeded even without its reply.
     const requestWasSilent = Boolean(
       this.connected &&
-      this.subscriptionAcknowledged &&
-      request &&
-      request.generation === this.generation &&
-      request.rawSequence === this.rawSequence &&
-      /^get_/.test(method)
+        this.subscriptionAcknowledged &&
+        request &&
+        request.generation === this.generation &&
+        request.rawSequence === this.rawSequence &&
+        /^get_/.test(method)
     );
     if (requestWasSilent) {
       if (!this.silentReads.has(duid) && this.silentReads.size >= MAX_ROBOTS) {
