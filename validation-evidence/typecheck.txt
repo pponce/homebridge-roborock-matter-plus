@@ -1,0 +1,4 @@
+
+> homebridge-roborock-matter@3.33.0 typecheck
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.roborockLib.json
+
