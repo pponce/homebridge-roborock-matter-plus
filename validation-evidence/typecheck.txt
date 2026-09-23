@@ -1,0 +1,7 @@
+
+> homebridge-roborock-matter@3.33.0 typecheck
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.roborockLib.json
+
+roborockLib/lib/messageQueueHandler.js(478,62): error TS2339: Property 'assertCanSend' does not exist on type 'MqttConnector'.
+roborockLib/lib/messageQueueHandler.js(601,46): error TS2339: Property 'recovery' does not exist on type 'MqttConnector'.
+roborockLib/lib/messageQueueHandler.js(653,13): error TS2353: Object literal may only specify known properties, and 'transport' does not exist in type 'PendingRequest'.

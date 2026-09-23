@@ -1,0 +1,16 @@
+roborockLib/lib/roborock_mqtt_connector.js 121ms
+roborockLib/lib/mqttSessionRecovery.js 27ms
+roborockLib/lib/messageQueueHandler.js 41ms (unchanged)
+roborockLib/roborockAPI.js 295ms (unchanged)
+config.schema.json 11ms (unchanged)
+src/platform.ts 279ms (unchanged)
+src/types.ts 7ms (unchanged)
+homebridge-ui/public/index.js 95ms (unchanged)
+homebridge-ui/public/index.html 52ms (unchanged)
+__tests__/mqtt-session-recreation.test.js 49ms
+docs/mqtt-session-recovery.md 39ms (unchanged)
+.github/workflows/mqtt-recreation-verification.yml 23ms (unchanged)
+[mqtt-recreation-validation 9d7f282] Format breaker integration for validation [skip ci]
+ 3 files changed, 221 insertions(+), 84 deletions(-)
+To https://github.com/pponce/homebridge-roborock-matter-plus
+   fec8f38..9d7f282  mqtt-recreation-validation -> mqtt-recreation-validation
