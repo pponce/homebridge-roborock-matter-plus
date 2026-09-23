@@ -1,0 +1,16 @@
+{
+  "passed": 2072,
+  "failed": 1,
+  "runtimeErrors": 0,
+  "suites": 136,
+  "failures": [
+    {
+      "name": "the persisted observation reaches the actual UI route and copied report without identities",
+      "messages": [
+        "Error: disk unavailable\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-session-observations.test.js:378:11)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-mock/build/index.js:305:39\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-mock/build/index.js:312:13)\n    at Object.mockConstructor [as setStateAsync] (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-mock/build/index.js:62:19)\n    at setStateAsync (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/roborockLib/lib/roborock_mqtt_connector.js:460:28)\n    at receive (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-session-observations.test.js:39:30)\n    at Object.receive (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-session-observations.test.js:382:3)",
+        "Error: disk unavailable\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-session-observations.test.js:378:11)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-mock/build/index.js:305:39\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-mock/build/index.js:312:13)\n    at Object.mockConstructor [as setStateAsync] (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-mock/build/index.js:62:19)\n    at setStateAsync (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/roborockLib/lib/roborock_mqtt_connector.js:460:28)\n    at receive (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-session-observations.test.js:39:30)\n    at Object.receive (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-session-observations.test.js:382:3)"
+      ]
+    }
+  ],
+  "suiteErrors": []
+}
