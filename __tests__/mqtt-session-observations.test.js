@@ -420,7 +420,10 @@ test("the persisted observation reaches the actual UI route and copied report wi
     const context = {
       module: mod,
       exports: mod.exports,
-      require: (specifier) => specifier === "../crypto" ? { encryptSession: jest.fn() } : createRequire(filename)(specifier),
+      require: (specifier) =>
+        specifier === "../crypto"
+          ? { encryptSession: jest.fn() }
+          : createRequire(filename)(specifier),
       __dirname: path.dirname(filename),
       process,
       console,
