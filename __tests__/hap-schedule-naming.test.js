@@ -661,4 +661,3 @@ describe("HAP schedule names and stable group identity", () => {
     }
   });
 });
-

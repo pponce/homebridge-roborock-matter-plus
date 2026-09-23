@@ -283,8 +283,14 @@ describe("HomeKit schedule settings contract", () => {
   });
 
   test("schedule verification requests fresh reads after writes rather than adopting an older refresh", () => {
-    expect(scheduleSource).toMatch(/!forceFresh &&[\s\S]*?this\.refreshInProgress/);
-    expect(scheduleSource.match(/this\.refreshDetailed\(\s*Date\.now\(\),\s*true,\s*true\s*\)/g)).toHaveLength(2);
+    expect(scheduleSource).toMatch(
+      /!forceFresh &&[\s\S]*?this\.refreshInProgress/
+    );
+    expect(
+      scheduleSource.match(
+        /this\.refreshDetailed\(\s*Date\.now\(\),\s*true,\s*true\s*\)/g
+      )
+    ).toHaveLength(2);
   });
 
   test("schedule writes are serialized by the per-vacuum coordinator", () => {
@@ -472,7 +478,11 @@ describe("HomeKit schedule settings contract", () => {
   });
 
   test("schedule verification refreshes once per batch through the coordinator", () => {
-    expect(scheduleSource.match(/await this\.refreshDetailed\(\s*Date\.now\(\),\s*true,\s*true\s*\)/g)).toHaveLength(2);
+    expect(
+      scheduleSource.match(
+        /await this\.refreshDetailed\(\s*Date\.now\(\),\s*true,\s*true\s*\)/g
+      )
+    ).toHaveLength(2);
     expect(scheduleSource).toContain("verified(verification, request)");
     expect(scheduleSource).toContain("verified(finalVerification, request)");
     expect(scheduleSource).toContain("this.cachedScheduleMatches(request)");
@@ -522,4 +532,3 @@ describe("HomeKit schedule settings contract", () => {
     expect(removalBlock[1]).not.toContain("unregisterPlatformAccessories");
   });
 });
-
