@@ -41,6 +41,7 @@ const elements = {
   preferCloudForMatterCommands: document.getElementById(
     "prefer-cloud-for-matter-commands"
   ),
+  enableMqttSessionRecovery: document.getElementById("enableMqttSessionRecovery"),
   cloudOnlyMode: document.getElementById("cloud-only-mode"),
   transientWarningThrottleHours: document.getElementById(
     "transient-warning-throttle-hours"
@@ -215,10 +216,12 @@ async function loadConfig() {
     elements.preferCloudForMatterCommands.checked = Boolean(
       config.preferCloudForMatterCommands
     );
+    if (elements.enableMqttSessionRecovery) elements.enableMqttSessionRecovery.checked = config.enableMqttSessionRecovery === true;
     elements.cloudOnlyMode.checked = Boolean(config.cloudOnlyMode);
     elements.advancedSettings.open = Boolean(
       config.debugMode ||
         config.preferCloudForMatterCommands ||
+        config.enableMqttSessionRecovery ||
         config.cloudOnlyMode
     );
     elements.transientWarningThrottleHours.value =
@@ -646,6 +649,7 @@ const AUTO_SAVED_FIELDS = [
   "debugMode",
   "matterChargedBatteryThreshold",
   "preferCloudForMatterCommands",
+  "enableMqttSessionRecovery",
   "cloudOnlyMode",
   "transientWarningThrottleHours",
 ];
@@ -682,6 +686,7 @@ function getFormValues() {
     ),
     matterChargedBatteryThreshold: getMatterChargedBatteryThreshold(),
     preferCloudForMatterCommands: getPreferCloudForMatterCommands(),
+    enableMqttSessionRecovery: Boolean(elements.enableMqttSessionRecovery?.checked),
     cloudOnlyMode: getCloudOnlyMode(),
     transientWarningThrottleHours: getTransientWarningThrottleHours(),
   };
@@ -1921,6 +1926,7 @@ function init() {
   elements.preferCloudForMatterCommands.addEventListener("change", () =>
     autoSave()
   );
+  elements.enableMqttSessionRecovery?.addEventListener("change", () => autoSave());
   elements.cloudOnlyMode.addEventListener("change", () => autoSave());
   elements.transientWarningThrottleHours.addEventListener("change", () =>
     autoSave()
@@ -1941,3 +1947,4 @@ if (window.homebridge) {
 } else {
   document.addEventListener("DOMContentLoaded", init);
 }
+

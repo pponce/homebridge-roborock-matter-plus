@@ -474,6 +474,8 @@ class messageQueueHandler {
     );
 
     if (roborockMessage) {
+      // Recheck after async payload building: a recreation may have begun.
+      if (useCloudConnection) this.adapter.rr_mqtt_connector.assertCanSend?.();
       return new Promise((resolve, reject) => {
         if (
           !deviceOnline &&
@@ -596,6 +598,7 @@ class messageQueueHandler {
               );
               this.adapter.noteRequestUnanswered?.(duid, method, error);
               reject(error);
+              this.adapter.rr_mqtt_connector.recovery?.observeTimeout(sessionHealth);
             } else {
               // A socket that keeps reporting itself connected while every
               // request dies of silence is not a transport worth retrying
@@ -645,6 +648,7 @@ class messageQueueHandler {
             timeout,
             secure,
             method,
+            transport: useCloudConnection ? "cloud" : "local",
           });
 
           if (useCloudConnection) {
