@@ -168,9 +168,12 @@ class roborock_mqtt_connector {
     this.adapter = adapter;
 
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
-      Promise.resolve(this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
-        val: JSON.stringify(snapshot), ack: true,
-      })).catch(() => {});
+      Promise.resolve(
+        this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
+          val: JSON.stringify(snapshot),
+          ack: true,
+        })
+      ).catch(() => {});
     });
     this.connected = false;
     this.initialConnectTimeout = null;
@@ -430,7 +433,11 @@ class roborock_mqtt_connector {
             dps = parsedPayload.dps;
           }
 
-          if (resolveB01PendingResponse(this.adapter, duid, dps, () => this.sessionDiagnostics.noteActivity("correlated"))) {
+          if (
+            resolveB01PendingResponse(this.adapter, duid, dps, () =>
+              this.sessionDiagnostics.noteActivity("correlated")
+            )
+          ) {
             return;
           }
 
@@ -588,7 +595,7 @@ class roborock_mqtt_connector {
                   `Cloud message with protocol 301 and photo id ${photoData.id} received.`
                 );
                 this.sessionDiagnostics.noteActivity("correlated");
-              resolve(data.payload.slice(56));
+                resolve(data.payload.slice(56));
               }
             } else {
               const data2 = parseProtocol301Header(data.payload);
@@ -664,7 +671,7 @@ class roborock_mqtt_connector {
                   `Cloud message with protocol 301 and id ${data2.id} received.`
                 );
                 this.sessionDiagnostics.noteActivity("correlated");
-              resolve(decrypted);
+                resolve(decrypted);
               }
             }
           }
@@ -870,7 +877,12 @@ class roborock_mqtt_connector {
  * Robot-initiated B01 pushes (no matching request) trigger a status refresh
  * instead of guessing at undocumented event payload formats.
  */
-function resolveB01PendingResponse(adapter, duid, dps, onCorrelatedReply = () => {}) {
+function resolveB01PendingResponse(
+  adapter,
+  duid,
+  dps,
+  onCorrelatedReply = () => {}
+) {
   if (!dps || dps.msgId === undefined || dps.id !== undefined) {
     return false;
   }

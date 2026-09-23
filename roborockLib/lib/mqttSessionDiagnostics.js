@@ -18,7 +18,13 @@ class MqttSessionDiagnostics {
     /** @type {number | null} */
     this.connectedAt = null;
     /** @type {Record<ActivityStage, number | null>} */
-    this.activity = { raw: null, attributed: null, decoded: null, correlated: null, local: null };
+    this.activity = {
+      raw: null,
+      attributed: null,
+      decoded: null,
+      correlated: null,
+      local: null,
+    };
     /** @type {Map<string, number>} */
     this.silentReads = new Map();
     /** @type {number | null} */
@@ -30,7 +36,13 @@ class MqttSessionDiagnostics {
     this.connected = true;
     this.subscriptionAcknowledged = false;
     this.connectedAt = performance.now();
-    this.activity = { raw: null, attributed: null, decoded: null, correlated: null, local: null };
+    this.activity = {
+      raw: null,
+      attributed: null,
+      decoded: null,
+      correlated: null,
+      local: null,
+    };
     this.silentReads.clear();
     this.emit(true);
     return this.generation;
@@ -46,8 +58,11 @@ class MqttSessionDiagnostics {
   /** @param {number} generation @param {unknown} error @param {unknown} granted */
   onSubscribe(generation, error, granted) {
     if (generation !== this.generation || !this.connected) return;
-    this.subscriptionAcknowledged = !error && Array.isArray(granted) &&
-      granted.length > 0 && granted.every((entry) => [0, 1, 2].includes(entry.qos));
+    this.subscriptionAcknowledged =
+      !error &&
+      Array.isArray(granted) &&
+      granted.length > 0 &&
+      granted.every((entry) => [0, 1, 2].includes(entry.qos));
     this.emit(true);
   }
 
@@ -73,9 +88,14 @@ class MqttSessionDiagnostics {
     this.prune();
     // Only active, unanswered reads on an acknowledged, connected session
     // can contribute. A write may have succeeded even without its reply.
-    if (this.connected && this.subscriptionAcknowledged && request &&
-        request.generation === this.generation && request.rawSequence === this.rawSequence &&
-        /^get_/.test(method)) {
+    if (
+      this.connected &&
+      this.subscriptionAcknowledged &&
+      request &&
+      request.generation === this.generation &&
+      request.rawSequence === this.rawSequence &&
+      /^get_/.test(method)
+    ) {
       if (!this.silentReads.has(duid) && this.silentReads.size >= MAX_ROBOTS) {
         const oldest = this.silentReads.keys().next().value;
         if (oldest !== undefined) this.silentReads.delete(oldest);
@@ -97,7 +117,8 @@ class MqttSessionDiagnostics {
     this.prune();
     const now = performance.now();
     /** @param {number | null} at */
-    const age = (at) => at === null ? null : Math.max(0, Math.round(now - at));
+    const age = (at) =>
+      at === null ? null : Math.max(0, Math.round(now - at));
     return {
       capturedAt: new Date().toISOString(),
       generation: this.generation,
@@ -117,10 +138,19 @@ class MqttSessionDiagnostics {
 
   emit(force = false) {
     const now = performance.now();
-    if (!force && this.lastPublishedAt !== null && now - this.lastPublishedAt < SNAPSHOT_INTERVAL_MS) return;
+    if (
+      !force &&
+      this.lastPublishedAt !== null &&
+      now - this.lastPublishedAt < SNAPSHOT_INTERVAL_MS
+    )
+      return;
     this.lastPublishedAt = now;
     // Telemetry failure must not interfere with message handling.
-    try { this.publish(this.snapshot()); } catch { /* observation only */ }
+    try {
+      this.publish(this.snapshot());
+    } catch {
+      /* observation only */
+    }
   }
 }
 

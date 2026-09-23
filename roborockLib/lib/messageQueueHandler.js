@@ -557,8 +557,11 @@ class messageQueueHandler {
             typeof this.adapter.getCloudMessageReceiptCount === "function"
               ? this.adapter.getCloudMessageReceiptCount(duid)
               : null;
-          const sessionDiagnostics = this.adapter.rr_mqtt_connector.sessionDiagnostics;
-          const sessionRequest = useCloudConnection ? sessionDiagnostics?.captureRequest() : undefined;
+          const sessionDiagnostics =
+            this.adapter.rr_mqtt_connector.sessionDiagnostics;
+          const sessionRequest = useCloudConnection
+            ? sessionDiagnostics?.captureRequest()
+            : undefined;
           const timeout = this.adapter.setTimeout(() => {
             this.adapter.pendingRequests.delete(messageID);
             this.adapter.localConnector.clearChunkBuffer(duid);
@@ -571,7 +574,11 @@ class messageQueueHandler {
               const transportWasUp = Boolean(
                 this.adapter.rr_mqtt_connector?.isConnected?.()
               );
-              const sessionHealth = sessionDiagnostics?.noteTimeout(duid, method, sessionRequest);
+              const sessionHealth = sessionDiagnostics?.noteTimeout(
+                duid,
+                method,
+                sessionRequest
+              );
               const error = unansweredRequestError(
                 `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${transportWasUp}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}${sessionHealth ? ` MQTT session observation: ${JSON.stringify(sessionHealth)}` : ""}`,
                 transportWasUp

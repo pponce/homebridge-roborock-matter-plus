@@ -1456,7 +1456,9 @@ async function buildDiagnosticsReport(result) {
   ];
 
   if (result.mqttSession) {
-    lines.push(`mqttSession (ages at capturedAt): ${formatDiagnosticPayload(result.mqttSession)}`);
+    lines.push(
+      `mqttSession (ages at capturedAt): ${formatDiagnosticPayload(result.mqttSession)}`
+    );
     lines.push("");
   }
 
