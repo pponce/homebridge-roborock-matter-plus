@@ -299,7 +299,7 @@ test("preventive refresh is off even when reactive recovery is enabled", async (
   expect(mockClients).toHaveLength(1);
 });
 
-test("the separate code switch permits an idle four-hour refresh", async () => {
+test("the independent preventive control permits an idle four-hour refresh", async () => {
   if (connector.recovery) connector.recovery.preventiveRefreshEnabled = true;
   await jest.advanceTimersByTimeAsync(4 * 60 * 60 * 1000);
   expect(mockClients).toHaveLength(2);

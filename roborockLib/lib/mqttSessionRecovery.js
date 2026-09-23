@@ -1,7 +1,5 @@
 "use strict";
 
-// Deliberately code-only for this opt-in release; upstream can choose a UI later.
-const ENABLE_PREVENTIVE_REFRESH = false;
 const PREVENTIVE_AGE_MS = 4 * 60 * 60 * 1000;
 const COOLDOWN_MS = 60_000;
 const READY_TIMEOUT_MS = 20_000;
@@ -12,7 +10,7 @@ class MqttSessionRecovery {
   constructor(connector) {
     this.connector = connector;
     this.adapter = connector.adapter;
-    this.preventiveRefreshEnabled = ENABLE_PREVENTIVE_REFRESH;
+    this.preventiveRefreshEnabled = this.adapter.config.enableMqttPreventiveRefresh === true;
     this.stopped = false;
     this.recovering = false;
     this.inFlight = null;

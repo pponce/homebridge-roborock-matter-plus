@@ -266,6 +266,12 @@
         "description": "Recreates a correlated silent MQTT session. Off by default. Commands are not replayed. Restart the child bridge after changing this setting.",
         "type": "boolean",
         "default": false
+      },
+      "enableMqttPreventiveRefresh": {
+        "title": "Enable preventive MQTT refresh",
+        "description": "Refreshes the MQTT session after four hours when idle. Requires experimental MQTT session recovery. Off by default. Restart the child bridge after changing this setting.",
+        "type": "boolean",
+        "default": false
       }
     },
     "required": [

@@ -23,15 +23,16 @@ existing hourly connection check can retry after that cooldown. Shutdown cancels
 waits and prevents another client from being created. Retired client callbacks
 cannot change readiness or process messages.
 
-## Preventive refresh: separate, code-only, off by default
+## Preventive refresh: separate and off by default
 
-`ENABLE_PREVENTIVE_REFRESH` in `roborockLib/lib/mqttSessionRecovery.js` is false.
-It is deliberately not a HomeKit accessory or user-facing setting. The maintainer
-can choose whether and how to expose it later. It only operates when experimental
-session recovery is enabled.
+`enableMqttPreventiveRefresh` defaults to false and lives in the collapsible
+Advanced troubleshooting section of the plugin config UI for now. The maintainer
+can choose another presentation later. It is a configuration option, not a HomeKit
+accessory. It requires experimental session recovery to be enabled, and a child
+bridge restart after changing it.
 
-Changing that constant to true enables a once-per-minute check for sessions that
-have been ready for at least four hours. Refresh defers if any cloud request is
+When enabled, a once-per-minute check refreshes sessions that have been ready for
+at least four hours. Refresh defers if any cloud request is
 still outstanding after the drain window, including a write or B01 map request.
 It does not coordinate entire multi-command schedule transactions.
 

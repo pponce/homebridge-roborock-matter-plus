@@ -20,12 +20,23 @@ jobs:
       - name: Format focused changes
         id: prepare
         run: |
-          npx prettier --write roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/messageQueueHandler.js roborockLib/roborockAPI.js config.schema.json src/platform.ts src/types.ts homebridge-ui/public/index.js homebridge-ui/public/index.html __tests__/mqtt-session-recreation.test.js docs/mqtt-session-recovery.md .github/workflows/mqtt-recreation-verification.yml > "$RUNNER_TEMP/prepare.log" 2>&1
+          set +e
+          (
+            set -e
+          npx prettier --write roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/messageQueueHandler.js roborockLib/roborockAPI.js config.schema.json src/platform.ts src/types.ts homebridge-ui/public/index.js homebridge-ui/public/index.html __tests__/mqtt-session-recreation.test.js docs/mqtt-session-recovery.md .github/workflows/mqtt-recreation-verification.yml
           git add roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/messageQueueHandler.js roborockLib/roborockAPI.js config.schema.json src/platform.ts src/types.ts homebridge-ui/public/index.js homebridge-ui/public/index.html __tests__/mqtt-session-recreation.test.js docs/mqtt-session-recovery.md .github/workflows/mqtt-recreation-verification.yml
           if ! git diff --cached --quiet; then
             git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format breaker integration for validation [skip ci]"
             git push
           fi
+          ) > "$RUNNER_TEMP/prepare.log" 2>&1
+          result=$?
+          echo "summary=$(tail -c 800 "$RUNNER_TEMP/prepare.log" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/prepare.log"
+          test "$result" -eq 0
+      - name: "Preparation result: ${{ steps.prepare.outputs.summary }}"
+        if: always()
+        run: echo "Preparation result recorded above."
       - name: Demonstrate failures against release and instrumentation-only baselines
         id: baseline
         shell: bash
@@ -93,4 +104,3 @@ jobs:
           test "${{ steps.types.outcome }}" = success
           test "${{ steps.full.outcome }}" = success
           test "${{ steps.build.outcome }}" = success
-
