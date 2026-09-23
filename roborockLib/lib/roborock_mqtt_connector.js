@@ -38,6 +38,7 @@ const photoParser = new Parser()
   })
   .uint8("id");
 
+
 // Per robot, not per process. These were module-level `let`s shared by every
 // robot on the account until 3.31.0, and they are only cleared when a photo
 // transfer COMPLETES. One transfer that started and never finished — a robot
@@ -161,10 +162,8 @@ function parseProtocol301Header(payload) {
 class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
-    this.recovery =
-      adapter.config?.enableMqttSessionRecovery === true
-        ? new MqttSessionRecovery(this)
-        : null;
+    this.recovery = adapter.config?.enableMqttSessionRecovery === true
+      ? new MqttSessionRecovery(this) : null;
 
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
       Promise.resolve(
@@ -190,12 +189,8 @@ class roborock_mqtt_connector {
       .md5bin(this.rriot.k)
       .subarray(8, 14)
       .toString("base64"); // Could be a random but rather static string. The app generates it on first run.
-    this.mqttUser = roborockCrypto
-      .md5hex(this.rriot.u + ":" + this.rriot.k)
-      .substring(2, 10);
-    this.mqttPassword = roborockCrypto
-      .md5hex(this.rriot.s + ":" + this.rriot.k)
-      .substring(16);
+    this.mqttUser = roborockCrypto.md5hex(this.rriot.u + ":" + this.rriot.k).substring(2, 10);
+    this.mqttPassword = roborockCrypto.md5hex(this.rriot.s + ":" + this.rriot.k).substring(16);
     this.createClient();
   }
 
@@ -238,17 +233,14 @@ class roborock_mqtt_connector {
     await this.client.on("connect", (result) => {
       if (typeof result != "undefined") {
         const generation = this.sessionDiagnostics.onConnect();
-        this.client.subscribe(
-          `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`,
-          (err, granted) => {
-            this.sessionDiagnostics.onSubscribe(generation, err, granted);
-            if (err) {
-              this.logConnectionIssue(
-                `Failed to subscribe to the Roborock MQTT server: ${err} (granted: ${JSON.stringify(granted)}).`
-              );
-            }
+        this.client.subscribe(`rr/m/o/${this.rriot.u}/${this.mqttUser}/#`, (err, granted) => {
+          this.sessionDiagnostics.onSubscribe(generation, err, granted);
+          if (err) {
+            this.logConnectionIssue(
+              `Failed to subscribe to the Roborock MQTT server: ${err} (granted: ${JSON.stringify(granted)}).`
+            );
           }
-        );
+        });
         this.clearInitialConnectTimeout();
 
         this.connected = true;
@@ -288,17 +280,14 @@ class roborock_mqtt_connector {
 
     await this.client.on("reconnect", () => {
       const generation = this.sessionDiagnostics.generation;
-      this.client.subscribe(
-        `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`,
-        (err, granted) => {
-          this.sessionDiagnostics.onSubscribe(generation, err, granted);
-          if (err) {
-            this.logConnectionIssue(
-              `Failed to subscribe to the Roborock MQTT server after reconnect: ${err} (granted: ${JSON.stringify(granted)}).`
-            );
-          }
+      this.client.subscribe(`rr/m/o/${this.rriot.u}/${this.mqttUser}/#`, (err, granted) => {
+        this.sessionDiagnostics.onSubscribe(generation, err, granted);
+        if (err) {
+          this.logConnectionIssue(
+            `Failed to subscribe to the Roborock MQTT server after reconnect: ${err} (granted: ${JSON.stringify(granted)}).`
+          );
         }
-      );
+      });
       this.clearInitialConnectTimeout();
       this.adapter.log.debug(`MQTT connection reconnect attempt.`);
     });
@@ -396,6 +385,7 @@ class roborock_mqtt_connector {
     this.adapter.log.debug(`MQTT initialized.`);
 
     const candidate = this.client;
+    const endpoint = this.endpoint;
     candidate.on("message", (topic, message) => {
       if (candidate !== this.client || this.recovery?.stopped) return;
       try {
@@ -628,7 +618,7 @@ class roborock_mqtt_connector {
               // THE COMPARISON IS THE OTHER WAY ROUND, and until 3.31.0 it
               // was inverted AND silent — the worst possible pair.
               //
-              // `endpoint` is our own 8-character key (md5bin(this.rriot.k)
+              // `endpoint` is our own 8-character key (md5bin(rriot.k)
               // bytes 8..14, base64). The wire field is 15 bytes, so a robot
               // that echoes our 8 characters followed by anything that is not
               // a trailing NUL leaves `data2.endpoint` LONGER than 8 —
@@ -647,10 +637,10 @@ class roborock_mqtt_connector {
               //
               // Whether that IS the cause is not settled here — it is
               // measured, because from 3.31.0 the drop says so.
-              if (!String(data2.endpoint || "").startsWith(this.endpoint)) {
+              if (!String(data2.endpoint || "").startsWith(endpoint)) {
                 noteDroppedFrame(duid, "addressed-elsewhere");
                 this.adapter.log.debug(
-                  `Dropped a protocol 301 message for ${duid}: it is addressed to endpoint '${data2.endpoint}', and this plugin's endpoint is '${this.endpoint}'. The reply was received and decrypted but is not ours, so the request that is waiting will time out. If you are seeing map or live-room requests time out on a robot that answers everything else, this line is the reason — please report it.`
+                  `Dropped a protocol 301 message for ${duid}: it is addressed to endpoint '${data2.endpoint}', and this plugin's endpoint is '${endpoint}'. The reply was received and decrypted but is not ours, so the request that is waiting will time out. If you are seeing map or live-room requests time out on a robot that answers everything else, this line is the reason — please report it.`
                 );
                 return;
               }
@@ -778,19 +768,13 @@ class roborock_mqtt_connector {
 
   sendMessage(duid, roborockMessage) {
     this.assertCanSend();
-    this.client.publish(
-      `rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`,
-      roborockMessage,
-      {
-        qos: 1,
-      }
-    );
+    this.client.publish(`rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`, roborockMessage, {
+      qos: 1,
+    });
   }
 
   isConnected() {
-    return (
-      this.connected && !this.recovery?.recovering && !this.recovery?.stopped
-    );
+    return this.connected && !this.recovery?.recovering && !this.recovery?.stopped;
   }
 
   /**
