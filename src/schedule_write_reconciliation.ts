@@ -11,7 +11,10 @@ export function isAmbiguousScheduleWrite(error: unknown): boolean {
   return (
     failure.unansweredRequest === true ||
     failure.code === "MQTT_SESSION_REPLACED" ||
-    ["ETIMEDOUT", "ECONNRESET", "ECONNABORTED", "EPIPE"].includes(failure.code ?? "") ||
-    (typeof failure.response?.status === "number" && failure.response.status >= 500)
+    ["ETIMEDOUT", "ECONNRESET", "ECONNABORTED", "EPIPE"].includes(
+      failure.code ?? ""
+    ) ||
+    (typeof failure.response?.status === "number" &&
+      failure.response.status >= 500)
   );
 }
