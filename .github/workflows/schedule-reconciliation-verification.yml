@@ -23,8 +23,8 @@ jobs:
           set +e
           (
             set -e
-                    npx prettier --write src/hap_schedule_accessory.ts src/schedule_write_reconciliation.ts __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js docs/schedule-write-reconciliation.md .github/workflows/schedule-reconciliation-verification.yml
-          git add src/hap_schedule_accessory.ts src/schedule_write_reconciliation.ts __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js docs/schedule-write-reconciliation.md
+                    npx prettier --write src/hap_schedule_accessory.ts src/schedule_write_reconciliation.ts __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js docs/schedule-write-reconciliation.md __tests__/schedule-settings-contract.test.js __tests__/hap-schedule-naming.test.js .github/workflows/schedule-reconciliation-verification.yml
+          git add src/hap_schedule_accessory.ts src/schedule_write_reconciliation.ts __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js docs/schedule-write-reconciliation.md __tests__/schedule-settings-contract.test.js __tests__/hap-schedule-naming.test.js
           if ! git diff --cached --quiet; then
             git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format breaker integration for validation [skip ci]"
             git push
