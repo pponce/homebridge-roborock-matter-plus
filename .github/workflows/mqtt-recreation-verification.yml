@@ -79,8 +79,12 @@ jobs:
         continue-on-error: true
         run: npm run build > "$RUNNER_TEMP/build.log" 2>&1
       - name: Publish bounded validation evidence on this temporary branch
+        id: evidence
         if: always()
         run: |
+          set +e
+          (
+            set -e
           mkdir -p validation-evidence
           for kind in breaker green full; do
             if [ -f "$RUNNER_TEMP/$kind-results.json" ]; then
@@ -95,6 +99,14 @@ jobs:
           git reset\n          git add -f validation-evidence
           git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record PR 3 validation evidence [skip ci]"
           git push
+          ) > "$RUNNER_TEMP/evidence.log" 2>&1
+          result=$?
+          echo "summary=$(tail -c 1000 "$RUNNER_TEMP/evidence.log" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/evidence.log"
+          test "$result" -eq 0
+      - name: "Evidence result: ${{ steps.evidence.outputs.summary }}"
+        if: always()
+        run: echo "Evidence result recorded above."
       - name: Require every validation gate to pass
         if: always()
         run: |
@@ -104,3 +116,4 @@ jobs:
           test "${{ steps.types.outcome }}" = success
           test "${{ steps.full.outcome }}" = success
           test "${{ steps.build.outcome }}" = success
+          test "${{ steps.evidence.outcome }}" = success
