@@ -1,0 +1,39 @@
+{
+  "passed": 10,
+  "failed": 5,
+  "runtimeErrors": 0,
+  "suites": 1,
+  "failures": [
+    {
+      "name": "correlated cloud failures do not open per-robot methods after six strikes",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: true\n    at Object.toBe (/tmp/tmp.JnxtpGwdrE/__tests__/mqtt-session-breaker.test.js:160:59)"
+      ]
+    },
+    {
+      "name": "correlation prevents the sixth count but preserves the five earlier failures",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: true\n    at Object.toBe (/tmp/tmp.JnxtpGwdrE/__tests__/mqtt-session-breaker.test.js:178:38)"
+      ]
+    },
+    {
+      "name": "the suppression uses structured evidence even if the log message changes",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: true\n    at Object.toBe (/tmp/tmp.JnxtpGwdrE/__tests__/mqtt-session-breaker.test.js:191:38)"
+      ]
+    },
+    {
+      "name": "cloud timeouts still reject callers while the breaker ignores them",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 1\n+ Received  + 1\n\n  Object {\n-   \"counted\": false,\n+   \"counted\": true,\n    \"opened\": false,\n  }\n    at Object.toMatchObject (/tmp/tmp.JnxtpGwdrE/__tests__/mqtt-session-breaker.test.js:204:27)"
+      ]
+    },
+    {
+      "name": "correlated silence does not reopen an already-open breaker",
+      "messages": [
+        "Error: expect(received).toEqual(expected) // deep equality\n\n- Expected  - 3\n+ Received  + 3\n\n  Object {\n-   \"failures\": 6,\n-   \"openedAt\": 1767225660000,\n-   \"retryAt\": 1767247260000,\n+   \"failures\": 7,\n+   \"openedAt\": 1767225690000,\n+   \"retryAt\": 1767247290000,\n  }\n    at Object.toEqual (/tmp/tmp.JnxtpGwdrE/__tests__/mqtt-session-breaker.test.js:326:57)"
+      ]
+    }
+  ],
+  "suiteErrors": []
+}
