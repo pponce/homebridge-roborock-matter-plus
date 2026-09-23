@@ -18,8 +18,9 @@ jobs:
       - run: git rm -r --ignore-unmatch validation-evidence
       - run: npm ci
       - name: Format focused changes
+        id: prepare
         run: |
-          npx prettier --write roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/messageQueueHandler.js roborockLib/roborockAPI.js config.schema.json src/platform.ts src/types.ts homebridge-ui/public/index.js homebridge-ui/public/index.html __tests__/mqtt-session-recreation.test.js docs/mqtt-session-recovery.md .github/workflows/mqtt-recreation-verification.yml
+          npx prettier --write roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/messageQueueHandler.js roborockLib/roborockAPI.js config.schema.json src/platform.ts src/types.ts homebridge-ui/public/index.js homebridge-ui/public/index.html __tests__/mqtt-session-recreation.test.js docs/mqtt-session-recovery.md .github/workflows/mqtt-recreation-verification.yml > "$RUNNER_TEMP/prepare.log" 2>&1
           git add roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/messageQueueHandler.js roborockLib/roborockAPI.js config.schema.json src/platform.ts src/types.ts homebridge-ui/public/index.js homebridge-ui/public/index.html __tests__/mqtt-session-recreation.test.js docs/mqtt-session-recovery.md .github/workflows/mqtt-recreation-verification.yml
           if ! git diff --cached --quiet; then
             git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format breaker integration for validation [skip ci]"
@@ -75,18 +76,18 @@ jobs:
               node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[2],JSON.stringify({passed:r.numPassedTests,failed:r.numFailedTests,runtimeErrors:r.numRuntimeErrorTestSuites,suites:r.numTotalTestSuites,failures:r.testResults.flatMap(s=>(s.assertionResults||[]).filter(t=>t.status==="failed").map(t=>({name:t.fullName,messages:t.failureMessages}))),suiteErrors:r.testResults.filter(s=>s.message && !s.assertionResults?.length).map(s=>s.message)},null,2)+"\n");' "$RUNNER_TEMP/$kind-results.json" "validation-evidence/$kind.json"
             fi
           done
-          for kind in lint typecheck build; do
+          for kind in prepare lint typecheck build; do
             if [ -f "$RUNNER_TEMP/$kind.log" ]; then
               tail -n 100 "$RUNNER_TEMP/$kind.log" > "validation-evidence/$kind.txt"
             fi
           done
-          git add validation-evidence
+          git reset\n          git add -f validation-evidence
           git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record PR 3 validation evidence [skip ci]"
           git push
       - name: Require every validation gate to pass
         if: always()
         run: |
-          test "${{ steps.baseline.outcome }}" = success
+          test "${{ steps.prepare.outcome }}" = success\n          test "${{ steps.baseline.outcome }}" = success
           test "${{ steps.focused.outcome }}" = success
           test "${{ steps.formatting.outcome }}" = success
           test "${{ steps.types.outcome }}" = success
