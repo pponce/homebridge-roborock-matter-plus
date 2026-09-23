@@ -6411,9 +6411,7 @@ class Roborock {
     // MessageQueueHandler already reports its structured timeouts. The B01
     // upload channel has its own timer and still reaches this method directly.
     const breakerOpened =
-      error &&
-      typeof error === "object" &&
-      error.unansweredRequest === true
+      error && typeof error === "object" && error.unansweredRequest === true
         ? error.unansweredMethodOpened === true
         : this.noteMethodUnanswered(duid, method, error);
 

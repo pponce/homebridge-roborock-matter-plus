@@ -605,28 +605,25 @@ class messageQueueHandler {
               );
               const sessionHealth =
                 this.adapter.rr_mqtt_connector.getSessionHealthSnapshot?.(duid);
-              const requestAgeMs = Number.isFinite(
-                pendingRequest.publishedAt
-              )
-                ? Math.max(0, Date.now() - pendingRequest.publishedAt)
-                : null;
+              const requestAgeMs =
+                typeof pendingRequest.publishedAt === "number" &&
+                Number.isFinite(pendingRequest.publishedAt)
+                  ? Math.max(0, Date.now() - pendingRequest.publishedAt)
+                  : null;
               const accountSessionWasSilent =
                 pendingRequest.operationClass === "read" &&
                 requestAgeMs !== null &&
                 sessionHealth !== undefined &&
                 (sessionHealth.lastRawInboundAgeMs === null ||
-                  (Number.isFinite(sessionHealth.lastRawInboundAgeMs) &&
+                  (typeof sessionHealth.lastRawInboundAgeMs === "number" &&
+                    Number.isFinite(sessionHealth.lastRawInboundAgeMs) &&
                     sessionHealth.lastRawInboundAgeMs >= requestAgeMs));
               const timeoutError = unansweredRequestError(
                 `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${transportWasUp}${sessionHealth ? `; session health: ${JSON.stringify(sessionHealth)}` : ""}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`,
                 transportWasUp,
                 accountSessionWasSilent
               );
-              this.adapter.noteRequestUnanswered?.(
-                duid,
-                method,
-                timeoutError
-              );
+              this.adapter.noteRequestUnanswered?.(duid, method, timeoutError);
               reject(timeoutError);
               this.adapter.rr_mqtt_connector.noteSilentCloudReadTimeout?.({
                 duid,
