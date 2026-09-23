@@ -1,0 +1,94 @@
+name: MQTT breaker integration verification
+on:
+  push:
+    branches: [mqtt-breaker-validation]
+permissions:
+  contents: write
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: git rm -r --ignore-unmatch validation-evidence
+      - run: npm ci
+      - name: Format focused changes
+        run: |
+          npx prettier --write roborockLib/lib/messageQueueHandler.js roborockLib/lib/mqttSessionDiagnostics.js roborockLib/lib/unansweredMethodBreaker.js __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-breaker.test.js docs/mqtt-session-diagnostics.md .github/workflows/mqtt-breaker-verification.yml
+          git add roborockLib/lib/messageQueueHandler.js roborockLib/lib/mqttSessionDiagnostics.js roborockLib/lib/unansweredMethodBreaker.js __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-breaker.test.js docs/mqtt-session-diagnostics.md .github/workflows/mqtt-breaker-verification.yml
+          if ! git diff --cached --quiet; then
+            git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format breaker integration for validation [skip ci]"
+            git push
+          fi
+      - name: Demonstrate failures against release and instrumentation-only baselines
+        id: baseline
+        shell: bash
+        run: |
+          for entry in release:4156efeedeb7a798147a75753138f74cb5ce6f0c instrumentation:42e070a9f7bbe9bb4fd088ee3cf2afa56d1424e0; do
+            label="${entry%%:*}"
+            commit="${entry#*:}"
+            baseline=$(mktemp -d)
+            git archive "$commit" | tar -x -C "$baseline"
+            cp __tests__/mqtt-session-breaker.test.js "$baseline/__tests__/"
+            ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline/node_modules"
+            pushd "$baseline"
+            set +e
+            npm test -- --runInBand __tests__/mqtt-session-breaker.test.js --json --outputFile="$RUNNER_TEMP/$label-results.json" > "$RUNNER_TEMP/$label.log" 2>&1
+            result=$?
+            set -e
+            cat "$RUNNER_TEMP/$label.log"
+            test "$result" -ne 0
+            node -e 'const r=require(process.argv[1]); if(r.numFailedTests < 4 || r.numRuntimeErrorTestSuites !== 0) process.exit(1); console.log("Behavioral failures:",r.numFailedTests,"passing controls:",r.numPassedTests);' "$RUNNER_TEMP/$label-results.json"
+            popd
+          done
+      - name: Focused green behavioral tests
+        id: focused
+        continue-on-error: true
+        run: npm test -- --runInBand __tests__/mqtt-session-breaker.test.js --json --outputFile="$RUNNER_TEMP/green-results.json" > "$RUNNER_TEMP/green.log" 2>&1
+      - name: Formatting
+        id: formatting
+        continue-on-error: true
+        run: npm run lint > "$RUNNER_TEMP/lint.log" 2>&1
+      - name: Type checks
+        id: types
+        continue-on-error: true
+        run: npm run typecheck > "$RUNNER_TEMP/typecheck.log" 2>&1
+      - name: Full test suite
+        id: full
+        continue-on-error: true
+        run: npm test -- --runInBand --json --outputFile="$RUNNER_TEMP/full-results.json" > "$RUNNER_TEMP/full.log" 2>&1
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: npm run build > "$RUNNER_TEMP/build.log" 2>&1
+      - name: Publish bounded validation evidence on this temporary branch
+        if: always()
+        run: |
+          mkdir -p validation-evidence
+          for kind in release instrumentation green full; do
+            if [ -f "$RUNNER_TEMP/$kind-results.json" ]; then
+              node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[2],JSON.stringify({passed:r.numPassedTests,failed:r.numFailedTests,runtimeErrors:r.numRuntimeErrorTestSuites,suites:r.numTotalTestSuites,failures:r.testResults.flatMap(s=>(s.assertionResults||[]).filter(t=>t.status==="failed").map(t=>({name:t.fullName,messages:t.failureMessages}))),suiteErrors:r.testResults.filter(s=>s.message && !s.assertionResults?.length).map(s=>s.message)},null,2)+"\n");' "$RUNNER_TEMP/$kind-results.json" "validation-evidence/$kind.json"
+            fi
+          done
+          for kind in lint typecheck build; do
+            if [ -f "$RUNNER_TEMP/$kind.log" ]; then
+              tail -n 100 "$RUNNER_TEMP/$kind.log" > "validation-evidence/$kind.txt"
+            fi
+          done
+          git add validation-evidence
+          git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record PR 2 validation evidence [skip ci]"
+          git push
+      - name: Require every validation gate to pass
+        if: always()
+        run: |
+          test "${{ steps.baseline.outcome }}" = success
+          test "${{ steps.focused.outcome }}" = success
+          test "${{ steps.formatting.outcome }}" = success
+          test "${{ steps.types.outcome }}" = success
+          test "${{ steps.full.outcome }}" = success
+          test "${{ steps.build.outcome }}" = success
