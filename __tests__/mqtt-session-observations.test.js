@@ -374,8 +374,9 @@ test.each(["b01", "b01-map", "secure-ack", "refusal"])(
 );
 
 test("a diagnostics write failure cannot stop a real reply resolving", async () => {
-  adapter.setStateAsync.mockImplementation(async () => {
-    throw new Error("disk unavailable");
+  adapter.setStateAsync.mockImplementation(async (key, value) => {
+    if (key === "MqttSessionDiagnostics") throw new Error("disk unavailable");
+    states.set(key, value);
   });
   const request = await startRequest();
   await jest.advanceTimersByTimeAsync(1);

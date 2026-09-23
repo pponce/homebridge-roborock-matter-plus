@@ -41,18 +41,23 @@ jobs:
           test "$result" -ne 0
           node -e 'const r=require(process.argv[1]); if(r.numFailedTests < 10 || r.numRuntimeErrorTestSuites !== 0) process.exit(1); console.log("Baseline behavioral failures:",r.numFailedTests,"passing controls:",r.numPassedTests);' "$RUNNER_TEMP/red-results.json"
       - name: Focused green behavioral tests
+        id: focused
         continue-on-error: true
         run: npm test -- --runInBand __tests__/mqtt-session-observations.test.js --json --outputFile="$RUNNER_TEMP/green-results.json" > "$RUNNER_TEMP/green.log" 2>&1
       - name: Formatting
+        id: formatting
         continue-on-error: true
         run: npm run lint > "$RUNNER_TEMP/lint.log" 2>&1
       - name: Type checks
+        id: types
         continue-on-error: true
         run: npm run typecheck > "$RUNNER_TEMP/typecheck.log" 2>&1
       - name: Full test suite
+        id: full
         continue-on-error: true
         run: npm test -- --runInBand --json --outputFile="$RUNNER_TEMP/full-results.json" > "$RUNNER_TEMP/full.log" 2>&1
       - name: Build
+        id: build
         continue-on-error: true
         run: npm run build > "$RUNNER_TEMP/build.log" 2>&1
       - name: Publish bounded validation evidence on this temporary branch
@@ -72,3 +77,11 @@ jobs:
           git add validation-evidence
           git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record validation evidence [skip ci]"
           git push
+      - name: Require every validation gate to pass
+        if: always()
+        run: |
+          test "${{ steps.focused.outcome }}" = success
+          test "${{ steps.formatting.outcome }}" = success
+          test "${{ steps.types.outcome }}" = success
+          test "${{ steps.full.outcome }}" = success
+          test "${{ steps.build.outcome }}" = success
