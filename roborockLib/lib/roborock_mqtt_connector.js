@@ -38,7 +38,6 @@ const photoParser = new Parser()
   })
   .uint8("id");
 
-
 // Per robot, not per process. These were module-level `let`s shared by every
 // robot on the account until 3.31.0, and they are only cleared when a photo
 // transfer COMPLETES. One transfer that started and never finished — a robot
@@ -162,8 +161,10 @@ function parseProtocol301Header(payload) {
 class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
-    this.recovery = adapter.config?.enableMqttSessionRecovery === true
-      ? new MqttSessionRecovery(this) : null;
+    this.recovery =
+      adapter.config?.enableMqttSessionRecovery === true
+        ? new MqttSessionRecovery(this)
+        : null;
 
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
       Promise.resolve(
@@ -189,8 +190,12 @@ class roborock_mqtt_connector {
       .md5bin(this.rriot.k)
       .subarray(8, 14)
       .toString("base64"); // Could be a random but rather static string. The app generates it on first run.
-    this.mqttUser = roborockCrypto.md5hex(this.rriot.u + ":" + this.rriot.k).substring(2, 10);
-    this.mqttPassword = roborockCrypto.md5hex(this.rriot.s + ":" + this.rriot.k).substring(16);
+    this.mqttUser = roborockCrypto
+      .md5hex(this.rriot.u + ":" + this.rriot.k)
+      .substring(2, 10);
+    this.mqttPassword = roborockCrypto
+      .md5hex(this.rriot.s + ":" + this.rriot.k)
+      .substring(16);
     this.createClient();
   }
 
@@ -233,14 +238,17 @@ class roborock_mqtt_connector {
     await this.client.on("connect", (result) => {
       if (typeof result != "undefined") {
         const generation = this.sessionDiagnostics.onConnect();
-        this.client.subscribe(`rr/m/o/${this.rriot.u}/${this.mqttUser}/#`, (err, granted) => {
-          this.sessionDiagnostics.onSubscribe(generation, err, granted);
-          if (err) {
-            this.logConnectionIssue(
-              `Failed to subscribe to the Roborock MQTT server: ${err} (granted: ${JSON.stringify(granted)}).`
-            );
+        this.client.subscribe(
+          `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`,
+          (err, granted) => {
+            this.sessionDiagnostics.onSubscribe(generation, err, granted);
+            if (err) {
+              this.logConnectionIssue(
+                `Failed to subscribe to the Roborock MQTT server: ${err} (granted: ${JSON.stringify(granted)}).`
+              );
+            }
           }
-        });
+        );
         this.clearInitialConnectTimeout();
 
         this.connected = true;
@@ -280,14 +288,17 @@ class roborock_mqtt_connector {
 
     await this.client.on("reconnect", () => {
       const generation = this.sessionDiagnostics.generation;
-      this.client.subscribe(`rr/m/o/${this.rriot.u}/${this.mqttUser}/#`, (err, granted) => {
-        this.sessionDiagnostics.onSubscribe(generation, err, granted);
-        if (err) {
-          this.logConnectionIssue(
-            `Failed to subscribe to the Roborock MQTT server after reconnect: ${err} (granted: ${JSON.stringify(granted)}).`
-          );
+      this.client.subscribe(
+        `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`,
+        (err, granted) => {
+          this.sessionDiagnostics.onSubscribe(generation, err, granted);
+          if (err) {
+            this.logConnectionIssue(
+              `Failed to subscribe to the Roborock MQTT server after reconnect: ${err} (granted: ${JSON.stringify(granted)}).`
+            );
+          }
         }
-      });
+      );
       this.clearInitialConnectTimeout();
       this.adapter.log.debug(`MQTT connection reconnect attempt.`);
     });
@@ -768,13 +779,19 @@ class roborock_mqtt_connector {
 
   sendMessage(duid, roborockMessage) {
     this.assertCanSend();
-    this.client.publish(`rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`, roborockMessage, {
-      qos: 1,
-    });
+    this.client.publish(
+      `rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`,
+      roborockMessage,
+      {
+        qos: 1,
+      }
+    );
   }
 
   isConnected() {
-    return this.connected && !this.recovery?.recovering && !this.recovery?.stopped;
+    return (
+      this.connected && !this.recovery?.recovering && !this.recovery?.stopped
+    );
   }
 
   /**
