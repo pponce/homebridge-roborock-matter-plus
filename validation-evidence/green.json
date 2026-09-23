@@ -1,0 +1,15 @@
+{
+  "passed": 18,
+  "failed": 1,
+  "runtimeErrors": 0,
+  "suites": 1,
+  "failures": [
+    {
+      "name": "TCP connect alone cannot allow a write before the subscription is acknowledged",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 3\n+ Received  + 1\n\n- Object {\n-   \"requestNotSent\": true,\n- }\n+ [Error: No local connection to robot-a, so the app_start request was not sent.]\n    at Object.toMatchObject (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-session-recreation.test.js:196:24)"
+      ]
+    }
+  ],
+  "suiteErrors": []
+}
