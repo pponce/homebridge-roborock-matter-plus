@@ -1,0 +1,59 @@
+name: MQTT instrumentation verification
+on:
+  push:
+    branches: [mqtt-instrumentation-validation]
+permissions:
+  contents: write
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Format focused changes
+        run: |
+          npx prettier --write roborockLib/lib/mqttSessionDiagnostics.js roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/messageQueueHandler.js src/ui/index.ts homebridge-ui/public/index.js __tests__/mqtt-session-observations.test.js docs/mqtt-session-diagnostics.md .github/workflows/mqtt-instrumentation-verification.yml
+          git add roborockLib/lib/mqttSessionDiagnostics.js roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/messageQueueHandler.js src/ui/index.ts homebridge-ui/public/index.js __tests__/mqtt-session-observations.test.js docs/mqtt-session-diagnostics.md .github/workflows/mqtt-instrumentation-verification.yml
+          if ! git diff --cached --quiet; then
+            git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format instrumentation for validation [skip ci]"
+            git push
+          fi
+      - name: Demonstrate behavioral failures against v3.33.0
+        shell: bash
+        run: |
+          baseline=$(mktemp -d)
+          git archive 4156efeedeb7a798147a75753138f74cb5ce6f0c | tar -x -C "$baseline"
+          cp __tests__/mqtt-session-observations.test.js "$baseline/__tests__/"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline/node_modules"
+          cd "$baseline"
+          set +e
+          npm test -- --runInBand __tests__/mqtt-session-observations.test.js --json --outputFile="$GITHUB_WORKSPACE/red-results.json" > "$GITHUB_WORKSPACE/red.log" 2>&1
+          result=$?
+          set -e
+          cat "$GITHUB_WORKSPACE/red.log"
+          test "$result" -ne 0
+          node -e 'const r=require(process.argv[1]); if(r.numFailedTests < 10 || r.numRuntimeErrorTestSuites !== 0) process.exit(1); console.log("Baseline behavioral failures:",r.numFailedTests,"passing controls:",r.numPassedTests);' "$GITHUB_WORKSPACE/red-results.json"
+      - name: Focused green behavioral tests
+        run: npm test -- --runInBand __tests__/mqtt-session-observations.test.js
+      - name: Formatting
+        run: npm run lint
+      - name: Type checks
+        run: npm run typecheck
+      - name: Full test suite
+        run: npm test -- --runInBand
+      - name: Build
+        run: npm run build
+      - name: Preserve red-run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mqtt-baseline-evidence
+          path: |
+            red.log
+            red-results.json
