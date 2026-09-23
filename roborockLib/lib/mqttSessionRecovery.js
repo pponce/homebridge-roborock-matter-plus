@@ -10,8 +10,7 @@ class MqttSessionRecovery {
   constructor(connector) {
     this.connector = connector;
     this.adapter = connector.adapter;
-    this.preventiveRefreshEnabled =
-      this.adapter.config.enableMqttPreventiveRefresh === true;
+    this.preventiveRefreshEnabled = this.adapter.config.enableMqttPreventiveRefresh === true;
     this.stopped = false;
     this.recovering = false;
     this.inFlight = null;
@@ -33,19 +32,11 @@ class MqttSessionRecovery {
       candidate.subscribe(
         `rr/m/o/${connector.rriot.u}/${connector.mqttUser}/#`,
         (error, granted) => {
-          if (
-            !current() ||
-            generation !== connector.sessionDiagnostics.generation
-          )
-            return;
+          if (!current() || generation !== connector.sessionDiagnostics.generation) return;
           connector.sessionDiagnostics.onSubscribe(generation, error, granted);
-          connector.connected =
-            connector.sessionDiagnostics.snapshot().subscriptionAcknowledged;
+          connector.connected = connector.sessionDiagnostics.snapshot().subscriptionAcknowledged;
           if (connector.connected) this.readyAt = performance.now();
-          else
-            connector.logConnectionIssue(
-              "Roborock MQTT reply subscription was not acknowledged; cloud sends remain paused."
-            );
+          else connector.logConnectionIssue("Roborock MQTT reply subscription was not acknowledged; cloud sends remain paused.");
         }
       );
     });
@@ -59,11 +50,8 @@ class MqttSessionRecovery {
     }
     if (!this.timer) {
       this.timer = setInterval(() => {
-        if (
-          this.preventiveRefreshEnabled &&
-          this.readyAt !== null &&
-          performance.now() - this.readyAt >= PREVENTIVE_AGE_MS
-        ) {
+        if (this.preventiveRefreshEnabled &&
+            this.readyAt !== null && performance.now() - this.readyAt >= PREVENTIVE_AGE_MS) {
           void this.recreate("preventive");
         }
       }, 60_000);
@@ -73,23 +61,15 @@ class MqttSessionRecovery {
 
   assertCanSend() {
     if (this.stopped || this.recovering || !this.connector.connected) {
-      throw Object.assign(
-        new Error(
-          "The MQTT reply session is not ready; this command was not sent."
-        ),
-        {
-          code: "MQTT_SESSION_NOT_READY",
-          requestNotSent: true,
-        }
-      );
+      throw Object.assign(new Error("The MQTT reply session is not ready; this command was not sent."), {
+        code: "MQTT_SESSION_NOT_READY",
+        requestNotSent: true,
+      });
     }
   }
 
   observeTimeout(observation) {
-    if (
-      observation?.requestWasSilent &&
-      observation?.correlatedSilenceObserved
-    ) {
+    if (observation?.requestWasSilent && observation?.correlatedSilenceObserved) {
       void this.recreate("correlated-silence");
     }
   }
@@ -98,18 +78,9 @@ class MqttSessionRecovery {
     return [
       ...[...(this.adapter.pendingRequests?.entries() || [])]
         .filter(([, request]) => request.transport === "cloud")
-        .map(([key, request]) => ({
-          map: this.adapter.pendingRequests,
-          key,
-          request,
-        })),
-      ...[...(this.adapter.pendingB01MapRequests?.entries() || [])].map(
-        ([key, request]) => ({
-          map: this.adapter.pendingB01MapRequests,
-          key,
-          request,
-        })
-      ),
+        .map(([key, request]) => ({ map: this.adapter.pendingRequests, key, request })),
+      ...[...(this.adapter.pendingB01MapRequests?.entries() || [])]
+        .map(([key, request]) => ({ map: this.adapter.pendingB01MapRequests, key, request })),
     ];
   }
 
@@ -117,18 +88,11 @@ class MqttSessionRecovery {
     for (const { map, key, request } of this.pending()) {
       this.adapter.clearTimeout(request.timeout);
       map.delete(key);
-      request.reject(
-        Object.assign(
-          new Error(
-            "The MQTT session was replaced before a reply arrived. The command outcome is unknown; it was not replayed."
-          ),
-          {
-            code: "MQTT_SESSION_REPLACED",
-            transportWasUp: false,
-            unansweredRequest: false,
-          }
-        )
-      );
+      request.reject(Object.assign(new Error("The MQTT session was replaced before a reply arrived. The command outcome is unknown; it was not replayed."), {
+        code: "MQTT_SESSION_REPLACED",
+        transportWasUp: false,
+        unansweredRequest: false,
+      }));
     }
   }
 
@@ -148,33 +112,30 @@ class MqttSessionRecovery {
   async close(candidate) {
     if (!candidate) return;
     candidate.removeAllListeners();
+    // An error emitted while the retired socket closes must not become an
+    // unhandled EventEmitter error after the lifecycle handlers are removed.
+    candidate.on("error", () => {});
     // Retired clients cannot deliver a late event to this connector.
     if (this.connector.client === candidate) this.connector.client = null;
     if (candidate.endAsync) {
       const timeout = this.pause(2000);
       const cancel = [...this.waits].at(-1);
-      try {
-        await Promise.race([candidate.endAsync(true), timeout]);
-      } finally {
-        cancel?.();
-      }
+      try { await Promise.race([candidate.endAsync(true), timeout]); }
+      finally { cancel?.(); }
     } else candidate.end(true);
   }
 
   recreate(reason) {
     if (this.inFlight) return this.inFlight;
-    if (this.stopped || performance.now() < this.nextAllowedAt)
-      return Promise.resolve(false);
+    if (this.stopped || performance.now() < this.nextAllowedAt) return Promise.resolve(false);
     // Close the send gate before yielding; requests building a payload must
     // check it again immediately before registering/publishing the request.
     this.recovering = true;
     this.nextAllowedAt = performance.now() + COOLDOWN_MS;
-    this.inFlight = Promise.resolve()
-      .then(() => this.perform(reason))
-      .finally(() => {
-        this.recovering = false;
-        this.inFlight = null;
-      });
+    this.inFlight = Promise.resolve().then(() => this.perform(reason)).finally(() => {
+      this.recovering = false;
+      this.inFlight = null;
+    });
     return this.inFlight;
   }
 
@@ -184,23 +145,14 @@ class MqttSessionRecovery {
     const before = connector.sessionDiagnostics.captureRequest();
     try {
       const deadline = startedAt + DRAIN_MS;
-      while (
-        !this.stopped &&
-        this.pending().length &&
-        performance.now() < deadline
-      )
-        await this.pause(20);
+      while (!this.stopped && this.pending().length && performance.now() < deadline) await this.pause(20);
       if (this.stopped) return false;
       // Never deliberately interrupt an active request for an age refresh.
       // New inbound evidence during a reactive drain also cancels the need.
-      if (
-        (reason === "preventive" && this.pending().length) ||
-        (reason === "correlated-silence" &&
-          before.rawSequence !==
-            connector.sessionDiagnostics.captureRequest().rawSequence)
-      )
-        return false;
+      if ((reason === "preventive" && this.pending().length) ||
+          (reason === "correlated-silence" && before.rawSequence !== connector.sessionDiagnostics.captureRequest().rawSequence)) return false;
       this.rejectPending();
+      connector.discardSessionFragments();
       connector.connected = false;
       connector.sessionDiagnostics.onDisconnect();
       this.readyAt = null;
@@ -210,40 +162,22 @@ class MqttSessionRecovery {
       this.install(connector.client);
       await connector.initMQTT_Message();
       const readyDeadline = performance.now() + READY_TIMEOUT_MS;
-      while (
-        !this.stopped &&
-        !connector.connected &&
-        performance.now() < readyDeadline
-      )
-        await this.pause(50);
+      while (!this.stopped && !connector.connected && performance.now() < readyDeadline) await this.pause(50);
       if (this.stopped) return false;
-      if (!connector.connected)
-        throw new Error("Connect and reply-subscription deadline expired");
+      if (!connector.connected) throw new Error("Connect and reply-subscription deadline expired");
       this.failures = 0;
       this.nextAllowedAt = performance.now() + COOLDOWN_MS;
-      this.adapter.log.info(
-        `MQTT session recreation completed: reason=${reason}; generation=${connector.sessionDiagnostics.generation}; subscriptionAcknowledged=true; durationMs=${Math.round(performance.now() - startedAt)}.`
-      );
+      this.adapter.log.info(`MQTT session recreation completed: reason=${reason}; generation=${connector.sessionDiagnostics.generation}; subscriptionAcknowledged=true; durationMs=${Math.round(performance.now() - startedAt)}.`);
       return true;
     } catch (error) {
       connector.connected = false;
       connector.sessionDiagnostics.onDisconnect();
       this.readyAt = null;
       this.failures = Math.min(this.failures + 1, 5);
-      const backoff = Math.min(
-        COOLDOWN_MS * 2 ** (this.failures - 1),
-        15 * 60_000
-      );
+      const backoff = Math.min(COOLDOWN_MS * 2 ** (this.failures - 1), 15 * 60_000);
       this.nextAllowedAt = performance.now() + backoff;
-      try {
-        await this.close(connector.client);
-      } catch {
-        /* already retired */
-      }
-      if (!this.stopped)
-        this.adapter.log.warn(
-          `MQTT session recreation failed: reason=${reason}; retryCooldownMs=${backoff}; ${error.message}.`
-        );
+      try { await this.close(connector.client); } catch { /* already retired */ }
+      if (!this.stopped) this.adapter.log.warn(`MQTT session recreation failed: reason=${reason}; retryCooldownMs=${backoff}; ${error.message}.`);
       return false;
     }
   }

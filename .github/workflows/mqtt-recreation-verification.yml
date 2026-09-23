@@ -96,7 +96,8 @@ jobs:
               tail -n 100 "$RUNNER_TEMP/$kind.log" > "validation-evidence/$kind.txt"
             fi
           done
-          git reset\n          git add -f validation-evidence
+          git reset
+          git add -f validation-evidence
           git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record PR 3 validation evidence [skip ci]"
           git push
           ) > "$RUNNER_TEMP/evidence.log" 2>&1
@@ -110,7 +111,8 @@ jobs:
       - name: Require every validation gate to pass
         if: always()
         run: |
-          test "${{ steps.prepare.outcome }}" = success\n          test "${{ steps.baseline.outcome }}" = success
+          test "${{ steps.prepare.outcome }}" = success
+          test "${{ steps.baseline.outcome }}" = success
           test "${{ steps.focused.outcome }}" = success
           test "${{ steps.formatting.outcome }}" = success
           test "${{ steps.types.outcome }}" = success

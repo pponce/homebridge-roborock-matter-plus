@@ -3,31 +3,20 @@
 // PR 3/4: the same production-event tests run on PR 2 to show the missing
 // behavior. Timeouts are emitted by the real request queue, not fabricated.
 const mockClients = [];
-jest.mock("mqtt", () => ({
-  connect: jest.fn(() => {
-    const handlers = new Map(),
-      subscriptions = [];
-    const client = {
-      handlers,
-      subscriptions,
-      on: jest.fn((event, handler) => handlers.set(event, handler)),
-      subscribe: jest.fn((topic, callback) => subscriptions.push(callback)),
-      publish: jest.fn(),
-      end: jest.fn(),
-      endAsync: jest.fn(async () => {}),
-      reconnect: jest.fn(),
-      removeAllListeners: jest.fn(() => handlers.clear()),
-    };
-    mockClients.push(client);
-    return client;
-  }),
-}));
-const {
-  roborock_mqtt_connector,
-} = require("../roborockLib/lib/roborock_mqtt_connector");
-const {
-  messageQueueHandler,
-} = require("../roborockLib/lib/messageQueueHandler");
+jest.mock("mqtt", () => ({ connect: jest.fn(() => {
+  const handlers = new Map(), subscriptions = [];
+  const client = {
+    handlers, subscriptions,
+    on: jest.fn((event, handler) => handlers.set(event, handler)),
+    subscribe: jest.fn((topic, callback) => subscriptions.push(callback)),
+    publish: jest.fn(), end: jest.fn(), endAsync: jest.fn(async () => {}),
+    reconnect: jest.fn(), removeAllListeners: jest.fn(() => handlers.clear()),
+  };
+  mockClients.push(client);
+  return client;
+}) }));
+const { roborock_mqtt_connector } = require("../roborockLib/lib/roborock_mqtt_connector");
+const { messageQueueHandler } = require("../roborockLib/lib/messageQueueHandler");
 const { Roborock } = require("../roborockLib/roborockAPI");
 let adapter, connector, queue, states, requestId;
 const topic = (duid = "robot-a") =>
@@ -36,10 +25,7 @@ const snapshot = () =>
   JSON.parse(states.get("MqttSessionDiagnostics")?.val || "{}");
 const receive = (decoded, duid = "robot-a") => {
   adapter.message._decodeMsg.mockReturnValue(decoded);
-  mockClients.at(-1).handlers.get("message")(
-    topic(duid),
-    Buffer.from("encrypted-frame")
-  );
+  mockClients.at(-1).handlers.get("message")(topic(duid), Buffer.from("encrypted-frame"));
 };
 const reply = (id, result = ["ok"]) => ({
   protocol: 102,
@@ -63,9 +49,7 @@ async function timeout(duid = "robot-a", method = "get_status") {
   return request.result;
 }
 function acknowledge() {
-  mockClients.at(-1).subscriptions.at(-1)(null, [
-    { topic: "private-topic", qos: 1 },
-  ]);
+  mockClients.at(-1).subscriptions.at(-1)(null, [{ topic: "private-topic", qos: 1 }]);
 }
 
 beforeEach(async () => {
@@ -141,14 +125,7 @@ async function restartWith(config) {
   adapter.config = config;
   connector = new roborock_mqtt_connector(adapter);
   adapter.rr_mqtt_connector = connector;
-  await connector.initUser({
-    rriot: {
-      u: "user",
-      k: "key",
-      s: "secret",
-      r: { m: "mqtts://broker.example" },
-    },
-  });
+  await connector.initUser({ rriot: { u: "user", k: "key", s: "secret", r: { m: "mqtts://broker.example" } } });
   await connector.initMQTT_Subscribe();
   await connector.initMQTT_Message();
   connectLatest();
@@ -175,6 +152,8 @@ test("two robots' actual silent reads create a fresh client without replay", asy
   expect(old.endAsync).toHaveBeenCalledWith(true);
   expect(old.reconnect).not.toHaveBeenCalled();
   expect(mockClients[1].publish).not.toHaveBeenCalled();
+  expect(typeof old.handlers.get("error")).toBe("function");
+  expect(() => old.handlers.get("error")(new Error("late socket error"))).not.toThrow();
   expect(connector.isConnected()).toBe(false);
   await replacementReady();
   expect(connector.isConnected()).toBe(true);
@@ -217,9 +196,7 @@ test("pending cloud writes reject with an unknown outcome, without replay; local
   await jest.advanceTimersByTimeAsync(9500);
   const write = await startRequest("robot-a", "app_start");
   adapter.localConnector.isConnected.mockReturnValue(true);
-  const local = await startRequest("robot-a", "get_status", {
-    preferLocal: true,
-  });
+  const local = await startRequest("robot-a", "get_status", { preferLocal: true });
   await jest.advanceTimersByTimeAsync(1000);
   await second.result;
   expect(mockClients).toHaveLength(2);
@@ -238,9 +215,7 @@ test("B01 map requests are also rejected on retirement, never replayed", async (
   await timeout("robot-a");
   const second = await startRequest("robot-b");
   await jest.advanceTimersByTimeAsync(9500);
-  const map = Roborock.prototype.sendB01MapRequest
-    .call(adapter, "robot-a", 0)
-    .catch((e) => e);
+  const map = Roborock.prototype.sendB01MapRequest.call(adapter, "robot-a", 0).catch(e => e);
   await jest.advanceTimersByTimeAsync(1000);
   await second.result;
   expect(mockClients).toHaveLength(2);
@@ -252,15 +227,8 @@ test("B01 map requests are also rejected on retirement, never replayed", async (
 test("a request building its payload is refused if recreation starts before publish", async () => {
   const client = mockClients[0];
   let release;
-  adapter.message.buildRoborockMessage.mockImplementationOnce(
-    () =>
-      new Promise((resolve) => {
-        release = resolve;
-      })
-  );
-  const write = queue
-    .sendRequest("robot-a", "app_start", [], false, false)
-    .catch((e) => e);
+  adapter.message.buildRoborockMessage.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+  const write = queue.sendRequest("robot-a", "app_start", [], false, false).catch(e => e);
   await jest.advanceTimersByTimeAsync(0);
   const recovery = connector.reconnectClient(true);
   release(Buffer.from("request"));
@@ -310,8 +278,7 @@ test("late retired callbacks cannot change readiness or decode a message", async
   const lateSuback = old.subscriptions[0];
   const recovery = connector.reconnectClient(true);
   await jest.advanceTimersByTimeAsync(0);
-  lateConnect({});
-  lateSuback(null, [{ qos: 1 }]);
+  lateConnect({}); lateSuback(null, [{ qos: 1 }]);
   lateMessage(topic(), Buffer.from("stale"));
   expect(connector.isConnected()).toBe(false);
   expect(adapter.message._decodeMsg).not.toHaveBeenCalled();
@@ -347,10 +314,7 @@ test("preventive refresh is off even when reactive recovery is enabled", async (
 });
 
 test("the independent preventive control permits an idle four-hour refresh", async () => {
-  await restartWith({
-    enableMqttSessionRecovery: true,
-    enableMqttPreventiveRefresh: true,
-  });
+  await restartWith({ enableMqttSessionRecovery: true, enableMqttPreventiveRefresh: true });
   await jest.advanceTimersByTimeAsync(4 * 60 * 60 * 1000);
   expect(mockClients).toHaveLength(2);
   await replacementReady();
@@ -358,10 +322,7 @@ test("the independent preventive control permits an idle four-hour refresh", asy
 });
 
 test("preventive refresh defers for a pending write", async () => {
-  await restartWith({
-    enableMqttSessionRecovery: true,
-    enableMqttPreventiveRefresh: true,
-  });
+  await restartWith({ enableMqttSessionRecovery: true, enableMqttPreventiveRefresh: true });
   await jest.advanceTimersByTimeAsync(4 * 60 * 60 * 1000 - 1000);
   const write = await startRequest("robot-a", "app_start");
   await jest.advanceTimersByTimeAsync(1500);
@@ -376,14 +337,7 @@ test("recovery remains disabled when the option is absent", async () => {
   adapter.config = {};
   connector = new roborock_mqtt_connector(adapter);
   adapter.rr_mqtt_connector = connector;
-  await connector.initUser({
-    rriot: {
-      u: "user",
-      k: "key",
-      s: "secret",
-      r: { m: "mqtts://broker.example" },
-    },
-  });
+  await connector.initUser({ rriot: { u: "user", k: "key", s: "secret", r: { m: "mqtts://broker.example" } } });
   await connector.initMQTT_Subscribe();
   await connector.initMQTT_Message();
   connectLatest();
