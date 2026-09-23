@@ -1,0 +1,122 @@
+name: Schedule reconciliation integration verification
+on:
+  push:
+    branches: [schedule-reconciliation-validation]
+permissions:
+  contents: write
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: git rm -r --ignore-unmatch validation-evidence
+      - run: npm ci
+      - name: Format focused changes
+        id: prepare
+        run: |
+          set +e
+          (
+            set -e
+          npx prettier --write src/hap_schedule_accessory.ts src/schedule_write_reconciliation.ts __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js docs/schedule-write-reconciliation.md .github/workflows/schedule-reconciliation-verification.yml
+          git add src/hap_schedule_accessory.ts src/schedule_write_reconciliation.ts __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js docs/schedule-write-reconciliation.md .github/workflows/schedule-reconciliation-verification.yml
+          if ! git diff --cached --quiet; then
+            git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format breaker integration for validation [skip ci]"
+            git push
+          fi
+          ) > "$RUNNER_TEMP/prepare.log" 2>&1
+          result=$?
+          echo "summary=$(tail -c 800 "$RUNNER_TEMP/prepare.log" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/prepare.log"
+          test "$result" -eq 0
+      - name: "Preparation result: ${{ steps.prepare.outputs.summary }}"
+        if: always()
+        run: echo "Preparation result recorded above."
+      - name: Demonstrate behavioral failures against release and PR 3
+        id: baseline
+        shell: bash
+        run: |
+          for entry in release:4156efeedeb7a798147a75753138f74cb5ce6f0c recreation:454636662539644feda0c7a4e2c0a0a5e1866e7d; do
+            label="${entry%%:*}"
+            commit="${entry#*:}"
+            baseline=$(mktemp -d)
+            git archive "$commit" | tar -x -C "$baseline"
+            cp __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js "$baseline/__tests__/"
+            ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline/node_modules"
+            pushd "$baseline"
+            set +e
+            npm test -- --runInBand __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js --json --outputFile="$RUNNER_TEMP/$label-results.json" > "$RUNNER_TEMP/$label.log" 2>&1
+            result=$?
+            set -e
+            cat "$RUNNER_TEMP/$label.log"
+            test "$result" -ne 0
+            node -e 'const r=require(process.argv[1]); if(r.numFailedTests < 4 || r.numRuntimeErrorTestSuites !== 0) process.exit(1); console.log("Behavioral failures:",r.numFailedTests,"passing controls:",r.numPassedTests);' "$RUNNER_TEMP/$label-results.json"
+            popd
+          done
+      - name: Focused green behavioral tests
+        id: focused
+        continue-on-error: true
+        run: npm test -- --runInBand __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js --json --outputFile="$RUNNER_TEMP/green-results.json" > "$RUNNER_TEMP/green.log" 2>&1
+      - name: Formatting
+        id: formatting
+        continue-on-error: true
+        run: npm run lint > "$RUNNER_TEMP/lint.log" 2>&1
+      - name: Type checks
+        id: types
+        continue-on-error: true
+        run: npm run typecheck > "$RUNNER_TEMP/typecheck.log" 2>&1
+      - name: Full test suite
+        id: full
+        continue-on-error: true
+        run: npm test -- --runInBand --json --outputFile="$RUNNER_TEMP/full-results.json" > "$RUNNER_TEMP/full.log" 2>&1
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: npm run build > "$RUNNER_TEMP/build.log" 2>&1
+      - name: Publish bounded validation evidence on this temporary branch
+        id: evidence
+        if: always()
+        run: |
+          set +e
+          (
+            set -e
+          mkdir -p validation-evidence
+          for kind in release recreation green full; do
+            if [ -f "$RUNNER_TEMP/$kind-results.json" ]; then
+              node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[2],JSON.stringify({passed:r.numPassedTests,failed:r.numFailedTests,runtimeErrors:r.numRuntimeErrorTestSuites,suites:r.numTotalTestSuites,failures:r.testResults.flatMap(s=>(s.assertionResults||[]).filter(t=>t.status==="failed").map(t=>({name:t.fullName,messages:t.failureMessages}))),suiteErrors:r.testResults.filter(s=>s.message && !s.assertionResults?.length).map(s=>s.message)},null,2)+"\n");' "$RUNNER_TEMP/$kind-results.json" "validation-evidence/$kind.json"
+            fi
+          done
+          for kind in prepare lint typecheck build; do
+            if [ -f "$RUNNER_TEMP/$kind.log" ]; then
+              tail -n 100 "$RUNNER_TEMP/$kind.log" > "validation-evidence/$kind.txt"
+            fi
+          done
+          git reset
+          git add -f validation-evidence
+          git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record PR 4 validation evidence [skip ci]"
+          git push
+          ) > "$RUNNER_TEMP/evidence.log" 2>&1
+          result=$?
+          echo "summary=$(tail -c 1000 "$RUNNER_TEMP/evidence.log" | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/evidence.log"
+          test "$result" -eq 0
+      - name: "Evidence result: ${{ steps.evidence.outputs.summary }}"
+        if: always()
+        run: echo "Evidence result recorded above."
+      - name: Require every validation gate to pass
+        if: always()
+        run: |
+          test "${{ steps.prepare.outcome }}" = success
+          test "${{ steps.baseline.outcome }}" = success
+          test "${{ steps.focused.outcome }}" = success
+          test "${{ steps.formatting.outcome }}" = success
+          test "${{ steps.types.outcome }}" = success
+          test "${{ steps.full.outcome }}" = success
+          test "${{ steps.build.outcome }}" = success
+          test "${{ steps.evidence.outcome }}" = success
+
