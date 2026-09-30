@@ -51,8 +51,8 @@ function makeAdapter() {
   };
 }
 
-async function makeConnector() {
-  const connector = new roborock_mqtt_connector(makeAdapter());
+async function makeConnector(config = {}) {
+  const connector = new roborock_mqtt_connector({...makeAdapter(), config});
   await connector.initUser(USER);
   return connector;
 }
@@ -178,66 +178,36 @@ describe("account MQTT session recovery", () => {
     clearTimeout(timer);
   });
 
-  test("two silent read timeouts from different robots replace the stale generation", async () => {
-    const connector = await makeConnector();
+  test("correlated observations delegate to the opt-in lifecycle", async () => {
+    const connector = await makeConnector({enableMqttSessionRecovery: true});
     await acknowledge(mockClients[0]);
-    connector.lastRawMqttMessageAt = 100;
-
-    expect(
-      connector.noteSilentCloudReadTimeout({
-        duid: "robot-1",
-        method: "get_prop",
-        operationClass: "read",
-        sessionGeneration: 1,
-        publishedAt: 200,
-      })
-    ).toBe(false);
-    expect(
-      connector.noteSilentCloudReadTimeout({
-        duid: "robot-2",
-        method: "get_prop",
-        operationClass: "read",
-        sessionGeneration: 1,
-        publishedAt: 200,
-      })
-    ).toBe(true);
-
-    const recovery = connector.reconnectInProgress;
+    const first = connector.sessionDiagnostics.noteTimeout("robot-1", "get_prop", connector.sessionDiagnostics.captureRequest());
+    connector.recovery.observeTimeout(first);
+    expect(mockClients).toHaveLength(1);
+    const second = connector.sessionDiagnostics.noteTimeout("robot-2", "get_prop", connector.sessionDiagnostics.captureRequest());
+    connector.recovery.observeTimeout(second);
+    const recovery = connector.recovery.inFlight;
     await tick();
     expect(mockClients).toHaveLength(2);
     await acknowledge(mockClients[1]);
-    await expect(recovery).resolves.toEqual(
-      expect.objectContaining({ generation: 2, connected: true })
-    );
-    expect(connector.adapter.log.info).toHaveBeenCalledWith(
-      expect.stringContaining("distinctRobots=2")
-    );
+    await expect(recovery).resolves.toBe(true);
+    expect(connector.adapter.log.info).toHaveBeenCalledWith(expect.stringContaining("reason=correlated-silence"));
+    connector.disconnect();
   });
 
-  test("silent write timeouts and reads with intervening inbound activity do not recover", async () => {
-    const connector = await makeConnector();
+  test("write and interrupted-read observations cannot trigger recovery", async () => {
+    const connector = await makeConnector({enableMqttSessionRecovery: true});
     await acknowledge(mockClients[0]);
-    connector.lastRawMqttMessageAt = 300;
-
-    expect(
-      connector.noteSilentCloudReadTimeout({
-        duid: "robot-1",
-        method: "upd_server_timer",
-        operationClass: "write",
-        sessionGeneration: 1,
-        publishedAt: 200,
-      })
-    ).toBe(false);
-    expect(
-      connector.noteSilentCloudReadTimeout({
-        duid: "robot-1",
-        method: "get_prop",
-        operationClass: "read",
-        sessionGeneration: 1,
-        publishedAt: 200,
-      })
-    ).toBe(false);
+    const request = connector.sessionDiagnostics.captureRequest();
+    const write = connector.sessionDiagnostics.noteTimeout("robot-1", "upd_server_timer", request);
+    connector.sessionDiagnostics.noteActivity("raw");
+    const read = connector.sessionDiagnostics.noteTimeout("robot-1", "get_prop", request);
+    connector.recovery.observeTimeout(write);
+    connector.recovery.observeTimeout(read);
+    expect(write.requestWasSilent).toBe(false);
+    expect(read.requestWasSilent).toBe(false);
     expect(mockClients).toHaveLength(1);
+    connector.disconnect();
   });
 
   test("a preventive refresh becomes due at four hours of session age", async () => {
@@ -253,21 +223,8 @@ describe("account MQTT session recovery", () => {
     now.mockRestore();
   });
 
-  test("preventive maintenance retries a skipped four-hour refresh within fifteen minutes", () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, "../roborockLib/roborockAPI.js"),
-      "utf8"
-    );
-
-    expect(source).toContain(
-      "const MQTT_MAINTENANCE_INTERVAL_MS = 15 * 60 * 1000;"
-    );
-    expect(source).toContain(
-      "const MQTT_PREVENTIVE_SESSION_AGE_MS = 4 * 60 * 60 * 1000;"
-    );
-    expect(source).toContain("}, MQTT_MAINTENANCE_INTERVAL_MS);");
-    expect(source).toContain('mode: "preventive"');
-  });
+  // The old source-string assertion for unconditional 15-minute maintenance
+  // is superseded by the real timer/opt-in/defer tests in mqtt-session-recreation.
 
   test("shutdown rejects gate waiters and prevents replacement clients", async () => {
     const connector = await makeConnector();
@@ -370,3 +327,4 @@ describe("cloud publication readiness gate", () => {
     await expect(request).resolves.toEqual(["ok"]);
   });
 });
+

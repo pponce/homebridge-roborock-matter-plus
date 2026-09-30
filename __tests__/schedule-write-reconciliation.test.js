@@ -11,7 +11,7 @@ jest.mock("mqtt", () => ({
     const client = {
       handlers,
       on: jest.fn((name, fn) => handlers.set(name, fn)),
-      subscribe: jest.fn((topic, callback) => callback(null, [{ qos: 1 }])),
+      subscribe: jest.fn((topic, callback) => callback(null, [{ topic, qos: 1 }])),
       publish: jest.fn((topic, payload) =>
         mockPublish(client, JSON.parse(payload.toString()))
       ),
@@ -382,3 +382,4 @@ test("a real MQTT session replacement is reconciled after its existing recovery 
   expect(events.at(-1).method).toBe("get_server_timer");
   await Promise.all(replacements);
 });
+

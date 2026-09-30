@@ -532,3 +532,4 @@ describe("HomeKit schedule settings contract", () => {
     expect(removalBlock[1]).not.toContain("unregisterPlatformAccessories");
   });
 });
+

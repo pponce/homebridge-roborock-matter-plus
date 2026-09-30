@@ -167,18 +167,7 @@
           ></span
         ></label
       >
-      <label class="checkbox"
-        ><input type="checkbox" id="enableMqttSingleRobotRecovery" /><span
-          >Enable recovery from repeated single-robot silence<small
-            >Allows recreation after three silent cloud reads from one robot
-            within 15 minutes. Incoming MQTT traffic clears the evidence.
-            Requires experimental MQTT session recovery. A silent robot may
-            still be the cause. Successful recreations have a 60-second
-            cooldown. Off by default; restart the child bridge after changing
-            this setting.</small
-          ></span
-        ></label
-      >
+      <label class="checkbox"><input type="checkbox" id="enableMqttSingleRobotRecovery" /><span>Enable recovery from repeated single-robot silence<small>Allows recreation after three silent cloud reads from one robot within 15 minutes. Incoming MQTT traffic clears the evidence. Requires experimental MQTT session recovery. A silent robot may still be the cause. Successful recreations have a 60-second cooldown. Off by default; restart the child bridge after changing this setting.</small></span></label>
     </details>
 
     <div class="actions">
@@ -522,3 +511,4 @@
 ></div>
 
 <script src="index.js"></script>
+

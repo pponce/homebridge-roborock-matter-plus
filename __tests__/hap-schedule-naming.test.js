@@ -720,7 +720,7 @@ describe("HAP schedule names and stable group identity", () => {
     }
   });
 
-  test("an ambiguous write reconnects once and is not repeated when read-back shows it applied", async () => {
+  test("an ambiguous write is confirmed by a fresh read without reconnect or repetition", async () => {
     jest.useFakeTimers();
 
     try {
@@ -728,12 +728,12 @@ describe("HAP schedule names and stable group identity", () => {
       const timeout = new Error(
         "Cloud request with id 7 with method upd_server_timer timed out after 10 seconds. No Roborock message reached the plugin"
       );
+      timeout.unansweredRequest = true;
       const command = jest.fn().mockRejectedValue(timeout);
       const recoverMqttSession = jest.fn().mockResolvedValue({ generation: 2 });
       platform.roborockAPI = {
         getServerTimers: jest
           .fn()
-          .mockResolvedValueOnce([["timer-1", "off"]])
           .mockResolvedValueOnce([["timer-1", "on"]]),
         recoverMqttSession,
         vacuums: { "device-1": { command } },
@@ -750,12 +750,12 @@ describe("HAP schedule names and stable group identity", () => {
       await jest.advanceTimersByTimeAsync(3500);
       await setting;
 
-      expect(recoverMqttSession).toHaveBeenCalledTimes(1);
+      expect(recoverMqttSession).not.toHaveBeenCalled();
       expect(command).toHaveBeenCalledTimes(1);
-      expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(2);
+      expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(1);
       expect(platform.log.info).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Schedule recovery batch: requested=1; primaryAcked=0; ambiguous=1; reconnectGeneration=2; alreadyAppliedAfterReconnect=1; retried=0; finalConfirmed=1; failed=0."
+          "Schedule reconciliation for device-1: requested=1; ambiguous=1; retried=0; failed=0."
         )
       );
     } finally {
@@ -763,7 +763,7 @@ describe("HAP schedule names and stable group identity", () => {
     }
   });
 
-  test("a silent verification timeout reconnects once before accepting the confirmed write", async () => {
+  test("a failed verification stays unconfirmed without forcing a reconnect", async () => {
     jest.useFakeTimers();
 
     try {
@@ -793,9 +793,10 @@ describe("HAP schedule names and stable group identity", () => {
       await jest.advanceTimersByTimeAsync(3500);
       await setting;
 
-      expect(recoverMqttSession).toHaveBeenCalledTimes(1);
+      expect(recoverMqttSession).not.toHaveBeenCalled();
       expect(command).toHaveBeenCalledTimes(1);
-      expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(2);
+      expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(1);
+      expect(switchService(accessory, "timer-1").getCharacteristic(Characteristic.On).value).toBe(false);
     } finally {
       jest.useRealTimers();
     }
@@ -853,3 +854,4 @@ describe("HAP schedule names and stable group identity", () => {
     }
   });
 });
+

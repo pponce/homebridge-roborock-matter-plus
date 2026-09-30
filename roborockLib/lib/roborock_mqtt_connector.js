@@ -149,20 +149,12 @@ class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
-      Promise.resolve(
-        this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
-          val: JSON.stringify({
-            ...snapshot,
-            recovery: this.recovery?.snapshot() ?? { enabled: false },
-          }),
-          ack: true,
-        })
-      ).catch(() => {});
+      Promise.resolve(this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
+        val: JSON.stringify({...snapshot, recovery: this.recovery?.snapshot() ?? {enabled: false}}), ack: true,
+      })).catch(() => {});
     });
-    this.recovery =
-      adapter.config?.enableMqttSessionRecovery === true
-        ? new MqttSessionRecovery(this)
-        : null;
+    this.recovery = adapter.config?.enableMqttSessionRecovery === true
+      ? new MqttSessionRecovery(this) : null;
     this.client = null;
     this.rriot = null;
     this.endpoint = null;
@@ -379,16 +371,11 @@ class roborock_mqtt_connector {
         }),
       ]);
       if (!this.isCurrentSession(candidate, generation)) return;
-      if (
-        observationGeneration !== this.sessionDiagnostics.generation ||
-        !this.socketConnected
-      )
-        return;
+      if (observationGeneration !== this.sessionDiagnostics.generation || !this.socketConnected) return;
       const accepted =
         Array.isArray(granted) &&
         granted.some(
-          (grant) =>
-            grant && grant.topic === topic && [0, 1, 2].includes(grant.qos)
+          (grant) => grant && grant.topic === topic && [0, 1, 2].includes(grant.qos)
         );
       if (!accepted)
         throw new Error("broker did not grant the reply subscription");
@@ -410,11 +397,7 @@ class roborock_mqtt_connector {
       );
     } catch (error) {
       if (!this.isCurrentSession(candidate, generation)) return;
-      if (
-        observationGeneration !== this.sessionDiagnostics.generation ||
-        !this.socketConnected
-      )
-        return;
+      if (observationGeneration !== this.sessionDiagnostics.generation || !this.socketConnected) return;
       this.sessionDiagnostics.onSubscribe(observationGeneration, error, []);
       this.subscriptionReady = false;
       this.connected = false;
@@ -636,10 +619,10 @@ class roborock_mqtt_connector {
         // Those requests then sat until the 10 s timeout and failed in Apple
         // Home even though the robot had already carried them out.
         const pending = this.adapter.pendingRequests.get(dps.id);
+        if (pending) this.noteCorrelatedReply(duid);
         if (shouldResolveOn102(pending, dps.result)) {
           this.adapter.clearTimeout(pending.timeout);
           this.adapter.pendingRequests.delete(dps.id);
-          this.noteCorrelatedReply(duid);
           // A refusal is a failed request, not an empty one. Resolving it
           // with `undefined` is indistinguishable from a real empty answer
           // to every caller upstream — see describeReplyRefusal.
@@ -904,10 +887,7 @@ class roborock_mqtt_connector {
   }
 
   isReady() {
-    if (this.recovery)
-      return (
-        this.connected && !this.recovery.recovering && !this.recovery.stopped
-      );
+    if (this.recovery) return this.connected && !this.recovery.recovering && !this.recovery.stopped;
     return this.sessionState === "ready" && this.subscriptionReady;
   }
 
@@ -960,9 +940,7 @@ class roborock_mqtt_connector {
   }
 
   isConnected() {
-    return (
-      this.connected && !this.recovery?.recovering && !this.recovery?.stopped
-    );
+    return this.connected && !this.recovery?.recovering && !this.recovery?.stopped;
   }
 
   waitUntilReady({ timeoutMs = 10000, signal } = {}) {
@@ -1126,6 +1104,7 @@ class roborock_mqtt_connector {
   }
 
   reconnectAndWaitReady(options = {}) {
+    if (this.recovery) return this.recovery.recreate(options.reason || "manual");
     if (this.reconnectInProgress) return this.reconnectInProgress;
     const operation = this.performReconnect(options);
     this.reconnectInProgress = operation;
@@ -1218,7 +1197,7 @@ class roborock_mqtt_connector {
       });
       this.lastReconnectSucceededAt = Date.now();
       this.consecutiveReconnectFailures = 0;
-      this.nextReconnectAllowedAt = 0;
+      this.nextReconnectAllowedAt = Date.now() + 60_000;
       this.adapter.log.info(
         `MQTT generation ${generation} recovery completed in ${Date.now() - startedAt}ms; subscriptionAcknowledged=true; oldCloudRequestsRejected=${rejected}.`
       );
@@ -1281,6 +1260,7 @@ class roborock_mqtt_connector {
     }
     try {
       this.client.removeAllListeners();
+      this.client.on("error", () => {});
       this.client.end(true);
     } catch (error) {
       this.adapter?.log?.debug?.(
@@ -1336,6 +1316,10 @@ class roborock_mqtt_connector {
   }
 
   async reconnectClient(force = false) {
+    if (this.recovery) {
+      if (!force && this.isReady()) return false;
+      return this.recovery.recreate("connection-unavailable");
+    }
     if (!force && this.isReady()) {
       this.adapter.log.debug(
         "MQTT reconnect skipped because client is already ready."
@@ -1409,3 +1393,4 @@ module.exports = {
   isOkAcknowledgement,
   shouldResolveOn102,
 };
+

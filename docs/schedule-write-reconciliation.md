@@ -27,3 +27,4 @@ objects. Scene tests use Roborock's HTTP methods against a local server that
 can apply a PUT and then drop its socket, producing an actual Axios error.
 The same tests are run against the preceding PR and v3.33.0 to show the missing
 behavior before this change.
+

@@ -1430,9 +1430,6 @@ export default class RoborockHapScheduleAccessory {
           ambiguous.add(request);
           candidates.push(request);
         }
-        if (isRecoverableScheduleCloudFailure(error)) {
-          ambiguous.push(request);
-        }
       }
     }
     if (!candidates.length) return failures;
@@ -2395,3 +2392,4 @@ class RoborockHapRoutineSwitch {
     this.resetTimer = timer;
   }
 }
+

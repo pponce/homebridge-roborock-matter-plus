@@ -23,8 +23,8 @@ jobs:
           set +e
           (
             set -e
-                    npx prettier --write __tests__/hap-schedule-naming.test.js __tests__/mqtt-session-breaker.test.js __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-recreation.test.js __tests__/schedule-scene-reconciliation.test.js __tests__/schedule-settings-contract.test.js __tests__/schedule-write-reconciliation.test.js config.schema.json docs/mqtt-session-diagnostics.md docs/mqtt-session-recovery.md docs/schedule-write-reconciliation.md homebridge-ui/public/index.html homebridge-ui/public/index.js roborockLib/lib/messageQueueHandler.js roborockLib/lib/mqttSessionDiagnostics.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/unansweredMethodBreaker.js roborockLib/roborockAPI.js src/hap_schedule_accessory.ts src/platform.ts src/schedule_write_reconciliation.ts src/types.ts src/ui/index.ts .github/workflows/mqtt-home-pr-integration-verification.yml
-          git add __tests__/hap-schedule-naming.test.js __tests__/mqtt-session-breaker.test.js __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-recreation.test.js __tests__/schedule-scene-reconciliation.test.js __tests__/schedule-settings-contract.test.js __tests__/schedule-write-reconciliation.test.js config.schema.json docs/mqtt-session-diagnostics.md docs/mqtt-session-recovery.md docs/schedule-write-reconciliation.md homebridge-ui/public/index.html homebridge-ui/public/index.js roborockLib/lib/messageQueueHandler.js roborockLib/lib/mqttSessionDiagnostics.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/unansweredMethodBreaker.js roborockLib/roborockAPI.js src/hap_schedule_accessory.ts src/platform.ts src/schedule_write_reconciliation.ts src/types.ts src/ui/index.ts
+                    npx prettier --write __tests__/hap-schedule-naming.test.js __tests__/mqtt-session-breaker.test.js __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-recreation.test.js __tests__/schedule-scene-reconciliation.test.js __tests__/schedule-settings-contract.test.js __tests__/schedule-write-reconciliation.test.js config.schema.json docs/mqtt-session-diagnostics.md docs/mqtt-session-recovery.md docs/schedule-write-reconciliation.md homebridge-ui/public/index.html homebridge-ui/public/index.js roborockLib/lib/messageQueueHandler.js roborockLib/lib/mqttSessionDiagnostics.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/unansweredMethodBreaker.js roborockLib/roborockAPI.js src/hap_schedule_accessory.ts src/platform.ts src/schedule_write_reconciliation.ts src/types.ts src/ui/index.ts __tests__/mqtt-session-recovery.test.js __tests__/mqtt-silent-read-integration.test.js .github/workflows/mqtt-home-pr-integration-verification.yml
+          git add __tests__/hap-schedule-naming.test.js __tests__/mqtt-session-breaker.test.js __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-recreation.test.js __tests__/schedule-scene-reconciliation.test.js __tests__/schedule-settings-contract.test.js __tests__/schedule-write-reconciliation.test.js config.schema.json docs/mqtt-session-diagnostics.md docs/mqtt-session-recovery.md docs/schedule-write-reconciliation.md homebridge-ui/public/index.html homebridge-ui/public/index.js roborockLib/lib/messageQueueHandler.js roborockLib/lib/mqttSessionDiagnostics.js roborockLib/lib/mqttSessionRecovery.js roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/unansweredMethodBreaker.js roborockLib/roborockAPI.js src/hap_schedule_accessory.ts src/platform.ts src/schedule_write_reconciliation.ts src/types.ts src/ui/index.ts __tests__/mqtt-session-recovery.test.js __tests__/mqtt-silent-read-integration.test.js
           if ! git diff --cached --quiet; then
             git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format home recovery integration for validation [skip ci]"
             git push
@@ -40,7 +40,7 @@ jobs:
       - name: Focused green behavioral tests
         id: focused
         continue-on-error: true
-        run: npm test -- --runInBand __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-breaker.test.js __tests__/mqtt-session-recreation.test.js __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js --json --outputFile="$RUNNER_TEMP/green-results.json" > "$RUNNER_TEMP/green.log" 2>&1
+        run: npm test -- --runInBand --testTimeout=5000 __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-breaker.test.js __tests__/mqtt-session-recreation.test.js __tests__/schedule-write-reconciliation.test.js __tests__/schedule-scene-reconciliation.test.js --json --outputFile="$RUNNER_TEMP/green-results.json" > "$RUNNER_TEMP/green.log" 2>&1
       - name: Formatting
         id: formatting
         continue-on-error: true
@@ -57,6 +57,14 @@ jobs:
         id: build
         continue-on-error: true
         run: npm run build > "$RUNNER_TEMP/build.log" 2>&1
+      - name: Save the verified installable build
+        if: steps.focused.outcome == 'success' && steps.formatting.outcome == 'success' && steps.types.outcome == 'success' && steps.full.outcome == 'success' && steps.build.outcome == 'success'
+        run: |
+          git add -f dist
+          if ! git diff --cached --quiet; then
+            git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Build validated home recovery integration [skip ci]"
+            git push
+          fi
       - name: Publish bounded validation evidence on this temporary branch
         id: evidence
         if: always()

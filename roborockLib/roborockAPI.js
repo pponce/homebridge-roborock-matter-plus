@@ -2063,18 +2063,10 @@ class Roborock {
           }
           this.log.debug(`RoomIDs debug: ${JSON.stringify(this.roomIDs)}`);
 
-          this.reconnectIntervall = this.setInterval(
-            async () => {
-              try {
-                await this.rr_mqtt_connector.ensureConnected();
-              } catch (error) {
-                this.log.warn(
-                  `MQTT health check failed: ${error?.message || error}.`
-                );
-              }
-            },
-            60 * 60 * 1000
-          );
+          this.reconnectIntervall = this.setInterval(async () => {
+            try { await this.rr_mqtt_connector.ensureConnected(); }
+            catch (error) { this.log.warn(`MQTT health check failed: ${error?.message || error}.`); }
+          }, 60 * 60 * 1000);
 
           this.homedataInterval = this.setInterval(
             this.updateHomeData.bind(this),
@@ -2232,7 +2224,6 @@ class Roborock {
       // Latched before anything is torn down, so a retry callback that fires
       // mid-shutdown reads it as already set.
       this.stopped = true;
-      this.flushPendingPersistedStates();
       // This helper is synchronous. Do not await it: Homebridge's SHUTDOWN
       // event is not an awaited lifecycle hook, so even a resolved-value await
       // would defer transport teardown to a later microtask. Close MQTT and
@@ -2243,6 +2234,9 @@ class Roborock {
       // the process could only ever be killed rather than exit.
       this.rr_mqtt_connector?.disconnect?.();
       this.localConnector?.destroyAllClients?.();
+      // Disconnect publishes the final MQTT observation synchronously. Flush
+      // after teardown so it cannot leave a new debounce timer behind.
+      this.flushPendingPersistedStates();
       // Nothing is coming back for these, and leaving them means every
       // caller still awaiting one hangs until Homebridge is killed.
       for (const [messageID, pending] of this.pendingRequests) {
@@ -2271,8 +2265,7 @@ class Roborock {
       throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
     }
     const recovery = this.rr_mqtt_connector.recovery;
-    if (!recovery)
-      throw new Error("Experimental MQTT session recovery is disabled.");
+    if (!recovery) throw new Error("Experimental MQTT session recovery is disabled.");
     return recovery.recreate(options.reason || "manual");
   }
 
@@ -6800,3 +6793,4 @@ module.exports = {
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
