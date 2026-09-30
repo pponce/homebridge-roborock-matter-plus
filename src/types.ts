@@ -81,6 +81,9 @@ export interface RoborockPlatformConfig extends PlatformConfig {
   enableMatterTankFaultReporting?: boolean;
   matterChargedBatteryThreshold?: number;
   cloudOnlyMode?: boolean;
+  enableMqttSessionRecovery?: boolean;
+  enableMqttPreventiveRefresh?: boolean;
+  enableMqttSingleRobotRecovery?: boolean;
   preferCloudForMatterCommands?: boolean;
   enableHomeKitActionSwitches?: boolean;
   homeKitActionSwitches?: string[];

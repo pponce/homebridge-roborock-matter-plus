@@ -41,6 +41,15 @@ const elements = {
   preferCloudForMatterCommands: document.getElementById(
     "prefer-cloud-for-matter-commands"
   ),
+  enableMqttSessionRecovery: document.getElementById(
+    "enableMqttSessionRecovery"
+  ),
+  enableMqttSingleRobotRecovery: document.getElementById(
+    "enableMqttSingleRobotRecovery"
+  ),
+  enableMqttPreventiveRefresh: document.getElementById(
+    "enableMqttPreventiveRefresh"
+  ),
   cloudOnlyMode: document.getElementById("cloud-only-mode"),
   transientWarningThrottleHours: document.getElementById(
     "transient-warning-throttle-hours"
@@ -215,10 +224,22 @@ async function loadConfig() {
     elements.preferCloudForMatterCommands.checked = Boolean(
       config.preferCloudForMatterCommands
     );
+    if (elements.enableMqttSessionRecovery)
+      elements.enableMqttSessionRecovery.checked =
+        config.enableMqttSessionRecovery === true;
+    if (elements.enableMqttSingleRobotRecovery)
+      elements.enableMqttSingleRobotRecovery.checked =
+        config.enableMqttSingleRobotRecovery === true;
+    if (elements.enableMqttPreventiveRefresh)
+      elements.enableMqttPreventiveRefresh.checked =
+        config.enableMqttPreventiveRefresh === true;
     elements.cloudOnlyMode.checked = Boolean(config.cloudOnlyMode);
     elements.advancedSettings.open = Boolean(
       config.debugMode ||
         config.preferCloudForMatterCommands ||
+        config.enableMqttSessionRecovery ||
+        config.enableMqttPreventiveRefresh ||
+        config.enableMqttSingleRobotRecovery ||
         config.cloudOnlyMode
     );
     elements.transientWarningThrottleHours.value =
@@ -646,6 +667,9 @@ const AUTO_SAVED_FIELDS = [
   "debugMode",
   "matterChargedBatteryThreshold",
   "preferCloudForMatterCommands",
+  "enableMqttSessionRecovery",
+  "enableMqttPreventiveRefresh",
+  "enableMqttSingleRobotRecovery",
   "cloudOnlyMode",
   "transientWarningThrottleHours",
 ];
@@ -682,6 +706,15 @@ function getFormValues() {
     ),
     matterChargedBatteryThreshold: getMatterChargedBatteryThreshold(),
     preferCloudForMatterCommands: getPreferCloudForMatterCommands(),
+    enableMqttSessionRecovery: Boolean(
+      elements.enableMqttSessionRecovery?.checked
+    ),
+    enableMqttSingleRobotRecovery: Boolean(
+      elements.enableMqttSingleRobotRecovery?.checked
+    ),
+    enableMqttPreventiveRefresh: Boolean(
+      elements.enableMqttPreventiveRefresh?.checked
+    ),
     cloudOnlyMode: getCloudOnlyMode(),
     transientWarningThrottleHours: getTransientWarningThrottleHours(),
   };
@@ -1455,6 +1488,13 @@ async function buildDiagnosticsReport(result) {
     "",
   ];
 
+  if (result.mqttSession) {
+    lines.push(
+      `mqttSession (ages at capturedAt): ${formatDiagnosticPayload(result.mqttSession)}`
+    );
+    lines.push("");
+  }
+
   (result.devices || []).forEach((device, index) => {
     lines.push(`device ${index + 1}: ${device.name || "Unknown device"}`);
     lines.push(`  duid: ${maskIdentifier(device.duid)}`);
@@ -1912,6 +1952,15 @@ function init() {
     );
   }
   elements.preferCloudForMatterCommands.addEventListener("change", () =>
+    autoSave()
+  );
+  elements.enableMqttSessionRecovery?.addEventListener("change", () =>
+    autoSave()
+  );
+  elements.enableMqttSingleRobotRecovery?.addEventListener("change", () =>
+    autoSave()
+  );
+  elements.enableMqttPreventiveRefresh?.addEventListener("change", () =>
     autoSave()
   );
   elements.cloudOnlyMode.addEventListener("change", () => autoSave());

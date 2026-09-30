@@ -1,3 +1,4 @@
+import { isAmbiguousScheduleWrite } from "./schedule_write_reconciliation";
 import { PlatformAccessory } from "homebridge";
 import RoborockPlatform from "./platform";
 import {
@@ -419,6 +420,8 @@ export function scheduleFromCloudScene(
 }
 
 export interface RoborockScheduleRefreshResult {
+  /** Sources read successfully in this refresh; cached/skipped sources are excluded. */
+  verifiedSources?: ScheduleSource[];
   success: boolean;
   hasSchedules: boolean;
   failedSources?: ScheduleSource[];
@@ -919,7 +922,8 @@ export default class RoborockHapScheduleAccessory {
 
   private async refreshDetailed(
     minimumRefreshStartedAt = 0,
-    accountCoordinatorHeld = false
+    accountCoordinatorHeld = false,
+    forceFresh = false
   ): Promise<RoborockScheduleRefreshResult> {
     if (this.disposed) {
       return {
@@ -929,6 +933,7 @@ export default class RoborockHapScheduleAccessory {
     }
 
     if (
+      !forceFresh &&
       this.refreshInProgress &&
       this.refreshInProgressStartedAt >= minimumRefreshStartedAt &&
       // A caller that already holds the account queue must never adopt a
@@ -945,7 +950,11 @@ export default class RoborockHapScheduleAccessory {
     const startedAt = Date.now();
     const generation = ++this.refreshGeneration;
 
-    const refresh = this.performRefresh(generation, accountCoordinatorHeld);
+    const refresh = this.performRefresh(
+      generation,
+      accountCoordinatorHeld,
+      forceFresh
+    );
 
     this.refreshInProgress = refresh;
     this.refreshInProgressStartedAt = startedAt;
@@ -979,7 +988,8 @@ export default class RoborockHapScheduleAccessory {
    */
   private async performRefresh(
     generation: number,
-    accountCoordinatorHeld: boolean
+    accountCoordinatorHeld: boolean,
+    includeVerifiedSources = false
   ): Promise<RoborockScheduleRefreshResult> {
     const preserved = (
       error?: unknown,
@@ -1045,18 +1055,17 @@ export default class RoborockHapScheduleAccessory {
         (!timerSchedules.ok && this.lastServerTimerSchedules === undefined) ||
         (!sceneSchedules.ok && this.lastCloudSceneSchedules === undefined);
 
+      const throttled = [readings.timers, readings.scenes].find(
+        (reading) =>
+          reading.state === "failed" &&
+          isDefiniteScheduleThrottle(reading.error)
+      );
+      if (throttled && throttled.state === "failed")
+        this.recordScheduleThrottle(throttled.error);
+
       if (unrecoverable) {
         // Keep every switch and back off.
-        const throttled = [readings.timers, readings.scenes].find(
-          (reading) =>
-            reading.state === "failed" &&
-            isDefiniteScheduleThrottle(reading.error)
-        );
-        if (throttled && throttled.state === "failed") {
-          this.recordScheduleThrottle(throttled.error);
-        } else {
-          this.recordRefreshFailure();
-        }
+        if (!throttled) this.recordRefreshFailure();
 
         const reasons = [timerSchedules, sceneSchedules]
           .filter((outcome) => !outcome.ok && outcome.reason)
@@ -1149,6 +1158,18 @@ export default class RoborockHapScheduleAccessory {
             : undefined;
       return {
         success: true,
+        ...(includeVerifiedSources
+          ? {
+              verifiedSources: [
+                ...(readings.timers.state === "read" && timerSchedules.ok
+                  ? ["serverTimer" as const]
+                  : []),
+                ...(readings.scenes.state === "read" && sceneSchedules.ok
+                  ? ["cloudScene" as const]
+                  : []),
+              ],
+            }
+          : {}),
         hasSchedules: this.exposeSchedules !== false && merged.length > 0,
         ...(accountCoordinatorHeld && failedSources.length > 0
           ? { failedSources }
@@ -1368,17 +1389,20 @@ export default class RoborockHapScheduleAccessory {
     requests: ScheduleWriteRequest[]
   ): Promise<Map<string, unknown>> {
     const failures = new Map<string, unknown>();
-    const primarySent: ScheduleWriteRequest[] = [];
-    const ambiguous: ScheduleWriteRequest[] = [];
+    const candidates: ScheduleWriteRequest[] = [];
+    const ambiguous = new Set<ScheduleWriteRequest>();
     const api = this.platform.roborockAPI as any;
-    const primaryStartedAt = Date.now();
+    const stopped = () =>
+      new Error("Schedule reconciliation stopped during shutdown");
+    const failAll = (items: ScheduleWriteRequest[], error: unknown) => {
+      for (const request of items) failures.set(request.scheduleId, error);
+      return failures;
+    };
 
     for (let index = 0; index < requests.length; index++) {
       const request = requests[index];
-      if (index > 0) {
-        await this.waitForScheduleWriteSpacing();
-      }
-
+      if (index > 0) await this.waitForScheduleWriteSpacing();
+      if (this.disposed) return failAll(requests, stopped());
       try {
         this.platform.log.info(
           `Schedule command: ${request.enabled ? "enabling" : "disabling"} ${this.duid}/${request.scheduleId}.`
@@ -1395,147 +1419,88 @@ export default class RoborockHapScheduleAccessory {
             { requestTimeoutMs: 10000 }
           );
         }
-        primarySent.push(request);
+        candidates.push(request);
       } catch (error) {
         failures.set(request.scheduleId, error);
         if (isDefiniteScheduleThrottle(error)) {
           this.recordScheduleThrottle(error);
-          return new Map(
-            requests.map((candidate) => [candidate.scheduleId, error])
-          );
+          return failAll(requests, error);
         }
-        if (isRecoverableScheduleCloudFailure(error)) {
-          ambiguous.push(request);
+        if (isAmbiguousScheduleWrite(error)) {
+          ambiguous.add(request);
+          candidates.push(request);
         }
       }
     }
+    if (!candidates.length) return failures;
 
-    if ((primarySent.length === 0 && ambiguous.length === 0) || this.disposed) {
-      return failures;
-    }
-
+    // Join an already-running bounded recovery, if any. Schedule writes must
+    // never enable or trigger account-wide recreation themselves.
+    await api.rr_mqtt_connector?.recovery?.inFlight;
+    if (this.disposed) return failAll(candidates, stopped());
     await this.waitForScheduleVerification();
-    let verification = await this.refreshDetailed(primaryStartedAt, true);
+    const verification = await this.refreshDetailed(Date.now(), true, true);
+    const throttle = this.accountCoordinator.currentThrottleError();
+    if (throttle !== undefined) return failAll(candidates, throttle);
+    if (this.disposed) return failAll(candidates, stopped());
 
-    const candidates = [...primarySent, ...ambiguous];
-    const relevantVerificationFailed = candidates.some((request) =>
-      verification.failedSources?.includes(
+    const verified = (
+      result: RoborockScheduleRefreshResult,
+      request: ScheduleWriteRequest
+    ) =>
+      result.success &&
+      result.verifiedSources?.includes(
         isCloudSceneScheduleId(request.scheduleId)
           ? "cloudScene"
           : "serverTimer"
-      )
-    );
-    const shouldRecover =
-      ambiguous.length > 0 ||
-      (relevantVerificationFailed &&
-        isRecoverableScheduleCloudFailure(verification.error));
-
-    if (relevantVerificationFailed && !shouldRecover) {
-      const error =
-        verification.error ??
-        new Error("Authoritative schedule verification failed");
-      for (const request of candidates) failures.set(request.scheduleId, error);
-      return failures;
-    }
-
-    let reconnectGeneration: number | string = "none";
-    if (shouldRecover && !this.disposed) {
-      try {
-        const reconnect = await api.recoverMqttSession({
-          reason: "schedule-write-reconciliation",
-          mode: "recovery",
-          drainTimeoutMs: 0,
-          connectTimeoutMs: 10000,
-          subscribeTimeoutMs: 5000,
-        });
-        reconnectGeneration = reconnect?.generation ?? "unknown";
-        verification = await this.refreshDetailed(Date.now(), true);
-      } catch (error) {
-        for (const request of candidates)
-          failures.set(request.scheduleId, error);
-        this.platform.log.warn(
-          `Schedule recovery batch: requested=${requests.length}; primaryAcked=${primarySent.length}; ambiguous=${ambiguous.length}; reconnectGeneration=${reconnectGeneration}; alreadyAppliedAfterReconnect=0; retried=0; finalConfirmed=0; failed=${failures.size}.`
-        );
-        return failures;
-      }
-
-      const postRecoveryReadFailed = candidates.some((request) =>
-        verification.failedSources?.includes(
-          isCloudSceneScheduleId(request.scheduleId)
-            ? "cloudScene"
-            : "serverTimer"
-        )
-      );
-      if (!verification.success || postRecoveryReadFailed) {
-        const error =
-          verification.error ??
-          new Error("Authoritative schedule read failed after MQTT recovery");
-        for (const request of candidates)
-          failures.set(request.scheduleId, error);
-        return failures;
-      }
-    }
-
-    const throttleError = this.accountCoordinator.currentThrottleError();
-    if (throttleError !== undefined) {
-      return new Map(
-        requests.map((request) => [request.scheduleId, throttleError])
-      );
-    }
-
-    const unconfirmed = candidates.filter(
-      (request) => !this.cachedScheduleMatches(request)
-    );
-    // The upd_timer fallback is a device-side command. A cloud scene has no
-    // second route, but an ambiguous scene assignment may be repeated once
-    // after the authoritative post-reconnect read proved it did not apply.
-    const fallback = unconfirmed.filter(
-      (request) =>
-        !isCloudSceneScheduleId(request.scheduleId) ||
-        ambiguous.includes(request)
-    );
-    const primaryConfirmed = candidates.length - unconfirmed.length;
-    this.platform.log.info(
-      `Schedule batch verification for ${this.duid}: ` +
-        `requested=${requests.length}; primarySent=${primarySent.length}; ` +
-        `primaryConfirmed=${primaryConfirmed}; fallbackNeeded=${fallback.length}.`
-    );
+      ) === true;
+    const fallback: ScheduleWriteRequest[] = [];
     for (const request of candidates) {
-      if (!unconfirmed.includes(request)) {
-        failures.delete(request.scheduleId);
+      if (!verified(verification, request)) {
+        failures.set(
+          request.scheduleId,
+          new Error(
+            `Fresh schedule verification failed for ${request.scheduleId}; no retry was sent`
+          )
+        );
       } else if (
-        isCloudSceneScheduleId(request.scheduleId) &&
-        !ambiguous.includes(request)
+        !this.cachedSchedules?.some(
+          (schedule) => schedule.id === request.scheduleId
+        )
       ) {
         failures.set(
           request.scheduleId,
           new Error(
-            `Roborock did not confirm routine ${cloudSceneIdFromScheduleId(request.scheduleId)} as ${request.enabled ? "enabled" : "disabled"} when it was read back`
+            `Schedule ${request.scheduleId} no longer exists; no retry was sent`
+          )
+        );
+      } else if (this.cachedScheduleMatches(request)) {
+        failures.delete(request.scheduleId);
+      } else if (
+        !isCloudSceneScheduleId(request.scheduleId) ||
+        ambiguous.has(request)
+      ) {
+        fallback.push(request);
+      } else {
+        failures.set(
+          request.scheduleId,
+          new Error(
+            `Roborock did not confirm routine ${cloudSceneIdFromScheduleId(request.scheduleId)} when it was read back`
           )
         );
       }
     }
 
-    if (fallback.length === 0 || this.disposed) {
-      if (shouldRecover) {
-        this.platform.log.info(
-          `Schedule recovery batch: requested=${requests.length}; primaryAcked=${primarySent.length}; ambiguous=${ambiguous.length}; reconnectGeneration=${reconnectGeneration}; alreadyAppliedAfterReconnect=${primaryConfirmed}; retried=0; finalConfirmed=${candidates.length - failures.size}; failed=${failures.size}.`
-        );
-      }
-      return failures;
-    }
-
-    const fallbackSent: ScheduleWriteRequest[] = [];
-    const fallbackStartedAt = Date.now();
+    // Only absolute on/off assignments are retried, once, after a successful
+    // read demonstrated that the existing schedule still has the other state.
+    const finalCandidates: ScheduleWriteRequest[] = [];
     for (let index = 0; index < fallback.length; index++) {
       const request = fallback[index];
-      if (index > 0) {
-        await this.waitForScheduleWriteSpacing();
-      }
-
+      if (index > 0) await this.waitForScheduleWriteSpacing();
+      if (this.disposed) return failAll(fallback, stopped());
       try {
         this.platform.log.warn(
-          `Schedule command: upd_server_timer was not confirmed for ${this.duid}/${request.scheduleId}; trying upd_timer fallback.`
+          `Schedule command: fresh read did not confirm ${this.duid}/${request.scheduleId}; sending one fallback assignment.`
         );
         this.accountCoordinator.recordRequest("fallbackWrite");
         if (isCloudSceneScheduleId(request.scheduleId)) {
@@ -1546,80 +1511,48 @@ export default class RoborockHapScheduleAccessory {
             this.duid,
             request.scheduleId,
             request.enabled,
-            {
-              requestTimeoutMs: 10000,
-            }
+            { requestTimeoutMs: 10000 }
           );
         }
-        fallbackSent.push(request);
+        finalCandidates.push(request);
       } catch (error) {
         failures.set(request.scheduleId, error);
         if (isDefiniteScheduleThrottle(error)) {
           this.recordScheduleThrottle(error);
-          for (const candidate of fallback) {
-            failures.set(candidate.scheduleId, error);
-          }
-          return failures;
+          return failAll(fallback, error);
         }
+        if (isAmbiguousScheduleWrite(error)) finalCandidates.push(request);
       }
     }
-
-    let finalVerificationTrusted = true;
-    if (fallbackSent.length > 0 && !this.disposed) {
+    if (finalCandidates.length) {
+      await api.rr_mqtt_connector?.recovery?.inFlight;
+      if (this.disposed) return failAll(finalCandidates, stopped());
       await this.waitForScheduleVerification();
       const finalVerification = await this.refreshDetailed(
-        fallbackStartedAt,
+        Date.now(),
+        true,
         true
       );
-      const finalReadFailed = fallbackSent.some((request) =>
-        finalVerification.failedSources?.includes(
-          isCloudSceneScheduleId(request.scheduleId)
-            ? "cloudScene"
-            : "serverTimer"
-        )
-      );
-      if (!finalVerification.success || finalReadFailed) {
-        finalVerificationTrusted = false;
-        const error =
-          finalVerification.error ??
-          new Error("Final authoritative schedule verification failed");
-        for (const request of fallbackSent) {
-          failures.set(request.scheduleId, error);
+      for (const request of finalCandidates) {
+        if (
+          !this.disposed &&
+          verified(finalVerification, request) &&
+          this.cachedScheduleMatches(request)
+        ) {
+          failures.delete(request.scheduleId);
+        } else {
+          failures.set(
+            request.scheduleId,
+            new Error(
+              `Roborock did not freshly confirm schedule ${request.scheduleId}; no further retry was sent`
+            )
+          );
         }
       }
     }
-
-    for (const request of fallbackSent) {
-      if (finalVerificationTrusted && this.cachedScheduleMatches(request)) {
-        failures.delete(request.scheduleId);
-      } else {
-        failures.set(
-          request.scheduleId,
-          new Error(
-            `Roborock did not confirm schedule ${request.scheduleId} as ${request.enabled ? "enabled" : "disabled"}`
-          )
-        );
-      }
-    }
-
-    const fallbackConfirmed = finalVerificationTrusted
-      ? fallbackSent.filter((request) => this.cachedScheduleMatches(request))
-          .length
-      : 0;
     this.platform.log.info(
-      `Schedule fallback verification for ${this.duid}: ` +
-        `requested=${requests.length}; primarySent=${primarySent.length}; ` +
-        `primaryConfirmed=${primaryConfirmed}; fallbackNeeded=${fallback.length}; ` +
-        `fallbackSent=${fallbackSent.length}; fallbackConfirmed=${fallbackConfirmed}; ` +
-        `failed=${failures.size}.`
+      `Schedule reconciliation for ${this.duid}: requested=${requests.length}; ambiguous=${ambiguous.size}; retried=${fallback.length}; failed=${failures.size}.`
     );
-
-    if (shouldRecover) {
-      this.platform.log.info(
-        `Schedule recovery batch: requested=${requests.length}; primaryAcked=${primarySent.length}; ambiguous=${ambiguous.length}; reconnectGeneration=${reconnectGeneration}; alreadyAppliedAfterReconnect=${candidates.length - fallback.length}; retried=${fallbackSent.length}; finalConfirmed=${candidates.length - failures.size}; failed=${failures.size}.`
-      );
-    }
-
     return failures;
   }
 

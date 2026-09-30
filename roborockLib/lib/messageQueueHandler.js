@@ -182,6 +182,9 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
 
 /**
  * @typedef {Object} MqttConnector
+ * @property {() => void} [assertCanSend]
+ * @property {{observeTimeout: (observation?: ReturnType<import("./mqttSessionDiagnostics").MqttSessionDiagnostics["noteTimeout"]>) => void} | null} [recovery]
+ * @property {import("./mqttSessionDiagnostics").MqttSessionDiagnostics} [sessionDiagnostics]
  * @property {() => boolean} isConnected
  * @property {(duid?: string) => Record<string, unknown>} [getSessionHealthSnapshot]
  * @property {(options?: {timeoutMs?: number, signal?: AbortSignal}) => Promise<number>} [waitUntilReady]
@@ -209,8 +212,7 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
  *
  * @param {string} message
  * @param {boolean} transportWasUp whether the link was up AT REJECTION TIME
- * @param {boolean} [accountSessionWasSilent=false] whether no MQTT frame
- *   arrived after this read was published
+ * @param {boolean} [accountSessionWasSilent=false] correlated silence on this cloud read
  * @returns {Error & {unansweredRequest: boolean, transportWasUp: boolean, accountSessionWasSilent: boolean}}
  */
 function unansweredRequestError(
@@ -492,6 +494,7 @@ class messageQueueHandler {
     if (
       roborockMessage &&
       useCloudConnection &&
+      !this.adapter.rr_mqtt_connector.recovery &&
       typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function"
     ) {
       sessionGeneration = await this.adapter.rr_mqtt_connector.waitUntilReady({
@@ -501,6 +504,8 @@ class messageQueueHandler {
     }
 
     if (roborockMessage) {
+      // Recheck after async payload building: a recreation may have begun.
+      if (useCloudConnection) this.adapter.rr_mqtt_connector.assertCanSend?.();
       return new Promise((resolve, reject) => {
         if (
           !deviceOnline &&
@@ -594,6 +599,11 @@ class messageQueueHandler {
             typeof this.adapter.getCloudMessageReceiptCount === "function"
               ? this.adapter.getCloudMessageReceiptCount(duid)
               : null;
+          const sessionDiagnostics =
+            this.adapter.rr_mqtt_connector.sessionDiagnostics;
+          const sessionRequest = useCloudConnection
+            ? sessionDiagnostics?.captureRequest()
+            : undefined;
           const onTimeout = () => {
             this.adapter.pendingRequests.delete(messageID);
             this.adapter.localConnector.clearChunkBuffer(duid);
@@ -603,35 +613,30 @@ class messageQueueHandler {
               const transportWasUp = Boolean(
                 this.adapter.rr_mqtt_connector?.isConnected?.()
               );
-              const sessionHealth =
-                this.adapter.rr_mqtt_connector.getSessionHealthSnapshot?.(duid);
-              const requestAgeMs =
-                typeof pendingRequest.publishedAt === "number" &&
-                Number.isFinite(pendingRequest.publishedAt)
-                  ? Math.max(0, Date.now() - pendingRequest.publishedAt)
-                  : null;
-              const accountSessionWasSilent =
-                pendingRequest.operationClass === "read" &&
-                requestAgeMs !== null &&
-                sessionHealth !== undefined &&
-                (sessionHealth.lastRawInboundAgeMs === null ||
-                  (typeof sessionHealth.lastRawInboundAgeMs === "number" &&
-                    Number.isFinite(sessionHealth.lastRawInboundAgeMs) &&
-                    sessionHealth.lastRawInboundAgeMs >= requestAgeMs));
-              const timeoutError = unansweredRequestError(
-                `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${transportWasUp}${sessionHealth ? `; session health: ${JSON.stringify(sessionHealth)}` : ""}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}`,
-                transportWasUp,
-                accountSessionWasSilent
-              );
-              this.adapter.noteRequestUnanswered?.(duid, method, timeoutError);
-              reject(timeoutError);
-              this.adapter.rr_mqtt_connector.noteSilentCloudReadTimeout?.({
+              const sessionHealth = sessionDiagnostics?.noteTimeout(
                 duid,
                 method,
-                operationClass: pendingRequest.operationClass,
-                sessionGeneration: pendingRequest.sessionGeneration,
-                publishedAt: pendingRequest.publishedAt,
-              });
+                sessionRequest
+              );
+              const sessionSummary = sessionHealth?.correlatedSilenceObserved
+                ? ` MQTT session: correlated silence across ${sessionHealth.silentReadRobotCount} robots (generation ${sessionHealth.generation}).`
+                : sessionHealth && !sessionHealth.subscriptionAcknowledged
+                  ? ` MQTT session: subscription not acknowledged (generation ${sessionHealth.generation}).`
+                  : "";
+              const error = unansweredRequestError(
+                `Cloud request with id ${messageID} with method ${method} timed out after ${timeoutSeconds} seconds. MQTT connection state: ${transportWasUp}${describeCloudSilence(this.adapter, duid, receiptsAtSend)}${sessionSummary}`,
+                transportWasUp,
+                Boolean(
+                  transportWasUp &&
+                    sessionHealth?.requestWasSilent &&
+                    sessionHealth?.correlatedSilenceObserved
+                )
+              );
+              this.adapter.noteRequestUnanswered?.(duid, method, error);
+              reject(error);
+              this.adapter.rr_mqtt_connector.recovery?.observeTimeout(
+                sessionHealth
+              );
             } else {
               // A socket that keeps reporting itself connected while every
               // request dies of silence is not a transport worth retrying
@@ -671,6 +676,10 @@ class messageQueueHandler {
             // and the register never counted a single one — including all
             // seven methods in #22/#24 that it was built for.
             resolve: (value) => {
+              if (!useCloudConnection) {
+                sessionDiagnostics?.noteActivity("local");
+                sessionDiagnostics?.emit();
+              }
               this.adapter.noteRequestAnswered?.(duid, method);
               resolve(value);
             },
