@@ -213,6 +213,8 @@ class RoborockUiServer {
             const userDataState = this.readJsonFile(path_1.default.join(storagePath, "roborock.UserData"));
             const transportDiagnosticsState = this.readJsonFile(path_1.default.join(storagePath, "roborock.TransportDiagnostics"));
             const roborockDiagnosticsState = this.readJsonFile(path_1.default.join(storagePath, "roborock.RoborockDiagnostics"));
+            const mqttSessionState = this.readJsonFile(path_1.default.join(storagePath, "roborock.MqttSessionDiagnostics"));
+            const mqttSession = this.parseStatePayload(mqttSessionState === null || mqttSessionState === void 0 ? void 0 : mqttSessionState.val);
             const homeData = this.parseStatePayload(homeDataState === null || homeDataState === void 0 ? void 0 : homeDataState.val);
             const transportDiagnostics = this.parseStatePayload(transportDiagnosticsState === null || transportDiagnosticsState === void 0 ? void 0 : transportDiagnosticsState.val) || {};
             const roborockDiagnostics = this.parseStatePayload(roborockDiagnosticsState === null || roborockDiagnosticsState === void 0 ? void 0 : roborockDiagnosticsState.val) || {};
@@ -283,6 +285,7 @@ class RoborockUiServer {
                 storagePath,
                 hasEncryptedToken: Boolean(userDataState === null || userDataState === void 0 ? void 0 : userDataState.val),
                 hasHomeData: Boolean(homeData),
+                mqttSession: mqttSession || null,
                 deviceCount: diagnostics.length,
                 devices: diagnostics,
             };
