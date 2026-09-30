@@ -287,11 +287,10 @@ class roborock_mqtt_connector {
     });
 
     await this.client.on("reconnect", () => {
-      const generation = this.sessionDiagnostics.generation;
+      // Only connect-handler SUBACKs describe the current generation.
       this.client.subscribe(
         `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`,
         (err, granted) => {
-          this.sessionDiagnostics.onSubscribe(generation, err, granted);
           if (err) {
             this.logConnectionIssue(
               `Failed to subscribe to the Roborock MQTT server after reconnect: ${err} (granted: ${JSON.stringify(granted)}).`
