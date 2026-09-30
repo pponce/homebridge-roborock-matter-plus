@@ -391,6 +391,7 @@ const INITIAL_STATUS_WAIT_CAP_MS = 4000;
 const DEBOUNCED_PERSIST_IDS = new Set([
   "TransportDiagnostics",
   "RoborockDiagnostics",
+  "MqttSessionDiagnostics",
 ]);
 const PERSIST_FLUSH_DEBOUNCE_MS = 60000;
 
@@ -402,6 +403,7 @@ const PERSISTED_STATE_IDS = new Set([
   "B01Rooms",
   "TransportDiagnostics",
   "RoborockDiagnostics",
+  "MqttSessionDiagnostics",
 ]);
 
 const dockingStationStates = [
@@ -426,6 +428,7 @@ const SIMPLE_VACUUM_COMMANDS = new Set([
   "app_start_collect_dust",
   "find_me",
   "app_segment_clean_by_ids",
+  "resume_segment_clean",
   "load_multi_map",
 ]);
 
@@ -2219,13 +2222,15 @@ class Roborock {
       // Latched before anything is torn down, so a retry callback that fires
       // mid-shutdown reads it as already set.
       this.stopped = true;
-      this.flushPendingPersistedStates();
       await this.clearTimersAndIntervals();
       // Timers were the only thing shutdown used to stop. Both transports
       // stayed open, so frames kept arriving into disposed accessories and
       // the process could only ever be killed rather than exit.
       this.rr_mqtt_connector?.disconnect?.();
       this.localConnector?.destroyAllClients?.();
+      // Teardown publishes the final disconnected diagnostics. Flush after it
+      // so that snapshot reaches disk and its debounce timer is cleared too.
+      this.flushPendingPersistedStates();
       // Nothing is coming back for these, and leaving them means every
       // caller still awaiting one hangs until Homebridge is killed.
       for (const [messageID, pending] of this.pendingRequests) {
@@ -4834,6 +4839,47 @@ class Roborock {
       },
       options
     );
+  }
+
+  /**
+   * CONTINUE a paused room clean, rather than starting a new one (#28).
+   *
+   * `app_start` resumes a paused FULL clean, which is why it has always been
+   * the answer to Matter's Resume. On a paused ROOM clean it does something
+   * else entirely: it starts a fresh whole-home run. CooperCGN measured both
+   * halves on his own robot — full cleans continue as expected, a paused room
+   * clean restarts as a full one — which matters more than a tidy tile,
+   * because his automation pauses on an opened door and his robot has already
+   * driven out of one and down a flight of stairs.
+   *
+   * Roborock's own verb for this is `resume_segment_clean`. It has been in
+   * `deviceFeatures.js` since the library was imported and had never been
+   * sent from anywhere.
+   *
+   * @param {string} duid
+   * @param {object} [options]
+   * @returns {Promise<void>}
+   */
+  async resume_segment_clean(duid, options) {
+    await this.startCommand(duid, "resume_segment_clean", null, options);
+  }
+
+  /**
+   * Whether this robot can be told to continue a paused room clean.
+   *
+   * Classic v1 robots can. The B01/Q7 dialect has no measured verb for it:
+   * room cleaning there is `service.set_room_clean` with a `ctrl_value`, and
+   * the only three values read out of the protocol are STOP 0, START 1 and
+   * PAUSE 2 (`b01Q7Adapter.js`). There may well be a continue value — nobody
+   * has seen one, and a guessed control code sent to a paused robot is how
+   * the play button breaks for every B01 owner at once. So a B01 keeps
+   * today's behaviour and the limitation gets said out loud instead.
+   *
+   * @param {string} duid
+   * @returns {boolean}
+   */
+  supportsSegmentResume(duid) {
+    return !this.isB01Device(duid);
   }
 
   async load_multi_map(duid, mapId, options = {}) {
