@@ -1,0 +1,15 @@
+{
+  "passed": 0,
+  "failed": 1,
+  "runtimeErrors": 0,
+  "suites": 1,
+  "failures": [
+    {
+      "name": "shutdown persists the final disconnected MQTT snapshot without a pending write timer",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 3\n+ Received  + 3\n\n  Object {\n-   \"connected\": false,\n-   \"rawSilenceDuringRequest\": null,\n-   \"subscriptionAcknowledged\": false,\n+   \"connected\": true,\n+   \"rawSilenceDuringRequest\": true,\n+   \"subscriptionAcknowledged\": true,\n  }\n    at Object.toMatchObject (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-session-observations.test.js:604:7)"
+      ]
+    }
+  ],
+  "suiteErrors": []
+}
