@@ -1,0 +1,96 @@
+name: Verify refreshed MQTT PR stack
+on:
+  push:
+    branches: [mqtt-pr-stack-shutdown-validation]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: 1
+            sha: 5e37cb260dc6ccaec8e9d392fa39f50ff5d30f1b
+          - pr: 2
+            sha: 9bb5a61734f8bb14b22fa1ebaa3bee4dafb9cac6
+          - pr: 3
+            sha: b0712bf198fe8f899a095d2e8d650c947cfb357f
+          - pr: 4
+            sha: 74779607ff5920a0f01423b350bfde68e8fb6710
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Format and save candidate source
+        id: prepare
+        run: |
+          npx prettier --write __tests__/mqtt-session*.test.js __tests__/hap-schedule-naming.test.js __tests__/schedule*.test.js roborockLib/lib/messageQueueHandler.js roborockLib/lib/mqttSession*.js roborockLib/lib/roborock_mqtt_connector.js roborockLib/lib/unansweredMethodBreaker.js roborockLib/roborockAPI.js docs/*.md homebridge-ui/public/index.* src/platform.ts src/types.ts src/ui/index.ts src/hap_schedule_accessory.ts config.schema.json
+          if [ -f src/schedule_write_reconciliation.ts ]; then npx prettier --write src/schedule_write_reconciliation.ts; fi
+          git add -u
+          if ! git diff --cached --quiet; then
+            git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format PR ${{ matrix.pr }} validation candidate [skip ci]"
+          fi
+          git push origin HEAD:refs/heads/mqtt-pr-stack-verified-${{ matrix.pr }}
+      - name: Prove the regression on the old PR1
+        id: baseline
+        if: matrix.pr == 1
+        continue-on-error: true
+        run: |
+          cp roborockLib/roborockAPI.js "$RUNNER_TEMP/fixed-api.js"
+          git show ecbb8a74c6c5e1eea9789a42c2a02ea79410bb8d:roborockLib/roborockAPI.js > roborockLib/roborockAPI.js
+          set +e
+          npm test -- --runInBand __tests__/mqtt-session-observations.test.js --testNamePattern="shutdown persists the final disconnected MQTT snapshot" --json --outputFile="$RUNNER_TEMP/baseline.json" > "$RUNNER_TEMP/baseline.log" 2>&1
+          baseline_status=$?
+          cp "$RUNNER_TEMP/fixed-api.js" roborockLib/roborockAPI.js
+          test "$baseline_status" -ne 0 || exit 1
+          node -e 'const r=require(process.argv[1]);if(r.numFailedTests!==1 || r.numRuntimeErrorTestSuites!==0)process.exit(1);const t=r.testResults.flatMap(s=>s.assertionResults).find(t=>t.status==="failed");if(!t.fullName.includes("shutdown persists the final disconnected MQTT snapshot") || !t.failureMessages.join("\n").includes("connected"))process.exit(1)' "$RUNNER_TEMP/baseline.json"
+      - name: Formatting
+        id: lint
+        continue-on-error: true
+        run: npm run lint > "$RUNNER_TEMP/lint.log" 2>&1
+      - name: Type checks
+        id: types
+        continue-on-error: true
+        run: npm run typecheck > "$RUNNER_TEMP/types.log" 2>&1
+      - name: Full tests
+        id: tests
+        continue-on-error: true
+        run: npm test -- --runInBand --json --outputFile="$RUNNER_TEMP/tests.json" > "$RUNNER_TEMP/tests.log" 2>&1
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: npm run build > "$RUNNER_TEMP/build.log" 2>&1
+      - name: Save validation evidence
+        id: evidence
+        if: always()
+        run: |
+          mkdir -p validation-evidence
+          for kind in baseline tests; do
+            if [ -f "$RUNNER_TEMP/$kind.json" ]; then
+              node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[2],JSON.stringify({passed:r.numPassedTests,failed:r.numFailedTests,runtimeErrors:r.numRuntimeErrorTestSuites,suites:r.numTotalTestSuites,failures:r.testResults.flatMap(s=>(s.assertionResults||[]).filter(t=>t.status==="failed").map(t=>({name:t.fullName,messages:t.failureMessages}))),suiteErrors:r.testResults.filter(s=>s.message && !s.assertionResults?.length).map(s=>s.message)},null,2)+"\n");' "$RUNNER_TEMP/$kind.json" "validation-evidence/$kind.json"
+            fi
+          done
+          for kind in lint types build; do
+            if [ -f "$RUNNER_TEMP/$kind.log" ]; then tail -n 100 "$RUNNER_TEMP/$kind.log" > "validation-evidence/$kind.txt"; fi
+          done
+          git add -f validation-evidence
+          git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record PR ${{ matrix.pr }} validation evidence [skip ci]"
+          git push origin HEAD:refs/heads/mqtt-pr-stack-verified-${{ matrix.pr }}
+      - name: Require all gates
+        if: always()
+        run: |
+          test "${{ steps.prepare.outcome }}" = success
+          if [ "${{ matrix.pr }}" = 1 ]; then test "${{ steps.baseline.outcome }}" = success; fi
+          test "${{ steps.lint.outcome }}" = success
+          test "${{ steps.types.outcome }}" = success
+          test "${{ steps.tests.outcome }}" = success
+          test "${{ steps.build.outcome }}" = success
+          test "${{ steps.evidence.outcome }}" = success
