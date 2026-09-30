@@ -86,10 +86,13 @@ function isUnansweredRequest(error) {
     if (error.unansweredRequest !== true) {
       return false;
     }
-    // The MQTT socket can remain connected while the subscribed account
-    // session stops delivering every frame. That is account-session recovery
-    // evidence, not evidence that this one robot method is unsupported.
-    if (error.accountSessionWasSilent === true) {
+    // A connected socket is not enough: the request layer may have
+    // measured correlated account-wide silence on this particular read.
+    // Keep the timeout visible to its caller, but do not blame the method.
+    if (
+      "accountSessionWasSilent" in error &&
+      error.accountSessionWasSilent === true
+    ) {
       return false;
     }
     return error.transportWasUp !== false;
@@ -331,3 +334,4 @@ module.exports = {
   OPEN_AFTER_CONSECUTIVE_TIMEOUTS,
   COOLDOWN_MS,
 };
+

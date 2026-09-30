@@ -1,6 +1,8 @@
 "use strict";
 
 const mqtt = require("mqtt");
+const { MqttSessionDiagnostics } = require("./mqttSessionDiagnostics");
+const { MqttSessionRecovery } = require("./mqttSessionRecovery");
 const crypto = require("crypto");
 const Parser = require("binary-parser").Parser;
 const zlib = require("zlib");
@@ -146,6 +148,13 @@ function parseProtocol301Header(payload) {
 class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
+    this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
+      Promise.resolve(this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
+        val: JSON.stringify({...snapshot, recovery: this.recovery?.snapshot() ?? {enabled: false}}), ack: true,
+      })).catch(() => {});
+    });
+    this.recovery = adapter.config?.enableMqttSessionRecovery === true
+      ? new MqttSessionRecovery(this) : null;
     this.client = null;
     this.rriot = null;
     this.endpoint = null;
@@ -275,9 +284,18 @@ class roborock_mqtt_connector {
       return;
     }
     this.handlersInstalledFor = candidate;
+    if (this.recovery) {
+      this.recovery.install(candidate);
+      candidate.on("message", (topic, message, packet) => {
+        if (!this.isCurrentSession(candidate, generation)) return;
+        this.handleMessage(topic, message, packet);
+      });
+      return;
+    }
 
     candidate.on("connect", (result) => {
       if (!this.isCurrentSession(candidate, generation)) return;
+      this.sessionDiagnostics.onConnect();
       this.socketConnected = true;
       this.subscriptionReady = false;
       this.connected = false;
@@ -325,6 +343,7 @@ class roborock_mqtt_connector {
   }
 
   markNotReady(reason) {
+    this.sessionDiagnostics.onDisconnect();
     this.connected = false;
     this.socketConnected = false;
     this.subscriptionReady = false;
@@ -333,6 +352,7 @@ class roborock_mqtt_connector {
   }
 
   async subscribeForReplies(candidate, generation) {
+    const observationGeneration = this.sessionDiagnostics.generation;
     const topic = `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`;
     let timer;
     try {
@@ -351,13 +371,15 @@ class roborock_mqtt_connector {
         }),
       ]);
       if (!this.isCurrentSession(candidate, generation)) return;
+      if (observationGeneration !== this.sessionDiagnostics.generation || !this.socketConnected) return;
       const accepted =
         Array.isArray(granted) &&
         granted.some(
-          (grant) => grant && grant.topic === topic && grant.qos !== 128
+          (grant) => grant && grant.topic === topic && [0, 1, 2].includes(grant.qos)
         );
       if (!accepted)
         throw new Error("broker did not grant the reply subscription");
+      this.sessionDiagnostics.onSubscribe(observationGeneration, null, granted);
       this.subscriptionReady = true;
       this.connected = true;
       this.readyAt = Date.now();
@@ -375,6 +397,8 @@ class roborock_mqtt_connector {
       );
     } catch (error) {
       if (!this.isCurrentSession(candidate, generation)) return;
+      if (observationGeneration !== this.sessionDiagnostics.generation || !this.socketConnected) return;
+      this.sessionDiagnostics.onSubscribe(observationGeneration, error, []);
       this.subscriptionReady = false;
       this.connected = false;
       this.transitionSessionState("disconnected", "subscription-failed");
@@ -478,6 +502,7 @@ class roborock_mqtt_connector {
   }
 
   handleMessage(topic, message, packet = {}) {
+    this.sessionDiagnostics.noteActivity("raw");
     this.lastRawMqttMessageAt = Date.now();
     if (this.silentCloudReadTimeouts.length > 0) {
       this.silentCloudReadTimeouts = [];
@@ -501,12 +526,14 @@ class roborock_mqtt_connector {
         );
         return;
       }
+      this.sessionDiagnostics.noteActivity("attributed");
       this.lastAttributedCloudMessageAt = Date.now();
 
       const data = this.adapter.message._decodeMsg(message, duid);
       if (!data) {
         return;
       }
+      this.sessionDiagnostics.noteActivity("decoded");
       this.lastDecodedCloudMessageAt = Date.now();
       this.lastDecodedCloudMessageAtByDuid.set(
         duid,
@@ -833,6 +860,8 @@ class roborock_mqtt_connector {
       this.adapter.log.error(
         `client.on message failed for topic '${topic}': ${error.stack || error}`
       );
+    } finally {
+      this.sessionDiagnostics.emit();
     }
   }
 
@@ -841,72 +870,12 @@ class roborock_mqtt_connector {
   }
 
   noteCorrelatedReply(duid) {
+    this.sessionDiagnostics.noteActivity("correlated");
     this.lastCorrelatedCloudReplyAt = Date.now();
     this.lastCorrelatedCloudReplyAtByDuid.set(
       duid,
       this.lastCorrelatedCloudReplyAt
     );
-  }
-
-  noteSilentCloudReadTimeout({
-    duid,
-    method,
-    operationClass,
-    sessionGeneration,
-    publishedAt,
-  }) {
-    if (
-      operationClass !== "read" ||
-      !duid ||
-      sessionGeneration !== this.sessionGeneration ||
-      !Number.isFinite(publishedAt) ||
-      (this.lastRawMqttMessageAt !== null &&
-        this.lastRawMqttMessageAt > publishedAt)
-    ) {
-      return false;
-    }
-
-    const now = Date.now();
-    this.silentCloudReadTimeouts = this.silentCloudReadTimeouts.filter(
-      (failure) =>
-        failure.generation === sessionGeneration &&
-        now - failure.at <= SILENT_READ_RECOVERY_WINDOW_MS
-    );
-    this.silentCloudReadTimeouts.push({
-      at: now,
-      duid,
-      method,
-      generation: sessionGeneration,
-    });
-
-    const distinctRobots = new Set(
-      this.silentCloudReadTimeouts.map((failure) => failure.duid)
-    ).size;
-    const sameRobotCount = this.silentCloudReadTimeouts.filter(
-      (failure) => failure.duid === duid
-    ).length;
-    if (
-      distinctRobots < SILENT_READ_RECOVERY_DISTINCT_ROBOT_THRESHOLD &&
-      sameRobotCount < SILENT_READ_RECOVERY_SAME_ROBOT_THRESHOLD
-    ) {
-      return false;
-    }
-
-    const evidenceCount = this.silentCloudReadTimeouts.length;
-    this.silentCloudReadTimeouts = [];
-    this.adapter.log.info(
-      `Repeated silent cloud reads detected on MQTT generation ${sessionGeneration}: failures=${evidenceCount}; distinctRobots=${distinctRobots}; lastMethod=${method}. Starting account session recovery.`
-    );
-    void this.reconnectAndWaitReady({
-      reason: "repeated-silent-cloud-reads",
-      mode: "recovery",
-      drainTimeoutMs: 2000,
-    }).catch((error) => {
-      this.adapter.log.warn(
-        `MQTT recovery after repeated silent cloud reads failed: ${error?.message || error}.`
-      );
-    });
-    return true;
   }
 
   isPreventiveReconnectDue(minimumReadyAgeMs) {
@@ -918,6 +887,7 @@ class roborock_mqtt_connector {
   }
 
   isReady() {
+    if (this.recovery) return this.connected && !this.recovery.recovering && !this.recovery.stopped;
     return this.sessionState === "ready" && this.subscriptionReady;
   }
 
@@ -950,7 +920,16 @@ class roborock_mqtt_connector {
     };
   }
 
+  assertCanSend() {
+    this.recovery?.assertCanSend();
+  }
+
+  discardSessionFragments() {
+    photoBuffers.clear();
+  }
+
   sendMessage(duid, roborockMessage) {
+    this.recovery?.assertCanSend();
     this.client.publish(
       `rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`,
       roborockMessage,
@@ -961,7 +940,7 @@ class roborock_mqtt_connector {
   }
 
   isConnected() {
-    return this.connected;
+    return this.connected && !this.recovery?.recovering && !this.recovery?.stopped;
   }
 
   waitUntilReady({ timeoutMs = 10000, signal } = {}) {
@@ -1106,6 +1085,7 @@ class roborock_mqtt_connector {
   async endClient(candidate, timeoutMs = 2000) {
     if (!candidate) return;
     candidate.removeAllListeners();
+    candidate.on("error", () => {});
     if (typeof candidate.endAsync === "function") {
       let timer;
       try {
@@ -1260,6 +1240,8 @@ class roborock_mqtt_connector {
    * ack that will not come if the network is what is broken.
    */
   disconnect() {
+    this.recovery?.stop();
+    this.sessionDiagnostics.onDisconnect();
     this.clearInitialConnectTimeout();
     this.shuttingDown = true;
     this.subscriptionReady = false;
@@ -1318,12 +1300,16 @@ class roborock_mqtt_connector {
   }
 
   async ensureConnected() {
+    if (this.recovery) {
+      if (this.isReady()) return false;
+      return this.recovery.recreate("connection-unavailable");
+    }
     if (this.client && this.connected) {
       this.adapter.log.debug("MQTT health check passed. Reconnect skipped.");
       return false;
     }
 
-    await this.reconnectClient(false);
+    this.client?.reconnect();
     return true;
   }
 
@@ -1401,3 +1387,4 @@ module.exports = {
   isOkAcknowledgement,
   shouldResolveOn102,
 };
+

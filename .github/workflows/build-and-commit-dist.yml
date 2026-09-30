@@ -4,6 +4,7 @@ on:
   push:
     branches-ignore:
       - main
+      - mqtt-home-pr-integration-validation
     paths-ignore:
       - "dist/**"
 

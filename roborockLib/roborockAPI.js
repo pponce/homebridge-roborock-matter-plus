@@ -391,6 +391,7 @@ const INITIAL_STATUS_WAIT_CAP_MS = 4000;
 const DEBOUNCED_PERSIST_IDS = new Set([
   "TransportDiagnostics",
   "RoborockDiagnostics",
+  "MqttSessionDiagnostics",
 ]);
 const PERSIST_FLUSH_DEBOUNCE_MS = 60000;
 
@@ -402,6 +403,7 @@ const PERSISTED_STATE_IDS = new Set([
   "B01Rooms",
   "TransportDiagnostics",
   "RoborockDiagnostics",
+  "MqttSessionDiagnostics",
 ]);
 
 const dockingStationStates = [
@@ -2061,32 +2063,10 @@ class Roborock {
           }
           this.log.debug(`RoomIDs debug: ${JSON.stringify(this.roomIDs)}`);
 
-          // Perform connectivity checks and, once a healthy-looking session is
-          // four hours old, safely refresh it while the cloud queue is idle.
-          // A preventive skip is reconsidered on the next 15-minute tick.
           this.reconnectIntervall = this.setInterval(async () => {
-            try {
-              this.log.debug(`Running MQTT health check.`);
-
-              const repaired = await this.rr_mqtt_connector.ensureConnected();
-              if (
-                !repaired &&
-                this.rr_mqtt_connector.isPreventiveReconnectDue(
-                  MQTT_PREVENTIVE_SESSION_AGE_MS
-                )
-              ) {
-                await this.rr_mqtt_connector.reconnectAndWaitReady({
-                  reason: "four-hour-preventive-refresh",
-                  mode: "preventive",
-                  drainTimeoutMs: 2000,
-                });
-              }
-            } catch (error) {
-              this.log.warn(
-                `MQTT maintenance attempt failed: ${error?.message || error}.`
-              );
-            }
-          }, MQTT_MAINTENANCE_INTERVAL_MS);
+            try { await this.rr_mqtt_connector.ensureConnected(); }
+            catch (error) { this.log.warn(`MQTT health check failed: ${error?.message || error}.`); }
+          }, 60 * 60 * 1000);
 
           this.homedataInterval = this.setInterval(
             this.updateHomeData.bind(this),
@@ -2282,7 +2262,9 @@ class Roborock {
     if (this.stopped) {
       throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
     }
-    return this.rr_mqtt_connector.reconnectAndWaitReady(options);
+    const recovery = this.rr_mqtt_connector.recovery;
+    if (!recovery) throw new Error("Experimental MQTT session recovery is disabled.");
+    return recovery.recreate(options.reason || "manual");
   }
 
   /**
@@ -6133,6 +6115,7 @@ class Roborock {
       );
     }
 
+    this.rr_mqtt_connector.assertCanSend?.();
     let entry;
     const promise = new Promise((resolve, reject) => {
       entry = {
@@ -6808,3 +6791,4 @@ module.exports = {
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
