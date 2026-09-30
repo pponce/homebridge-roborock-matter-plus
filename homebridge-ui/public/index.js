@@ -44,9 +44,7 @@ const elements = {
   enableMqttSessionRecovery: document.getElementById(
     "enableMqttSessionRecovery"
   ),
-  enableMqttSingleRobotRecovery: document.getElementById(
-    "enableMqttSingleRobotRecovery"
-  ),
+  enableMqttSingleRobotRecovery: document.getElementById("enableMqttSingleRobotRecovery"),
   enableMqttPreventiveRefresh: document.getElementById(
     "enableMqttPreventiveRefresh"
   ),
@@ -227,9 +225,7 @@ async function loadConfig() {
     if (elements.enableMqttSessionRecovery)
       elements.enableMqttSessionRecovery.checked =
         config.enableMqttSessionRecovery === true;
-    if (elements.enableMqttSingleRobotRecovery)
-      elements.enableMqttSingleRobotRecovery.checked =
-        config.enableMqttSingleRobotRecovery === true;
+    if (elements.enableMqttSingleRobotRecovery) elements.enableMqttSingleRobotRecovery.checked = config.enableMqttSingleRobotRecovery === true;
     if (elements.enableMqttPreventiveRefresh)
       elements.enableMqttPreventiveRefresh.checked =
         config.enableMqttPreventiveRefresh === true;
@@ -709,9 +705,7 @@ function getFormValues() {
     enableMqttSessionRecovery: Boolean(
       elements.enableMqttSessionRecovery?.checked
     ),
-    enableMqttSingleRobotRecovery: Boolean(
-      elements.enableMqttSingleRobotRecovery?.checked
-    ),
+    enableMqttSingleRobotRecovery: Boolean(elements.enableMqttSingleRobotRecovery?.checked),
     enableMqttPreventiveRefresh: Boolean(
       elements.enableMqttPreventiveRefresh?.checked
     ),
@@ -1957,6 +1951,7 @@ function init() {
   elements.enableMqttSessionRecovery?.addEventListener("change", () =>
     autoSave()
   );
+  elements.enableMqttSingleRobotRecovery?.addEventListener("change", () => autoSave());
   elements.enableMqttPreventiveRefresh?.addEventListener("change", () =>
     autoSave()
   );
@@ -1980,3 +1975,4 @@ if (window.homebridge) {
 } else {
   document.addEventListener("DOMContentLoaded", init);
 }
+
