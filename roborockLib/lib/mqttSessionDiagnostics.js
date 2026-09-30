@@ -106,11 +106,14 @@ class MqttSessionDiagnostics {
       this.rawSilenceDuringRequest = request.rawSequence === this.rawSequence;
       this.lastReadTimeoutAt = performance.now();
       if (this.rawSilenceDuringRequest) {
-      if (!this.silentReads.has(duid) && this.silentReads.size >= MAX_ROBOTS) {
-        const oldest = this.silentReads.keys().next().value;
-        if (oldest !== undefined) this.silentReads.delete(oldest);
-      }
-      this.silentReads.set(duid, performance.now());
+        if (
+          !this.silentReads.has(duid) &&
+          this.silentReads.size >= MAX_ROBOTS
+        ) {
+          const oldest = this.silentReads.keys().next().value;
+          if (oldest !== undefined) this.silentReads.delete(oldest);
+        }
+        this.silentReads.set(duid, performance.now());
       }
     }
     this.emit(true);
@@ -170,4 +173,3 @@ class MqttSessionDiagnostics {
 }
 
 module.exports = { MqttSessionDiagnostics };
-

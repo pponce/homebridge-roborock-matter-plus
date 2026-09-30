@@ -925,4 +925,3 @@ module.exports = {
   isOkAcknowledgement,
   shouldResolveOn102,
 };
-

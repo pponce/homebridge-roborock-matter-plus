@@ -62,4 +62,3 @@ route, and the copied report. No diagnostics snapshot file is seeded by the test
 ```sh
 npm test -- --runInBand __tests__/mqtt-session-observations.test.js
 ```
-
