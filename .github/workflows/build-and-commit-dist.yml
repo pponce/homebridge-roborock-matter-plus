@@ -4,6 +4,7 @@ on:
   push:
     branches-ignore:
       - main
+      - mqtt-recovery-v334-validation
     paths-ignore:
       - "dist/**"
 
