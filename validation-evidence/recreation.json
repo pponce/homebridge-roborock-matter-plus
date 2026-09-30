@@ -1,0 +1,57 @@
+{
+  "passed": 20,
+  "failed": 8,
+  "runtimeErrors": 0,
+  "suites": 1,
+  "failures": [
+    {
+      "name": "two active silent robots are observed in the production timeout and persisted export",
+      "messages": [
+        "Error: expect(received).toContain(expected) // indexOf\n\nExpected substring: \"MQTT session: correlated silence across 2 robots (generation 1).\"\nReceived string:    \"Cloud request with id 2 with method get_status timed out after 10 seconds. MQTT connection state: true MQTT session observation: {\\\"capturedAt\\\":\\\"2026-01-01T00:00:20.000Z\\\",\\\"generation\\\":1,\\\"connected\\\":true,\\\"subscriptionAcknowledged\\\":true,\\\"connectedAgeMs\\\":20000,\\\"lastRawInboundAgeMs\\\":null,\\\"lastAttributedInboundAgeMs\\\":null,\\\"lastDecodedInboundAgeMs\\\":null,\\\"lastCorrelatedReplyAgeMs\\\":null,\\\"lastLocalReplyAgeMs\\\":null,\\\"silentReadRobotCount\\\":2,\\\"correlatedSilenceObserved\\\":true,\\\"observationWindowMs\\\":60000}\"\n    at Object.toContain (/tmp/tmp.YWv5T21uo4/__tests__/mqtt-session-observations.test.js:221:26)"
+      ]
+    },
+    {
+      "name": "the persisted observation reaches the actual UI route and copied report without identities",
+      "messages": [
+        "Error: expect(jest.fn()).toHaveBeenCalledTimes(expected)\n\nExpected number of calls: 1\nReceived number of calls: 0\n    at Object.toHaveBeenCalledTimes (/tmp/tmp.YWv5T21uo4/__tests__/mqtt-session-observations.test.js:415:21)"
+      ]
+    },
+    {
+      "name": "one robot's timed-out read exposes raw silence without diagnosing the session",
+      "messages": [
+        "Error: expect(received).toBeNull()\n\nReceived: undefined\n    at Object.toBeNull (/tmp/tmp.YWv5T21uo4/__tests__/mqtt-session-observations.test.js:488:46)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "app_start cannot supply a get-read silence observation",
+      "messages": [
+        "Error: expect(received).toBeNull()\n\nReceived: undefined\n    at toBeNull (/tmp/tmp.YWv5T21uo4/__tests__/mqtt-session-observations.test.js:517:48)"
+      ]
+    },
+    {
+      "name": "prop.get cannot supply a get-read silence observation",
+      "messages": [
+        "Error: expect(received).toBeNull()\n\nReceived: undefined\n    at toBeNull (/tmp/tmp.YWv5T21uo4/__tests__/mqtt-session-observations.test.js:517:48)"
+      ]
+    },
+    {
+      "name": "a previous generation's timeout cannot supply the latest read observation",
+      "messages": [
+        "Error: expect(received).toBeNull()\n\nReceived: undefined\n    at Object.toBeNull (/tmp/tmp.YWv5T21uo4/__tests__/mqtt-session-observations.test.js:529:46)"
+      ]
+    },
+    {
+      "name": "an unacknowledged subscription produces a concise timeout summary",
+      "messages": [
+        "Error: expect(received).toContain(expected) // indexOf\n\nExpected substring: \"MQTT session: subscription not acknowledged (generation 2).\"\nReceived string:    \"Cloud request with id 1 with method get_status timed out after 10 seconds. MQTT connection state: true MQTT session observation: {\\\"capturedAt\\\":\\\"2026-01-01T00:00:10.000Z\\\",\\\"generation\\\":2,\\\"connected\\\":true,\\\"subscriptionAcknowledged\\\":false,\\\"connectedAgeMs\\\":10000,\\\"lastRawInboundAgeMs\\\":null,\\\"lastAttributedInboundAgeMs\\\":null,\\\"lastDecodedInboundAgeMs\\\":null,\\\"lastCorrelatedReplyAgeMs\\\":null,\\\"lastLocalReplyAgeMs\\\":null,\\\"silentReadRobotCount\\\":0,\\\"correlatedSilenceObserved\\\":false,\\\"observationWindowMs\\\":60000}\"\n    at Object.toContain (/tmp/tmp.YWv5T21uo4/__tests__/mqtt-session-observations.test.js:536:25)"
+      ]
+    },
+    {
+      "name": "production shutdown flush persists the latest observation before the debounce expires",
+      "messages": [
+        "Error: ENOENT: no such file or directory, open '/tmp/mqtt-flush-AlQBIc/roborock.MqttSessionDiagnostics'\n    at Object.readFileSync (node:fs:440:20)\n    at Object.readFileSync (/tmp/tmp.YWv5T21uo4/__tests__/mqtt-session-observations.test.js:578:32)"
+      ]
+    }
+  ],
+  "suiteErrors": []
+}

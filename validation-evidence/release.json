@@ -1,0 +1,171 @@
+{
+  "passed": 1,
+  "failed": 27,
+  "runtimeErrors": 0,
+  "suites": 1,
+  "failures": [
+    {
+      "name": "export records connection generation and actual SUBACK, not merely a socket",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 5\n+ Received  + 1\n\n- Object {\n-   \"connected\": true,\n-   \"generation\": 1,\n-   \"subscriptionAcknowledged\": true,\n- }\n+ Object {}\n    at Object.toMatchObject (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:135:22)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "a late SUBACK cannot describe the next connection as acknowledged",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: undefined\n    at Object.toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:159:47)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "failed or rejected subscription is recorded (Error: denied\n    at Object.<anonymous> (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:164:12)\n    at ModuleExecutor.exec (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runtime/build/index.js:2078:26)\n    at CjsLoader.loadModule (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runtime/build/index.js:323:36)\n    at CjsLoader.requireModule (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runtime/build/index.js:289:12)\n    at Runtime.requireModule (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runtime/build/index.js:3657:27)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:96:13)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7))",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:169:49)\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-each/build/index.js:80:140)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "failed or rejected subscription is recorded (null)",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:169:49)\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-each/build/index.js:80:140)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "raw, attributed, decoded and matched reply ages distinguish delivery stages",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 6\n+ Received  + 1\n\n- Object {\n-   \"lastAttributedInboundAgeMs\": null,\n-   \"lastCorrelatedReplyAgeMs\": null,\n-   \"lastDecodedInboundAgeMs\": null,\n-   \"lastRawInboundAgeMs\": 0,\n- }\n+ Object {}\n    at Object.toMatchObject (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:178:22)"
+      ]
+    },
+    {
+      "name": "two active silent robots are observed in the production timeout and persisted export",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 4\n+ Received  + 1\n\n- Object {\n-   \"correlatedSilenceObserved\": false,\n-   \"silentReadRobotCount\": 1,\n- }\n+ Object {}\n    at Object.toMatchObject (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:211:22)"
+      ]
+    },
+    {
+      "name": "idle cloud time and repeated silence from one robot do not imply account silence",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 4\n+ Received  + 1\n\n- Object {\n-   \"correlatedSilenceObserved\": false,\n-   \"silentReadRobotCount\": 1,\n- }\n+ Object {}\n    at Object.toMatchObject (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:238:22)"
+      ]
+    },
+    {
+      "name": "any raw MQTT traffic clears correlation even when attribution fails",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 4\n+ Received  + 1\n\n- Object {\n-   \"correlatedSilenceObserved\": false,\n-   \"silentReadRobotCount\": 0,\n- }\n+ Object {}\n    at Object.toMatchObject (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:251:22)"
+      ]
+    },
+    {
+      "name": "old timeouts expire from the bounded observation window",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 4\n+ Received  + 1\n\n- Object {\n-   \"correlatedSilenceObserved\": false,\n-   \"silentReadRobotCount\": 1,\n- }\n+ Object {}\n    at Object.toMatchObject (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:261:22)"
+      ]
+    },
+    {
+      "name": "an in-flight request from the previous generation cannot seed correlation",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 5\n+ Received  + 1\n\n- Object {\n-   \"correlatedSilenceObserved\": false,\n-   \"generation\": 2,\n-   \"silentReadRobotCount\": 1,\n- }\n+ Object {}\n    at Object.toMatchObject (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:275:22)"
+      ]
+    },
+    {
+      "name": "a down transport and ambiguous writes do not contribute silent-read evidence",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: undefined\n    at Object.toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:287:43)"
+      ]
+    },
+    {
+      "name": "local replies continue and are recorded separately during cloud silence",
+      "messages": [
+        "Error: expect(received).toMatchObject(expected)\n\n- Expected  - 5\n+ Received  + 1\n\n- Object {\n-   \"correlatedSilenceObserved\": true,\n-   \"lastCorrelatedReplyAgeMs\": null,\n-   \"lastLocalReplyAgeMs\": 10000,\n- }\n+ Object {}\n    at Object.toMatchObject (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:312:22)"
+      ]
+    },
+    {
+      "name": "breaker behavior is unchanged even when correlation is observed",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: true\nReceived: undefined\n    at Object.toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:330:48)"
+      ]
+    },
+    {
+      "name": "matched b01 replies count without altering completion semantics",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:378:49)"
+      ]
+    },
+    {
+      "name": "matched b01-map replies count without altering completion semantics",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:378:49)"
+      ]
+    },
+    {
+      "name": "matched secure-ack replies count without altering completion semantics",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:378:49)"
+      ]
+    },
+    {
+      "name": "matched refusal replies count without altering completion semantics",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: 0\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:378:49)"
+      ]
+    },
+    {
+      "name": "the persisted observation reaches the actual UI route and copied report without identities",
+      "messages": [
+        "Error: expect(jest.fn()).toHaveBeenCalledTimes(expected)\n\nExpected number of calls: 1\nReceived number of calls: 0\n    at Object.toHaveBeenCalledTimes (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:415:21)"
+      ]
+    },
+    {
+      "name": "one robot's timed-out read exposes raw silence without diagnosing the session",
+      "messages": [
+        "Error: expect(received).toBeNull()\n\nReceived: undefined\n    at Object.toBeNull (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:488:46)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "app_start cannot supply a get-read silence observation",
+      "messages": [
+        "Error: expect(received).toBeNull()\n\nReceived: undefined\n    at toBeNull (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:517:48)"
+      ]
+    },
+    {
+      "name": "prop.get cannot supply a get-read silence observation",
+      "messages": [
+        "Error: expect(received).toBeNull()\n\nReceived: undefined\n    at toBeNull (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:517:48)"
+      ]
+    },
+    {
+      "name": "a previous generation's timeout cannot supply the latest read observation",
+      "messages": [
+        "Error: expect(received).toBeNull()\n\nReceived: undefined\n    at Object.toBeNull (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:529:46)"
+      ]
+    },
+    {
+      "name": "an unacknowledged subscription produces a concise timeout summary",
+      "messages": [
+        "Error: expect(received).toContain(expected) // indexOf\n\nExpected substring: \"MQTT session: subscription not acknowledged (generation 2).\"\nReceived string:    \"Cloud request with id 1 with method get_status timed out after 10 seconds. MQTT connection state: true\"\n    at Object.toContain (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:536:25)"
+      ]
+    },
+    {
+      "name": "reconnect SUBACK before-connect cannot acknowledge or revoke the connect generation",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:550:49)\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-each/build/index.js:80:140)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "reconnect SUBACK after-connect cannot acknowledge or revoke the connect generation",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:550:49)\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-each/build/index.js:80:140)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "reconnect SUBACK after-connect-suback cannot acknowledge or revoke the connect generation",
+      "messages": [
+        "Error: expect(received).toBe(expected) // Object.is equality\n\nExpected: false\nReceived: undefined\n    at toBe (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:550:49)\n    at Object.<anonymous> (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-each/build/index.js:80:140)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "production shutdown flush persists the latest observation before the debounce expires",
+      "messages": [
+        "Error: ENOENT: no such file or directory, open '/tmp/mqtt-flush-J4Wz0c/roborock.MqttSessionDiagnostics'\n    at Object.readFileSync (node:fs:440:20)\n    at Object.readFileSync (/tmp/tmp.bbh4ZgbeW3/__tests__/mqtt-session-observations.test.js:578:32)"
+      ]
+    }
+  ],
+  "suiteErrors": []
+}
