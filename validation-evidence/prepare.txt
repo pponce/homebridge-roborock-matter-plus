@@ -1,0 +1,37 @@
+__tests__/hap-schedule-naming.test.js 137ms
+__tests__/mqtt-session-breaker.test.js 54ms
+__tests__/mqtt-session-observations.test.js 64ms
+__tests__/mqtt-session-recreation.test.js 38ms
+__tests__/schedule-scene-reconciliation.test.js 11ms
+__tests__/schedule-settings-contract.test.js 26ms
+__tests__/schedule-write-reconciliation.test.js 31ms
+config.schema.json 10ms
+docs/mqtt-session-diagnostics.md 32ms (unchanged)
+docs/mqtt-session-recovery.md 21ms
+docs/schedule-write-reconciliation.md 9ms
+homebridge-ui/public/index.html 53ms
+homebridge-ui/public/index.js 92ms
+roborockLib/lib/messageQueueHandler.js 33ms
+roborockLib/lib/mqttSessionDiagnostics.js 13ms
+roborockLib/lib/mqttSessionRecovery.js 16ms
+roborockLib/lib/roborock_mqtt_connector.js 68ms
+roborockLib/lib/unansweredMethodBreaker.js 8ms
+roborockLib/roborockAPI.js 224ms
+src/hap_schedule_accessory.ts 321ms
+src/platform.ts 117ms
+src/schedule_write_reconciliation.ts 4ms
+src/types.ts 6ms
+src/ui/index.ts 52ms
+__tests__/mqtt-session-recovery.test.js 17ms
+__tests__/mqtt-silent-read-integration.test.js 11ms
+.github/workflows/mqtt-home-pr-integration-verification.yml 20ms
+[mqtt-home-pr-integration-validation bf93f52] Format home recovery integration for validation [skip ci]
+ 31 files changed, 275 insertions(+), 649 deletions(-)
+ delete mode 100644 validation-evidence/build.txt
+ delete mode 100644 validation-evidence/full.json
+ delete mode 100644 validation-evidence/green.json
+ delete mode 100644 validation-evidence/lint.txt
+ delete mode 100644 validation-evidence/prepare.txt
+ delete mode 100644 validation-evidence/typecheck.txt
+To https://github.com/pponce/homebridge-roborock-matter-plus
+   ce3e48e..bf93f52  mqtt-home-pr-integration-validation -> mqtt-home-pr-integration-validation
