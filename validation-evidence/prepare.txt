@@ -1,0 +1,37 @@
+__tests__/hap-schedule-naming.test.js 201ms (unchanged)
+__tests__/mqtt-session-breaker.test.js 84ms (unchanged)
+__tests__/mqtt-session-observations.test.js 111ms (unchanged)
+__tests__/mqtt-session-recreation.test.js 60ms
+__tests__/schedule-scene-reconciliation.test.js 24ms (unchanged)
+__tests__/schedule-settings-contract.test.js 46ms (unchanged)
+__tests__/schedule-write-reconciliation.test.js 67ms (unchanged)
+config.schema.json 18ms (unchanged)
+docs/mqtt-session-diagnostics.md 52ms (unchanged)
+docs/mqtt-session-recovery.md 25ms (unchanged)
+docs/schedule-write-reconciliation.md 13ms (unchanged)
+homebridge-ui/public/index.html 91ms (unchanged)
+homebridge-ui/public/index.js 135ms
+roborockLib/lib/messageQueueHandler.js 47ms (unchanged)
+roborockLib/lib/mqttSessionDiagnostics.js 21ms (unchanged)
+roborockLib/lib/mqttSessionRecovery.js 45ms (unchanged)
+roborockLib/lib/roborock_mqtt_connector.js 106ms (unchanged)
+roborockLib/lib/unansweredMethodBreaker.js 13ms (unchanged)
+roborockLib/roborockAPI.js 371ms (unchanged)
+src/hap_schedule_accessory.ts 508ms (unchanged)
+src/platform.ts 203ms (unchanged)
+src/schedule_write_reconciliation.ts 5ms (unchanged)
+src/types.ts 7ms (unchanged)
+src/ui/index.ts 90ms (unchanged)
+__tests__/mqtt-session-recovery.test.js 18ms (unchanged)
+__tests__/mqtt-silent-read-integration.test.js 13ms (unchanged)
+.github/workflows/mqtt-home-pr-integration-verification.yml 28ms
+[mqtt-home-pr-integration-validation fd1fe4b] Format home recovery integration for validation [skip ci]
+ 8 files changed, 80 insertions(+), 96 deletions(-)
+ delete mode 100644 validation-evidence/build.txt
+ delete mode 100644 validation-evidence/full.json
+ delete mode 100644 validation-evidence/green.json
+ delete mode 100644 validation-evidence/lint.txt
+ delete mode 100644 validation-evidence/prepare.txt
+ delete mode 100644 validation-evidence/typecheck.txt
+To https://github.com/pponce/homebridge-roborock-matter-plus
+   a01dbc2..fd1fe4b  mqtt-home-pr-integration-validation -> mqtt-home-pr-integration-validation
