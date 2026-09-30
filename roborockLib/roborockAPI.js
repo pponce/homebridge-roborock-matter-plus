@@ -2063,10 +2063,18 @@ class Roborock {
           }
           this.log.debug(`RoomIDs debug: ${JSON.stringify(this.roomIDs)}`);
 
-          this.reconnectIntervall = this.setInterval(async () => {
-            try { await this.rr_mqtt_connector.ensureConnected(); }
-            catch (error) { this.log.warn(`MQTT health check failed: ${error?.message || error}.`); }
-          }, 60 * 60 * 1000);
+          this.reconnectIntervall = this.setInterval(
+            async () => {
+              try {
+                await this.rr_mqtt_connector.ensureConnected();
+              } catch (error) {
+                this.log.warn(
+                  `MQTT health check failed: ${error?.message || error}.`
+                );
+              }
+            },
+            60 * 60 * 1000
+          );
 
           this.homedataInterval = this.setInterval(
             this.updateHomeData.bind(this),
@@ -2265,7 +2273,8 @@ class Roborock {
       throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
     }
     const recovery = this.rr_mqtt_connector.recovery;
-    if (!recovery) throw new Error("Experimental MQTT session recovery is disabled.");
+    if (!recovery)
+      throw new Error("Experimental MQTT session recovery is disabled.");
     return recovery.recreate(options.reason || "manual");
   }
 
@@ -6793,4 +6802,3 @@ module.exports = {
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-

@@ -2392,4 +2392,3 @@ class RoborockHapRoutineSwitch {
     this.resetTimer = timer;
   }
 }
-

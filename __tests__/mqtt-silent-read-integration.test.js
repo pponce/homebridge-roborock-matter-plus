@@ -36,7 +36,7 @@ const USER = {
 function makeAdapter() {
   let requestId = 100;
   return {
-    config: {enableMqttSessionRecovery: true},
+    config: { enableMqttSessionRecovery: true },
     devices: [{ duid: "robot-1" }, { duid: "robot-2" }],
     pendingRequests: new Map(),
     pendingB01MapRequests: new Map(),
@@ -106,8 +106,12 @@ describe("silent cloud-read timeout integration", () => {
     const handler = new messageQueueHandler(adapter);
     await acknowledge(mockClients[0]);
     async function sendAndTimeout(duid, method = "get_status", beforeTimeout) {
-      const result = handler.sendRequest(duid, method, [], false, false,
-        {preferCloud: true, requestTimeoutMs: 100}).catch(error => error);
+      const result = handler
+        .sendRequest(duid, method, [], false, false, {
+          preferCloud: true,
+          requestTimeoutMs: 100,
+        })
+        .catch((error) => error);
       await flushPromises();
       if (beforeTimeout) beforeTimeout();
       await jest.advanceTimersByTimeAsync(100);
@@ -116,23 +120,40 @@ describe("silent cloud-read timeout integration", () => {
       return error;
     }
     await sendAndTimeout("robot-1");
-    expect(connector.sessionDiagnostics.snapshot().silentReadRobotCount).toBe(1);
+    expect(connector.sessionDiagnostics.snapshot().silentReadRobotCount).toBe(
+      1
+    );
     await sendAndTimeout("robot-1", "app_start");
-    expect(connector.sessionDiagnostics.snapshot().silentReadRobotCount).toBe(1);
-    await sendAndTimeout("robot-2", "get_consumable", () => mockClients[0].emit("message", "rr/m/o/unmatched", Buffer.from("raw")));
-    expect(connector.sessionDiagnostics.snapshot().silentReadRobotCount).toBe(0);
+    expect(connector.sessionDiagnostics.snapshot().silentReadRobotCount).toBe(
+      1
+    );
+    await sendAndTimeout("robot-2", "get_consumable", () =>
+      mockClients[0].emit("message", "rr/m/o/unmatched", Buffer.from("raw"))
+    );
+    expect(connector.sessionDiagnostics.snapshot().silentReadRobotCount).toBe(
+      0
+    );
     expect(mockClients).toHaveLength(1);
     await sendAndTimeout("robot-1");
-    const lingering = handler.sendRequest("robot-1", "get_clean_summary", [], false, false,
-      {preferCloud: true, requestTimeoutMs: 60000}).catch(error => error);
+    const lingering = handler
+      .sendRequest("robot-1", "get_clean_summary", [], false, false, {
+        preferCloud: true,
+        requestTimeoutMs: 60000,
+      })
+      .catch((error) => error);
     await flushPromises();
-    const localReject = jest.fn(), localTimer = setTimeout(() => {}, 60000);
-    adapter.pendingRequests.set(999, {transport: "local", timeout: localTimer, reject: localReject});
+    const localReject = jest.fn(),
+      localTimer = setTimeout(() => {}, 60000);
+    adapter.pendingRequests.set(999, {
+      transport: "local",
+      timeout: localTimer,
+      reject: localReject,
+    });
     await sendAndTimeout("robot-2");
     const recovery = connector.recovery.inFlight;
     expect(recovery).toBeTruthy();
     await jest.advanceTimersByTimeAsync(500);
-    expect(await lingering).toMatchObject({code: "MQTT_SESSION_REPLACED"});
+    expect(await lingering).toMatchObject({ code: "MQTT_SESSION_REPLACED" });
     expect(localReject).not.toHaveBeenCalled();
     expect(adapter.pendingRequests.has(999)).toBe(true);
     expect(mockClients).toHaveLength(2);
@@ -141,12 +162,14 @@ describe("silent cloud-read timeout integration", () => {
     await acknowledgeSubscription(mockClients[1]);
     await jest.advanceTimersByTimeAsync(50);
     expect(await recovery).toBe(true);
-    const rawSequence = connector.sessionDiagnostics.captureRequest().rawSequence;
+    const rawSequence =
+      connector.sessionDiagnostics.captureRequest().rawSequence;
     mockClients[0].emit("message", "rr/m/o/robot-1", Buffer.from("late"));
-    expect(connector.sessionDiagnostics.captureRequest().rawSequence).toBe(rawSequence);
+    expect(connector.sessionDiagnostics.captureRequest().rawSequence).toBe(
+      rawSequence
+    );
     clearTimeout(localTimer);
     adapter.pendingRequests.delete(999);
     connector.disconnect();
   });
 });
-

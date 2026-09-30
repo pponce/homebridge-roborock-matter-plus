@@ -732,9 +732,7 @@ describe("HAP schedule names and stable group identity", () => {
       const command = jest.fn().mockRejectedValue(timeout);
       const recoverMqttSession = jest.fn().mockResolvedValue({ generation: 2 });
       platform.roborockAPI = {
-        getServerTimers: jest
-          .fn()
-          .mockResolvedValueOnce([["timer-1", "on"]]),
+        getServerTimers: jest.fn().mockResolvedValueOnce([["timer-1", "on"]]),
         recoverMqttSession,
         vacuums: { "device-1": { command } },
       };
@@ -796,7 +794,10 @@ describe("HAP schedule names and stable group identity", () => {
       expect(recoverMqttSession).not.toHaveBeenCalled();
       expect(command).toHaveBeenCalledTimes(1);
       expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(1);
-      expect(switchService(accessory, "timer-1").getCharacteristic(Characteristic.On).value).toBe(false);
+      expect(
+        switchService(accessory, "timer-1").getCharacteristic(Characteristic.On)
+          .value
+      ).toBe(false);
     } finally {
       jest.useRealTimers();
     }
@@ -854,4 +855,3 @@ describe("HAP schedule names and stable group identity", () => {
     }
   });
 });
-

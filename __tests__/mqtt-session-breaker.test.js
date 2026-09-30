@@ -56,7 +56,9 @@ async function timeout(duid = "robot-a", method = "get_status") {
   return request.result;
 }
 function acknowledge() {
-  mockSubscriptions.at(-1)(null, [{ topic: mockClient.subscribe.mock.calls.at(-1)[0], qos: 1 }]);
+  mockSubscriptions.at(-1)(null, [
+    { topic: mockClient.subscribe.mock.calls.at(-1)[0], qos: 1 },
+  ]);
 }
 
 beforeEach(async () => {
@@ -285,18 +287,19 @@ test("expired cross-robot evidence allows ordinary counting again", async () => 
 });
 
 test("subscription failure cannot create the signal used to suppress counts", async () => {
-  govern("robot-a"); govern("robot-b");
+  govern("robot-a");
+  govern("robot-b");
   const first = await startRequest("robot-a", "get_consumable");
   const second = await startRequest("robot-b", "get_consumable");
-  mockHandlers.get("connect")({sessionPresent: false});
-  mockSubscriptions.at(-1)(null, [{qos: 128}]);
+  mockHandlers.get("connect")({ sessionPresent: false });
+  mockSubscriptions.at(-1)(null, [{ qos: 128 }]);
   await jest.advanceTimersByTimeAsync(10_000);
   await first.result;
   const error = await second.result;
   expect(connector.isConnected()).toBe(false);
   expect(error.accountSessionWasSilent).toBe(false);
   expect(error.transportWasUp).toBe(false);
-  expect(outcomes.filter(o => o.counted)).toHaveLength(0);
+  expect(outcomes.filter((o) => o.counted)).toHaveLength(0);
 });
 
 test("missing instrumentation keeps the existing timeout classification", async () => {
@@ -331,4 +334,3 @@ test("correlated silence does not reopen an already-open breaker", async () => {
   expect(breaker.entries.get("robot-a:get_consumable")).toEqual(before);
   expect(breaker.shouldSkip("robot-a", "get_consumable")).toBe(true);
 });
-

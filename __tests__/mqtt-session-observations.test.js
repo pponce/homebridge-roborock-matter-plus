@@ -62,7 +62,9 @@ async function timeout(duid = "robot-a", method = "get_status") {
   return request.result;
 }
 function acknowledge() {
-  mockSubscriptions.at(-1)(null, [{ topic: mockClient.subscribe.mock.calls.at(-1)[0], qos: 1 }]);
+  mockSubscriptions.at(-1)(null, [
+    { topic: mockClient.subscribe.mock.calls.at(-1)[0], qos: 1 },
+  ]);
 }
 
 beforeEach(async () => {
@@ -563,7 +565,7 @@ test.each(["before-connect", "after-connect", "after-connect-suback"])(
       subscriptionAcknowledged: false,
     });
     acknowledge();
-  await jest.advanceTimersByTimeAsync(0);
+    await jest.advanceTimersByTimeAsync(0);
     if (order === "after-connect-suback")
       legacy(new Error("late reconnect failure"), [{ qos: 128 }]);
     expect(snapshot()).toMatchObject({

@@ -86,7 +86,7 @@ class MqttSessionDiagnostics {
     if (stage === "raw") {
       this.rawSequence += 1;
       this.silentReads.clear();
-    this.singleRobotReads.clear();
+      this.singleRobotReads.clear();
     }
   }
 
@@ -115,12 +115,18 @@ class MqttSessionDiagnostics {
       this.lastReadTimeoutAt = performance.now();
       requestWasSilent = this.rawSilenceDuringRequest;
       if (requestWasSilent) {
-        if (!this.singleRobotReads.has(duid) && this.singleRobotReads.size >= MAX_ROBOTS) {
+        if (
+          !this.singleRobotReads.has(duid) &&
+          this.singleRobotReads.size >= MAX_ROBOTS
+        ) {
           const oldest = this.singleRobotReads.keys().next().value;
           if (oldest !== undefined) this.singleRobotReads.delete(oldest);
         }
         const reads = this.singleRobotReads.get(duid) || [];
-        this.singleRobotReads.set(duid, [...reads, performance.now()].slice(-SINGLE_ROBOT_THRESHOLD));
+        this.singleRobotReads.set(
+          duid,
+          [...reads, performance.now()].slice(-SINGLE_ROBOT_THRESHOLD)
+        );
         if (
           !this.silentReads.has(duid) &&
           this.silentReads.size >= MAX_ROBOTS
@@ -132,13 +138,21 @@ class MqttSessionDiagnostics {
       }
     }
     this.emit(true);
-    return {...this.snapshot(), requestWasSilent, singleRobotSilentReadCount: requestWasSilent ? (this.singleRobotReads.get(duid)?.length || 0) : 0};
+    return {
+      ...this.snapshot(),
+      requestWasSilent,
+      singleRobotSilentReadCount: requestWasSilent
+        ? this.singleRobotReads.get(duid)?.length || 0
+        : 0,
+    };
   }
 
   prune() {
     const cutoff = performance.now() - SILENCE_WINDOW_MS;
     for (const [duid, reads] of this.singleRobotReads) {
-      const recent = reads.filter(at => at >= performance.now() - SINGLE_ROBOT_WINDOW_MS);
+      const recent = reads.filter(
+        (at) => at >= performance.now() - SINGLE_ROBOT_WINDOW_MS
+      );
       if (recent.length) this.singleRobotReads.set(duid, recent);
       else this.singleRobotReads.delete(duid);
     }
@@ -171,7 +185,10 @@ class MqttSessionDiagnostics {
       silentReadRobotCount: this.silentReads.size,
       correlatedSilenceObserved: this.silentReads.size >= 2,
       observationWindowMs: SILENCE_WINDOW_MS,
-      singleRobotSilentReadCount: Math.max(0, ...[...this.singleRobotReads.values()].map(reads => reads.length)),
+      singleRobotSilentReadCount: Math.max(
+        0,
+        ...[...this.singleRobotReads.values()].map((reads) => reads.length)
+      ),
       singleRobotThreshold: SINGLE_ROBOT_THRESHOLD,
       singleRobotWindowMs: SINGLE_ROBOT_WINDOW_MS,
     };

@@ -188,4 +188,3 @@ test("a scene-read throttle stops timer fallback even when the timer source answ
   expect(command).toHaveBeenCalledTimes(1);
   expect(coordinator.accountCoordinator.currentThrottleError()).toBeDefined();
 });
-

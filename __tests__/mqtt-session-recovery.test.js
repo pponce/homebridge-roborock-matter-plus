@@ -52,7 +52,7 @@ function makeAdapter() {
 }
 
 async function makeConnector(config = {}) {
-  const connector = new roborock_mqtt_connector({...makeAdapter(), config});
+  const connector = new roborock_mqtt_connector({ ...makeAdapter(), config });
   await connector.initUser(USER);
   return connector;
 }
@@ -179,29 +179,47 @@ describe("account MQTT session recovery", () => {
   });
 
   test("correlated observations delegate to the opt-in lifecycle", async () => {
-    const connector = await makeConnector({enableMqttSessionRecovery: true});
+    const connector = await makeConnector({ enableMqttSessionRecovery: true });
     await acknowledge(mockClients[0]);
-    const first = connector.sessionDiagnostics.noteTimeout("robot-1", "get_prop", connector.sessionDiagnostics.captureRequest());
+    const first = connector.sessionDiagnostics.noteTimeout(
+      "robot-1",
+      "get_prop",
+      connector.sessionDiagnostics.captureRequest()
+    );
     connector.recovery.observeTimeout(first);
     expect(mockClients).toHaveLength(1);
-    const second = connector.sessionDiagnostics.noteTimeout("robot-2", "get_prop", connector.sessionDiagnostics.captureRequest());
+    const second = connector.sessionDiagnostics.noteTimeout(
+      "robot-2",
+      "get_prop",
+      connector.sessionDiagnostics.captureRequest()
+    );
     connector.recovery.observeTimeout(second);
     const recovery = connector.recovery.inFlight;
     await tick();
     expect(mockClients).toHaveLength(2);
     await acknowledge(mockClients[1]);
     await expect(recovery).resolves.toBe(true);
-    expect(connector.adapter.log.info).toHaveBeenCalledWith(expect.stringContaining("reason=correlated-silence"));
+    expect(connector.adapter.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("reason=correlated-silence")
+    );
     connector.disconnect();
   });
 
   test("write and interrupted-read observations cannot trigger recovery", async () => {
-    const connector = await makeConnector({enableMqttSessionRecovery: true});
+    const connector = await makeConnector({ enableMqttSessionRecovery: true });
     await acknowledge(mockClients[0]);
     const request = connector.sessionDiagnostics.captureRequest();
-    const write = connector.sessionDiagnostics.noteTimeout("robot-1", "upd_server_timer", request);
+    const write = connector.sessionDiagnostics.noteTimeout(
+      "robot-1",
+      "upd_server_timer",
+      request
+    );
     connector.sessionDiagnostics.noteActivity("raw");
-    const read = connector.sessionDiagnostics.noteTimeout("robot-1", "get_prop", request);
+    const read = connector.sessionDiagnostics.noteTimeout(
+      "robot-1",
+      "get_prop",
+      request
+    );
     connector.recovery.observeTimeout(write);
     connector.recovery.observeTimeout(read);
     expect(write.requestWasSilent).toBe(false);
@@ -327,4 +345,3 @@ describe("cloud publication readiness gate", () => {
     await expect(request).resolves.toEqual(["ok"]);
   });
 });
-

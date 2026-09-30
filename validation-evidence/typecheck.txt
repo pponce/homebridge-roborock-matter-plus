@@ -1,5 +1,0 @@
-
-> homebridge-roborock-matter@3.34.0 typecheck
-> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.roborockLib.json
-
-src/hap_schedule_accessory.ts(1434,21): error TS2339: Property 'push' does not exist on type 'Set<ScheduleWriteRequest>'.

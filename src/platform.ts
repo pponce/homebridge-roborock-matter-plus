@@ -183,7 +183,8 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       enableLiveRoomTracking:
         this.platformConfig.enableLiveRoomTracking !== false,
       cloudOnlyMode: Boolean(this.platformConfig.cloudOnlyMode),
-      enableMqttSingleRobotRecovery: this.platformConfig.enableMqttSingleRobotRecovery === true,
+      enableMqttSingleRobotRecovery:
+        this.platformConfig.enableMqttSingleRobotRecovery === true,
       enableMqttPreventiveRefresh:
         this.platformConfig.enableMqttPreventiveRefresh === true,
       enableMqttSessionRecovery:
@@ -2079,4 +2080,3 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
     return null;
   }
 }
-
