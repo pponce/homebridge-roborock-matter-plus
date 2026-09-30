@@ -333,6 +333,10 @@ class RoborockUiServer {
       const roborockDiagnosticsState = this.readJsonFile(
         path.join(storagePath, "roborock.RoborockDiagnostics")
       );
+      const mqttSessionState = this.readJsonFile(
+        path.join(storagePath, "roborock.MqttSessionDiagnostics")
+      );
+      const mqttSession = this.parseStatePayload(mqttSessionState?.val);
       const homeData = this.parseStatePayload(homeDataState?.val);
       const transportDiagnostics =
         this.parseStatePayload(transportDiagnosticsState?.val) || {};
@@ -418,6 +422,7 @@ class RoborockUiServer {
         storagePath,
         hasEncryptedToken: Boolean(userDataState?.val),
         hasHomeData: Boolean(homeData),
+        mqttSession: mqttSession || null,
         deviceCount: diagnostics.length,
         devices: diagnostics,
       };
@@ -924,3 +929,4 @@ class RoborockUiServer {
 // "type": "module") performs the native `import` of plugin-ui-utils and then
 // instantiates the exported class below. No dynamic-code-evaluation shims.
 export { RoborockUiServer };
+
