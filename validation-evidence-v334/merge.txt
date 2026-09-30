@@ -1,0 +1,3 @@
+Auto-merging roborockLib/lib/vacuum.js
+Auto-merging roborockLib/roborockAPI.js
+Automatic merge went well; stopped before committing as requested
