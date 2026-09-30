@@ -382,4 +382,3 @@ test("a real MQTT session replacement is reconciled after its existing recovery 
   expect(events.at(-1).method).toBe("get_server_timer");
   await Promise.all(replacements);
 });
-

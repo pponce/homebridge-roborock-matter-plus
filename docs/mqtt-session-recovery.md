@@ -41,7 +41,6 @@ Lifecycle logs contain reasons, generations, timing and cooldowns, not credentia
 or request payloads. The regression tests drive real connector callbacks and
 request-queue timeouts; the same tests are run against PR 2 as a red baseline.
 
-
 ## Optional repeated single-robot silence (home branch)
 
 `enableMqttSingleRobotRecovery` is separately off by default and sits beside

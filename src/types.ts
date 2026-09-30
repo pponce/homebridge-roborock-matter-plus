@@ -92,4 +92,3 @@ export interface RoborockPlatformConfig extends PlatformConfig {
   enableHomeKitScheduleSwitches?: boolean;
   enableHomeKitRoutineSwitches?: boolean;
 }
-

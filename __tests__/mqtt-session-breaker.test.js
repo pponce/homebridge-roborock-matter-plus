@@ -56,7 +56,9 @@ async function timeout(duid = "robot-a", method = "get_status") {
   return request.result;
 }
 function acknowledge() {
-  mockSubscriptions.at(-1)(null, [{ topic: mockClient.subscribe.mock.calls.at(-1)[0], qos: 1 }]);
+  mockSubscriptions.at(-1)(null, [
+    { topic: mockClient.subscribe.mock.calls.at(-1)[0], qos: 1 },
+  ]);
 }
 
 beforeEach(async () => {
@@ -326,4 +328,3 @@ test("correlated silence does not reopen an already-open breaker", async () => {
   expect(breaker.entries.get("robot-a:get_consumable")).toEqual(before);
   expect(breaker.shouldSkip("robot-a", "get_consumable")).toBe(true);
 });
-

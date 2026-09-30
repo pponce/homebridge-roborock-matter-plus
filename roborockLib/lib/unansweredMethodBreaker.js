@@ -334,4 +334,3 @@ module.exports = {
   OPEN_AFTER_CONSECUTIVE_TIMEOUTS,
   COOLDOWN_MS,
 };
-

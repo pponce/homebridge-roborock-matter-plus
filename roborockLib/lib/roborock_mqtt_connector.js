@@ -149,12 +149,20 @@ class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
-      Promise.resolve(this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
-        val: JSON.stringify({...snapshot, recovery: this.recovery?.snapshot() ?? {enabled: false}}), ack: true,
-      })).catch(() => {});
+      Promise.resolve(
+        this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
+          val: JSON.stringify({
+            ...snapshot,
+            recovery: this.recovery?.snapshot() ?? { enabled: false },
+          }),
+          ack: true,
+        })
+      ).catch(() => {});
     });
-    this.recovery = adapter.config?.enableMqttSessionRecovery === true
-      ? new MqttSessionRecovery(this) : null;
+    this.recovery =
+      adapter.config?.enableMqttSessionRecovery === true
+        ? new MqttSessionRecovery(this)
+        : null;
     this.client = null;
     this.rriot = null;
     this.endpoint = null;
@@ -371,11 +379,16 @@ class roborock_mqtt_connector {
         }),
       ]);
       if (!this.isCurrentSession(candidate, generation)) return;
-      if (observationGeneration !== this.sessionDiagnostics.generation || !this.socketConnected) return;
+      if (
+        observationGeneration !== this.sessionDiagnostics.generation ||
+        !this.socketConnected
+      )
+        return;
       const accepted =
         Array.isArray(granted) &&
         granted.some(
-          (grant) => grant && grant.topic === topic && [0, 1, 2].includes(grant.qos)
+          (grant) =>
+            grant && grant.topic === topic && [0, 1, 2].includes(grant.qos)
         );
       if (!accepted)
         throw new Error("broker did not grant the reply subscription");
@@ -397,7 +410,11 @@ class roborock_mqtt_connector {
       );
     } catch (error) {
       if (!this.isCurrentSession(candidate, generation)) return;
-      if (observationGeneration !== this.sessionDiagnostics.generation || !this.socketConnected) return;
+      if (
+        observationGeneration !== this.sessionDiagnostics.generation ||
+        !this.socketConnected
+      )
+        return;
       this.sessionDiagnostics.onSubscribe(observationGeneration, error, []);
       this.subscriptionReady = false;
       this.connected = false;
@@ -887,7 +904,10 @@ class roborock_mqtt_connector {
   }
 
   isReady() {
-    if (this.recovery) return this.connected && !this.recovery.recovering && !this.recovery.stopped;
+    if (this.recovery)
+      return (
+        this.connected && !this.recovery.recovering && !this.recovery.stopped
+      );
     return this.sessionState === "ready" && this.subscriptionReady;
   }
 
@@ -940,7 +960,9 @@ class roborock_mqtt_connector {
   }
 
   isConnected() {
-    return this.connected && !this.recovery?.recovering && !this.recovery?.stopped;
+    return (
+      this.connected && !this.recovery?.recovering && !this.recovery?.stopped
+    );
   }
 
   waitUntilReady({ timeoutMs = 10000, signal } = {}) {
@@ -1387,4 +1409,3 @@ module.exports = {
   isOkAcknowledgement,
   shouldResolveOn102,
 };
-

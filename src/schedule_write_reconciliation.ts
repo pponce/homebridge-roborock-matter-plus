@@ -18,4 +18,3 @@ export function isAmbiguousScheduleWrite(error: unknown): boolean {
       failure.response.status >= 500)
   );
 }
-

@@ -12,7 +12,8 @@ class MqttSessionRecovery {
     this.adapter = connector.adapter;
     this.preventiveRefreshEnabled =
       this.adapter.config.enableMqttPreventiveRefresh === true;
-    this.singleRobotRecoveryEnabled = this.adapter.config.enableMqttSingleRobotRecovery === true;
+    this.singleRobotRecoveryEnabled =
+      this.adapter.config.enableMqttSingleRobotRecovery === true;
     this.installed = new WeakSet();
     /** @type {string | null} */
     this.lastReason = null;
@@ -100,7 +101,11 @@ class MqttSessionRecovery {
       observation?.correlatedSilenceObserved
     ) {
       void this.recreate("correlated-silence");
-    } else if (this.singleRobotRecoveryEnabled && observation?.requestWasSilent && observation.singleRobotSilentReadCount >= 3) {
+    } else if (
+      this.singleRobotRecoveryEnabled &&
+      observation?.requestWasSilent &&
+      observation.singleRobotSilentReadCount >= 3
+    ) {
       void this.recreate("repeated-single-robot-silence");
     }
   }
@@ -113,7 +118,10 @@ class MqttSessionRecovery {
       inProgress: this.recovering,
       lastReason: this.lastReason,
       lastResult: this.lastResult,
-      cooldownRemainingMs: Math.max(0, Math.round(this.nextAllowedAt - performance.now())),
+      cooldownRemainingMs: Math.max(
+        0,
+        Math.round(this.nextAllowedAt - performance.now())
+      ),
       consecutiveFailures: this.failures,
     };
   }
@@ -197,7 +205,9 @@ class MqttSessionRecovery {
     }
     this.lastReason = reason;
     this.lastResult = "in-progress";
-    this.adapter.log.info(`MQTT session recreation starting: reason=${reason}; minimumSuccessCooldownMs=${COOLDOWN_MS}.`);
+    this.adapter.log.info(
+      `MQTT session recreation starting: reason=${reason}; minimumSuccessCooldownMs=${COOLDOWN_MS}.`
+    );
     // Close the send gate before yielding; requests building a payload must
     // check it again immediately before registering/publishing the request.
     this.recovering = true;
@@ -229,7 +239,8 @@ class MqttSessionRecovery {
       // New inbound evidence during a reactive drain also cancels the need.
       if (
         (reason === "preventive" && this.pending().length) ||
-        ((reason === "correlated-silence" || reason === "repeated-single-robot-silence") &&
+        ((reason === "correlated-silence" ||
+          reason === "repeated-single-robot-silence") &&
           before.rawSequence !==
             connector.sessionDiagnostics.captureRequest().rawSequence)
       ) {
@@ -297,4 +308,3 @@ class MqttSessionRecovery {
 }
 
 module.exports = { MqttSessionRecovery };
-
