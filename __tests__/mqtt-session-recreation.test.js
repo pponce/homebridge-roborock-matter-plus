@@ -11,7 +11,10 @@ jest.mock("mqtt", () => ({
       handlers,
       subscriptions,
       on: jest.fn((event, handler) => handlers.set(event, handler)),
-      subscribe: jest.fn((topic, callback) => subscriptions.push(callback)),
+      subscribe: jest.fn((topic, callback) => {
+        if (client.knownTopic) callback(null, []);
+        else subscriptions.push(callback);
+      }),
       publish: jest.fn(),
       end: jest.fn(),
       endAsync: jest.fn(async () => {}),
@@ -62,10 +65,14 @@ async function timeout(duid = "robot-a", method = "get_status") {
   await jest.advanceTimersByTimeAsync(10_000);
   return request.result;
 }
-function acknowledge() {
-  mockClients.at(-1).subscriptions.at(-1)(null, [
-    { topic: mockClients.at(-1).subscribe.mock.calls.at(-1)[0], qos: 1 },
-  ]);
+function acknowledge(granted = [{ qos: 1 }]) {
+  const client = mockClients.at(-1);
+  client.handlers.get("packetreceive")?.({
+    cmd: "suback",
+    granted: granted.map((x) => x.qos),
+  });
+  if (!client.knownTopic) client.subscriptions.at(-1)(null, granted.map(g => ({ topic: client.subscribe.mock.calls.at(-1)[0], ...g })));
+  client.knownTopic = granted.every((x) => x.qos < 128);
 }
 
 beforeEach(async () => {
@@ -161,13 +168,7 @@ async function silence() {
 }
 function connectLatest(granted = [{ qos: 1 }]) {
   mockClients.at(-1).handlers.get("connect")({ sessionPresent: false });
-  mockClients.at(-1).subscriptions.at(-1)(
-    null,
-    granted.map((grant) => ({
-      topic: mockClients.at(-1).subscribe.mock.calls.at(-1)[0],
-      ...grant,
-    }))
-  );
+  acknowledge(granted);
 }
 async function replacementReady() {
   connectLatest();
@@ -214,7 +215,7 @@ test("a refused SUBACK keeps cloud sends closed", async () => {
   expect(connector.isConnected()).toBe(false);
 });
 
-test("a single robot and write-only silence do not recreate", async () => {
+test("the correlated policy alone does not act on a single robot or writes", async () => {
   for (let i = 0; i < 3; i++) await timeout("robot-a");
   await timeout("robot-b", "app_start");
   expect(mockClients).toHaveLength(1);
@@ -418,129 +419,70 @@ test("preventive refresh cannot turn on recovery by itself", async () => {
   expect(mockClients).toHaveLength(1);
 });
 
-test("single-robot recovery is separately opt-in and is silent until the third qualifying read", async () => {
-  await restartWith({
-    enableMqttSessionRecovery: true,
-    enableMqttSingleRobotRecovery: true,
-  });
-  await timeout();
-  await timeout();
-  expect(mockClients).toHaveLength(1);
-  expect(snapshot().singleRobotSilentReadCount).toBe(2);
-  await timeout();
-  await jest.advanceTimersByTimeAsync(0);
+function enableBaselineRule() {
+  adapter.cloudSessionHealth = { consecutiveSilences: 0, lastRestartAt: 0 };
+  adapter.noteCloudSilence = Roborock.prototype.noteCloudSilence.bind(adapter);
+  adapter.noteCloudReply = Roborock.prototype.noteCloudReply.bind(adapter);
+}
+
+test("v3.36 baseline single-robot silence uses the experimental lifecycle without replay", async () => {
+  enableBaselineRule();
+  for (let i = 0; i < 3; i++) await timeout("robot-a");
+  expect(mockClients).toHaveLength(2);
+  expect(mockClients[0].endAsync).toHaveBeenCalledTimes(1);
+  expect(mockClients[1].publish).not.toHaveBeenCalled();
+  await replacementReady();
+  expect(connector.isConnected()).toBe(true);
+  expect(adapter.cloudSessionHealth.consecutiveSilences).toBe(0);
+});
+
+test("baseline and correlated silence share one restart and a thirty-minute cooldown", async () => {
+  enableBaselineRule();
+  await timeout("robot-a");
+  await timeout("robot-a");
+  await timeout("robot-b"); // Both policies qualify at the same timeout.
   expect(mockClients).toHaveLength(2);
   await replacementReady();
-  expect(snapshot().recovery).toMatchObject({
-    singleRobotRecoveryEnabled: true,
-    lastReason: "repeated-single-robot-silence",
-    lastResult: "succeeded",
-  });
-  expect(snapshot().recovery.cooldownRemainingMs).toBeGreaterThan(0);
-  expect(adapter.log.info).toHaveBeenCalledWith(
-    expect.stringContaining("reason=repeated-single-robot-silence")
-  );
-});
-
-test("without single-robot opt-in repeated silence stays observational", async () => {
-  await timeout();
-  await timeout();
-  await timeout();
-  await jest.advanceTimersByTimeAsync(0);
-  expect(mockClients).toHaveLength(1);
-  expect(snapshot().singleRobotSilentReadCount).toBe(3);
-  expect(snapshot().recovery.singleRobotRecoveryEnabled).toBe(false);
-});
-
-test("single-robot opt-in cannot enable recovery when the master option is off", async () => {
-  await restartWith({ enableMqttSingleRobotRecovery: true });
-  // The home branch's ordinary connection path validates the actual topic.
-  const client = mockClients.at(-1);
-  client.subscriptions.at(-1)(null, [
-    { topic: client.subscribe.mock.calls.at(-1)[0], qos: 1 },
-  ]);
-  await jest.advanceTimersByTimeAsync(0);
-  await timeout();
-  await timeout();
-  await timeout();
-  expect(mockClients).toHaveLength(1);
-  expect(snapshot().recovery.enabled).toBe(false);
-});
-
-test("any raw traffic clears accumulated single-robot evidence", async () => {
-  await restartWith({
-    enableMqttSessionRecovery: true,
-    enableMqttSingleRobotRecovery: true,
-  });
-  await timeout();
-  await timeout();
-  receive(null, "unknown-robot");
-  await timeout();
-  expect(mockClients).toHaveLength(1);
-  expect(snapshot().singleRobotSilentReadCount).toBe(1);
-});
-
-test("single-robot evidence expires after fifteen minutes", async () => {
-  await restartWith({
-    enableMqttSessionRecovery: true,
-    enableMqttSingleRobotRecovery: true,
-  });
-  await timeout();
-  await timeout();
-  await jest.advanceTimersByTimeAsync(15 * 60_000 + 1);
-  await timeout();
-  expect(mockClients).toHaveLength(1);
-  expect(snapshot().singleRobotSilentReadCount).toBe(1);
-});
-
-test("a reconnect discards single-robot evidence and an old SUBACK cannot ready it", async () => {
-  await restartWith({
-    enableMqttSessionRecovery: true,
-    enableMqttSingleRobotRecovery: true,
-  });
-  await timeout();
-  await timeout();
-  const client = mockClients.at(-1),
-    oldSuback = client.subscriptions.at(-1);
-  client.handlers.get("close")();
-  client.handlers.get("connect")({ sessionPresent: true });
-  oldSuback(null, [{ qos: 1 }]);
-  expect(connector.isConnected()).toBe(false);
-  acknowledge();
-  await timeout();
-  expect(mockClients).toHaveLength(1);
-  expect(snapshot().singleRobotSilentReadCount).toBe(1);
-});
-
-test("single-robot recovery obeys the successful-recreation cooldown", async () => {
-  await restartWith({
-    enableMqttSessionRecovery: true,
-    enableMqttSingleRobotRecovery: true,
-  });
-  await timeout();
-  await timeout();
-  await timeout();
-  await jest.advanceTimersByTimeAsync(0);
-  await replacementReady();
-  await timeout();
-  await timeout();
-  await timeout();
+  await jest.advanceTimersByTimeAsync(60_000);
+  await timeout("robot-a");
+  await timeout("robot-b");
+  await timeout("robot-a");
   expect(mockClients).toHaveLength(2);
-  expect(snapshot().recovery.cooldownRemainingMs).toBeGreaterThan(0);
-  await jest.advanceTimersByTimeAsync(30_001);
-  await timeout();
-  await jest.advanceTimersByTimeAsync(0);
+  expect(adapter.noteCloudSilence()).toBe(false);
+  await jest.advanceTimersByTimeAsync(30 * 60_000);
+  await timeout("robot-a");
   expect(mockClients).toHaveLength(3);
+  await replacementReady();
 });
 
-test("ambiguous writes do not contribute to single-robot recovery", async () => {
-  await restartWith({
-    enableMqttSessionRecovery: true,
-    enableMqttSingleRobotRecovery: true,
-  });
-  await timeout("robot-a", "app_start");
-  await timeout("robot-a", "app_start");
-  await timeout("robot-a", "app_start");
+test("the upstream baseline still restarts with experimental recovery disabled", async () => {
+  await restartWith({});
+  enableBaselineRule();
+  const restart = jest
+    .spyOn(connector, "reconnectClient")
+    .mockResolvedValue(true);
+  for (let i = 0; i < 3; i++) await timeout("robot-a");
+  expect(restart).toHaveBeenCalledTimes(1);
+  expect(restart).toHaveBeenCalledWith(true);
+});
+
+test("a reply resets the baseline streak with experimental recovery enabled", async () => {
+  enableBaselineRule();
+  await timeout("robot-a");
+  await timeout("robot-a");
+  adapter.noteCloudReply();
+  await timeout("robot-a");
   expect(mockClients).toHaveLength(1);
-  expect(snapshot().singleRobotSilentReadCount).toBe(0);
+  expect(adapter.cloudSessionHealth.consecutiveSilences).toBe(1);
+});
+
+
+test("session teardown does not count an abandoned request as a robot reply", async () => {
+  const request = await startRequest("robot-a", "app_start");
+  const recovery = connector.reconnectClient(true);
+  await jest.advanceTimersByTimeAsync(501);
+  expect(await request.result).toMatchObject({ code: "MQTT_SESSION_REPLACED" });
+  expect(adapter.noteRequestAnswered).not.toHaveBeenCalled();
+  await replacementReady();
+  expect(await recovery).toBe(true);
 });

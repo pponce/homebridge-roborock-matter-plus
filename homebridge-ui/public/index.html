@@ -152,9 +152,10 @@
       <label class="checkbox"
         ><input id="enableMqttSessionRecovery" type="checkbox" /><span
           >Enable experimental MQTT session recovery<small
-            >Recreates a correlated silent MQTT session. Off by default.
-            Commands are not replayed. Restart the child bridge after changing
-            this setting.</small
+            >Adds correlated-silence recovery and bounded session recreation.
+            Off by default; the built-in v3.36 recovery remains active. Commands
+            are not replayed. Restart the child bridge after changing this
+            setting.</small
           ></span
         ></label
       >
@@ -171,64 +172,6 @@
             ></span
           ></label
         >
-        <label class="checkbox"
-          ><input type="checkbox" id="enableMqttSingleRobotRecovery" /><span
-            >Enable recovery from repeated single-robot silence<small
-              >Allows recreation after three silent cloud reads from one robot
-              within 15 minutes. Incoming MQTT traffic clears the evidence.
-              Requires experimental MQTT session recovery. A silent robot may
-              still be the cause. Successful recreations have a 60-second
-              cooldown. Off by default; restart the child bridge after changing
-              this setting.</small
-            ></span
-          ></label
-        >
-      </div>
-    </details>
-
-    <div class="actions">
-      <button
-        id="save-settings"
-        class="secondary"
-        aria-label="Save account settings"
-      >
-        Save Settings
-      </button>
-      <button id="login" class="primary">Password Login</button>
-      <button id="logout" class="secondary hidden">Logout</button>
-    </div>
-  </section>
-
-  <section class="panel">
-    <div class="section-header">
-      <div>
-        <h2>Apple Home Features</h2>
-        <p class="help">
-          Everything the robot can show in Apple Home is on, and there is
-          nothing here to switch on or get wrong: rooms, live room tracking,
-          cleaning and suction modes, battery, dock and charging status, and the
-          empty-tank warning all come with the robot. The number below is a
-          preference rather than a feature.
-        </p>
-      </div>
-    </div>
-
-    <label class="field">
-      <span>Charged Battery Threshold (%)</span>
-      <input
-        id="matter-charged-battery-threshold"
-        type="number"
-        min="1"
-        max="100"
-        step="1"
-        placeholder="100"
-      />
-      <small
-        >The tile shows Charging while docked below this battery percentage, and
-        Docked at or above it. Lower it (e.g. 90) if a worn battery makes the
-        robot report fully charged early.</small
-      >
-    </label>
     <label class="checkbox">
       <input id="enable-homekit-action-switches" type="checkbox" />
       <span>
@@ -368,6 +311,37 @@
             only reports; it never stops a clean. Robots differ in how they say
             it, so both signals are read; a robot that reports neither leaves
             the sensor at Open.</small
+          ></span
+        >
+      </label>
+      <label class="checkbox">
+        <input
+          id="homekit-state-dirty-water-tank-full"
+          type="checkbox"
+          disabled
+        />
+        <span
+          >Dirty Water Tank Full
+          <small
+            >Closed while the dock reports its dirty-water tank full (or not
+            fitted), Open otherwise. Read from the dock&rsquo;s own status word
+            where the dock sends one, so on those docks a full dirty tank no
+            longer hides an empty clean one.</small
+          ></span
+        >
+      </label>
+      <label class="checkbox">
+        <input
+          id="homekit-state-cleaning-fluid-empty"
+          type="checkbox"
+          disabled
+        />
+        <span
+          >Cleaning Fluid Empty
+          <small
+            >Closed while the dock reports its cleaning-fluid cartridge empty
+            (or not fitted), Open otherwise. Only docks with automatic detergent
+            dosing report this; on any other dock the sensor stays Open.</small
           ></span
         >
       </label>
