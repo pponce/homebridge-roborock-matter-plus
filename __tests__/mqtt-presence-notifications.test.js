@@ -33,7 +33,14 @@ async function setup() {
   const connector = new roborock_mqtt_connector(adapter);
   const client = new EventEmitter();
   mockClient = client;
-  await connector.initUser({ rriot: { u: "fixture-user", k: "fixture-key", s: "fixture-secret", r: { m: "mqtt://fixture.invalid" } } });
+  await connector.initUser({
+    rriot: {
+      u: "fixture-user",
+      k: "fixture-key",
+      s: "fixture-secret",
+      r: { m: "mqtt://fixture.invalid" },
+    },
+  });
   await connector.initMQTT_Message();
   const emit = (online, packet = {}, duid = "robot-1") =>
     client.emit(
@@ -131,7 +138,14 @@ describe("MQTT presence notifications", () => {
     const { logs, connector, client, emit } = await setup();
     emit(true);
     mockClient = new EventEmitter();
-    await connector.initUser({ rriot: { u: "fixture-user", k: "fixture-key", s: "fixture-secret", r: { m: "mqtt://fixture.invalid" } } });
+    await connector.initUser({
+      rriot: {
+        u: "fixture-user",
+        k: "fixture-key",
+        s: "fixture-secret",
+        r: { m: "mqtt://fixture.invalid" },
+      },
+    });
     client.emit(
       "message",
       "rr/m/o/test-account/test-client/robot-1",
