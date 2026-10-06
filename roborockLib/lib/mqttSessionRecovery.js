@@ -27,22 +27,32 @@ class MqttSessionRecovery {
     const connector = this.connector;
     const current = () => !this.stopped && connector.client === candidate;
     const acknowledge = (generation, error, granted) => {
-      if (!current() || generation !== connector.sessionDiagnostics.generation ||
-          !connector.sessionDiagnostics.snapshot().connected) return;
+      if (
+        !current() ||
+        generation !== connector.sessionDiagnostics.generation ||
+        !connector.sessionDiagnostics.snapshot().connected
+      )
+        return;
       // mqtt.js handles resubscription itself; an empty callback is not a SUBACK.
       if (!error && Array.isArray(granted) && granted.length === 0) return;
       connector.sessionDiagnostics.onSubscribe(generation, error, granted);
-      connector.connected = connector.sessionDiagnostics.snapshot().subscriptionAcknowledged;
+      connector.connected =
+        connector.sessionDiagnostics.snapshot().subscriptionAcknowledged;
       if (connector.connected) this.readyAt = performance.now();
       else {
         this.readyAt = null;
-        connector.logConnectionIssue("Roborock MQTT reply subscription was not acknowledged; cloud sends remain paused.");
+        connector.logConnectionIssue(
+          "Roborock MQTT reply subscription was not acknowledged; cloud sends remain paused."
+        );
       }
     };
     candidate.on("packetreceive", (packet) => {
-      if (packet.cmd === "suback") acknowledge(
-        connector.sessionDiagnostics.generation, null, packet.granted.map(qos => ({ qos }))
-      );
+      if (packet.cmd === "suback")
+        acknowledge(
+          connector.sessionDiagnostics.generation,
+          null,
+          packet.granted.map((qos) => ({ qos }))
+        );
     });
     candidate.on("connect", () => {
       if (!current()) return;
@@ -175,13 +185,20 @@ class MqttSessionRecovery {
 
   canRecoverSilence() {
     const lastRestartAt = this.adapter.cloudSessionHealth?.lastRestartAt || 0;
-    return !this.stopped && !this.inFlight && performance.now() >= this.nextAllowedAt &&
-      (!lastRestartAt || Date.now() - lastRestartAt >= SILENCE_COOLDOWN_MS);
+    return (
+      !this.stopped &&
+      !this.inFlight &&
+      performance.now() >= this.nextAllowedAt &&
+      (!lastRestartAt || Date.now() - lastRestartAt >= SILENCE_COOLDOWN_MS)
+    );
   }
 
   recreate(reason) {
     if (this.inFlight) return this.inFlight;
-    if ((reason === "correlated-silence" || reason === "cloud-silence") && !this.canRecoverSilence())
+    if (
+      (reason === "correlated-silence" || reason === "cloud-silence") &&
+      !this.canRecoverSilence()
+    )
       return Promise.resolve(false);
     if (this.stopped || performance.now() < this.nextAllowedAt)
       return Promise.resolve(false);

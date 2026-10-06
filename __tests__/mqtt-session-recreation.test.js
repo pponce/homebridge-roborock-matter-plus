@@ -67,9 +67,12 @@ async function timeout(duid = "robot-a", method = "get_status") {
 }
 function acknowledge(granted = [{ qos: 1 }]) {
   const client = mockClients.at(-1);
-  client.handlers.get("packetreceive")?.({ cmd: "suback", granted: granted.map(x => x.qos) });
+  client.handlers.get("packetreceive")?.({
+    cmd: "suback",
+    granted: granted.map((x) => x.qos),
+  });
   if (!client.knownTopic) client.subscriptions.at(-1)(null, granted);
-  client.knownTopic = granted.every(x => x.qos < 128);
+  client.knownTopic = granted.every((x) => x.qos < 128);
 }
 
 beforeEach(async () => {
@@ -455,7 +458,9 @@ test("baseline and correlated silence share one restart and a thirty-minute cool
 test("the upstream baseline still restarts with experimental recovery disabled", async () => {
   await restartWith({});
   enableBaselineRule();
-  const restart = jest.spyOn(connector, "reconnectClient").mockResolvedValue(true);
+  const restart = jest
+    .spyOn(connector, "reconnectClient")
+    .mockResolvedValue(true);
   for (let i = 0; i < 3; i++) await timeout("robot-a");
   expect(restart).toHaveBeenCalledTimes(1);
   expect(restart).toHaveBeenCalledWith(true);
