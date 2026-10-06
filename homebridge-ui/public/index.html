@@ -152,9 +152,10 @@
       <label class="checkbox"
         ><input id="enableMqttSessionRecovery" type="checkbox" /><span
           >Enable experimental MQTT session recovery<small
-            >Recreates a correlated silent MQTT session. Off by default.
-            Commands are not replayed. Restart the child bridge after changing
-            this setting.</small
+            >Adds correlated-silence recovery and bounded session recreation.
+            Off by default; the built-in v3.36 recovery remains active. Commands
+            are not replayed. Restart the child bridge after changing this
+            setting.</small
           ></span
         ></label
       >
@@ -356,6 +357,37 @@
             only reports; it never stops a clean. Robots differ in how they say
             it, so both signals are read; a robot that reports neither leaves
             the sensor at Open.</small
+          ></span
+        >
+      </label>
+      <label class="checkbox">
+        <input
+          id="homekit-state-dirty-water-tank-full"
+          type="checkbox"
+          disabled
+        />
+        <span
+          >Dirty Water Tank Full
+          <small
+            >Closed while the dock reports its dirty-water tank full (or not
+            fitted), Open otherwise. Read from the dock&rsquo;s own status word
+            where the dock sends one, so on those docks a full dirty tank no
+            longer hides an empty clean one.</small
+          ></span
+        >
+      </label>
+      <label class="checkbox">
+        <input
+          id="homekit-state-cleaning-fluid-empty"
+          type="checkbox"
+          disabled
+        />
+        <span
+          >Cleaning Fluid Empty
+          <small
+            >Closed while the dock reports its cleaning-fluid cartridge empty
+            (or not fitted), Open otherwise. Only docks with automatic detergent
+            dosing report this; on any other dock the sensor stays Open.</small
           ></span
         >
       </label>
