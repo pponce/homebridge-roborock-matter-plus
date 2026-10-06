@@ -475,3 +475,14 @@ test("a reply resets the baseline streak with experimental recovery enabled", as
   expect(mockClients).toHaveLength(1);
   expect(adapter.cloudSessionHealth.consecutiveSilences).toBe(1);
 });
+
+
+test("session teardown does not count an abandoned request as a robot reply", async () => {
+  const request = await startRequest("robot-a", "app_start");
+  const recovery = connector.reconnectClient(true);
+  await jest.advanceTimersByTimeAsync(501);
+  expect(await request.result).toMatchObject({ code: "MQTT_SESSION_REPLACED" });
+  expect(adapter.noteRequestAnswered).not.toHaveBeenCalled();
+  await replacementReady();
+  expect(await recovery).toBe(true);
+});
