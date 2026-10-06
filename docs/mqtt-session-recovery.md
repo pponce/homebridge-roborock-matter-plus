@@ -2,11 +2,15 @@
 
 `enableMqttSessionRecovery` defaults to false. Enable it in advanced plugin
 settings or config.json and restart the child bridge to participate in this
-experimental release. Leaving it absent preserves the existing reconnect path.
+experimental release. Leaving it absent preserves v3.36.0's default recovery:
+three consecutive cloud timeouts with the link up and no traffic from the robot
+while each request waited restart MQTT, at most once every thirty minutes.
 
 With recovery enabled, the measured multi-robot silence from PRs 1 and 2 can
-recreate the account's MQTT client. A single silent robot, idle time, local
-timeouts, or writes alone do not trigger reactive recreation.
+recreate the account's MQTT client. Upstream's baseline remains active (including
+single-robot silence) and uses the same bounded lifecycle. The correlated policy
+adds cross-robot evidence; it does not disable or narrow the baseline's counting
+rules. Local timeouts and idle time do not trigger reactive recreation.
 
 Cloud sends pause until the broker acknowledges the reply subscription. During
 recreation, new cloud requests fail as not sent; requests already building a
@@ -17,11 +21,17 @@ not reconcile ambiguous schedule writes; that belongs to PR 4.
 
 Recreation is single-flight. Forced client teardown is bounded at two seconds;
 connection plus subscription readiness is bounded at twenty seconds. Successful
-attempts have a one-minute cooldown; failures back off from one to fifteen
-minutes. There is no tight retry loop: subsequent qualifying evidence or the
+attempts have a one-minute minimum interval; failures back off from one to fifteen
+minutes. Both silence policies additionally share upstream's thirty-minute
+cooldown, measured from actual teardown. Any replacement resets the baseline
+streak and starts that silence cooldown, including preventive refresh. Concurrent
+triggers share one in-flight attempt. There is no tight retry loop: subsequent qualifying evidence or the
 existing hourly connection check can retry after that cooldown. Shutdown cancels
 waits and prevents another client from being created. Retired client callbacks
-cannot change readiness or process messages.
+cannot change readiness or process messages. Readiness observes actual SUBACK
+packets, including mqtt.js automatic resubscriptions; successful empty subscribe
+callbacks leave readiness unchanged. The real mqtt.js loopback-broker regression
+runs with experimental recovery both off and on.
 
 ## Preventive refresh: separate and off by default
 
@@ -38,4 +48,4 @@ It does not coordinate entire multi-command schedule transactions.
 
 Lifecycle logs contain reasons, generations, timing and cooldowns, not credentials
 or request payloads. The regression tests drive real connector callbacks and
-request-queue timeouts; the same tests are run against PR 2 as a red baseline.
+request-queue timeouts; upstream baseline tests are retained, with additional tests for overlapping triggers and the shared cooldown.
