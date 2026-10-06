@@ -1,0 +1,6 @@
+
+> homebridge-roborock-matter@3.36.0 lint
+> prettier --check .
+
+Checking formatting...
+All matched files use Prettier code style!
