@@ -57,7 +57,7 @@ class MqttSessionRecovery {
         acknowledge(
           connector.sessionDiagnostics.generation,
           null,
-          packet.granted.map((qos) => ({ qos }))
+          (packet.granted || []).map((qos) => ({ qos }))
         );
     });
     candidate.on("connect", () => {

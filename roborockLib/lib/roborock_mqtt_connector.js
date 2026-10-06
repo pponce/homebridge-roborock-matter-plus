@@ -339,7 +339,7 @@ class roborock_mqtt_connector {
       )
         return;
       pending.resolve(
-        packet.granted.map((qos) => ({ topic: pending.topic, qos }))
+        (packet.granted || []).map((qos) => ({ topic: pending.topic, qos }))
       );
     });
 
