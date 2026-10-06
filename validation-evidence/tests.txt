@@ -1,0 +1,100 @@
+     [90m 129 |[39m     [90m// either, so the reply is not arriving at all rather than arriving late" —[39m
+     [90m 130 |[39m     [90m// although six replies arrived late. B01 late replies are never measured[39m[0m
+
+      at Object.toBeDefined (__tests__/late-replies-belong-to-the-current-silence.test.js:127:18)
+
+FAIL __tests__/each-silence-is-counted-once-and-a-refusal-is-an-answer.test.js
+  ● one silent get_map_v1 is one strike › three unanswered live-room fetches do not close live-room tracking
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 3
+    Received: undefined
+
+    [0m [90m 54 |[39m     [90m// Fails on 3.34.0: failures is 6 (each timeout counted twice) and the[39m
+     [90m 55 |[39m     [90m// breaker is open for six hours.[39m
+    [31m[1m>[22m[39m[90m 56 |[39m     expect(entry[33m?[39m[33m.[39mfailures)[33m.[39mtoBe([35m3[39m)[33m;[39m
+     [90m    |[39m                             [31m[1m^[22m[39m
+     [90m 57 |[39m     expect(api[33m.[39munansweredMethods[33m.[39mshouldSkip([33mDUID[39m[33m,[39m [32m"get_map_v1"[39m))[33m.[39mtoBe([36mfalse[39m)[33m;[39m
+     [90m 58 |[39m   })[33m;[39m
+     [90m 59 |[39m })[33m;[39m[0m
+
+      at Object.toBe (__tests__/each-silence-is-counted-once-and-a-refusal-is-an-answer.test.js:56:29)
+
+  ● a robot that answers with an error has answered › an error reply between timeouts resets the run, so the breaker stays shut
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: true
+    Received: undefined
+
+    [0m [90m  98 |[39m     [36mfor[39m ([36mlet[39m i [33m=[39m [35m0[39m[33m;[39m i [33m<[39m [35m5[39m[33m;[39m i [33m+=[39m [35m1[39m) {
+     [90m  99 |[39m       [36mconst[39m error [33m=[39m [36mawait[39m timeOut()[33m;[39m
+    [31m[1m>[22m[39m[90m 100 |[39m       expect(error[33m.[39munansweredRequest)[33m.[39mtoBe([36mtrue[39m)[33m;[39m
+     [90m     |[39m                                       [31m[1m^[22m[39m
+     [90m 101 |[39m     }
+     [90m 102 |[39m
+     [90m 103 |[39m     [90m// The robot answers this one — with a refusal.[39m[0m
+
+      at Object.toBe (__tests__/each-silence-is-counted-once-and-a-refusal-is-an-answer.test.js:100:39)
+
+FAIL __tests__/a-quiet-mqtt-session-is-restarted.test.js
+  ● 3 unanswered cloud requests in a row start a fresh session, once
+
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+
+    Expected number of calls: 1
+    Received number of calls: 0
+
+    [0m [90m 43 |[39m   [36mawait[39m jest[33m.[39madvanceTimersByTimeAsync([35m0[39m)[33m;[39m
+     [90m 44 |[39m
+    [31m[1m>[22m[39m[90m 45 |[39m   expect(api[33m.[39mrr_mqtt_connector[33m.[39mreconnectClient)[33m.[39mtoHaveBeenCalledTimes([35m1[39m)[33m;[39m
+     [90m    |[39m                                                 [31m[1m^[22m[39m
+     [90m 46 |[39m   expect(api[33m.[39mrr_mqtt_connector[33m.[39mreconnectClient)[33m.[39mtoHaveBeenCalledWith([36mtrue[39m)[33m;[39m
+     [90m 47 |[39m   expect(
+     [90m 48 |[39m     log[33m.[39minfo[33m.[39mmock[33m.[39mcalls[33m.[39msome(([line]) [33m=>[39m[0m
+
+      at Object.toHaveBeenCalledTimes (__tests__/a-quiet-mqtt-session-is-restarted.test.js:45:49)
+
+  ● not more than once every 30 minutes
+
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+
+    Expected number of calls: 1
+    Received number of calls: 0
+
+    [0m [90m 59 |[39m   }
+     [90m 60 |[39m   [36mawait[39m jest[33m.[39madvanceTimersByTimeAsync([35m0[39m)[33m;[39m
+    [31m[1m>[22m[39m[90m 61 |[39m   expect(api[33m.[39mrr_mqtt_connector[33m.[39mreconnectClient)[33m.[39mtoHaveBeenCalledTimes([35m1[39m)[33m;[39m
+     [90m    |[39m                                                 [31m[1m^[22m[39m
+     [90m 62 |[39m
+     [90m 63 |[39m   [36mawait[39m jest[33m.[39madvanceTimersByTimeAsync([35m30[39m [33m*[39m [35m60[39m [33m*[39m [35m1000[39m)[33m;[39m
+     [90m 64 |[39m   [36mfor[39m ([36mlet[39m i [33m=[39m [35m0[39m[33m;[39m i [33m<[39m [35m3[39m[33m;[39m i [33m+=[39m [35m1[39m) {[0m
+
+      at Object.toHaveBeenCalledTimes (__tests__/a-quiet-mqtt-session-is-restarted.test.js:61:49)
+
+FAIL __tests__/a-delivering-mqtt-session-is-not-restarted.test.js
+  ● map requests whose 102 acknowledgement arrives do not restart the MQTT session
+
+    expect(received).toMatch(expected)
+
+    Expected pattern: /timed out/
+    Received string:  "MQTT session did not become ready within 10000ms."
+
+    [0m [90m 44 |[39m     [36mawait[39m jest[33m.[39madvanceTimersByTimeAsync([35m11[39m_000)[33m;[39m
+     [90m 45 |[39m     [36mconst[39m outcome [33m=[39m [36mawait[39m request[33m;[39m
+    [31m[1m>[22m[39m[90m 46 |[39m     expect([33mString[39m(outcome[33m?[39m[33m.[39mmessage))[33m.[39mtoMatch([35m/timed out/[39m)[33m;[39m
+     [90m    |[39m                                      [31m[1m^[22m[39m
+     [90m 47 |[39m   }
+     [90m 48 |[39m   [36mawait[39m jest[33m.[39madvanceTimersByTimeAsync([35m0[39m)[33m;[39m
+     [90m 49 |[39m[0m
+
+      at Object.toMatch (__tests__/a-delivering-mqtt-session-is-not-restarted.test.js:46:38)
+
+
+Test Suites: 7 failed, 157 passed, 164 total
+Tests:       9 failed, 2277 passed, 2286 total
+Snapshots:   0 total
+Time:        34.303 s
+Ran all test suites.
+Test results written to: ../../_temp/tests.json

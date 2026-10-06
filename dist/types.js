@@ -46,6 +46,8 @@ exports.HOMEKIT_STATE_SENSOR_KEYS = [
     "docked",
     "cleaning",
     "waterTankEmpty",
+    "dirtyWaterTankFull",
+    "cleaningFluidEmpty",
 ];
 function isHomeKitStateSensorKey(value) {
     return (typeof value === "string" &&

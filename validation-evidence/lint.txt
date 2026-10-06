@@ -1,0 +1,14 @@
+
+> homebridge-roborock-matter@3.36.0 lint
+> prettier --check .
+
+Checking formatting...
+[error] homebridge-ui/public/index.html: SyntaxError: Unexpected closing tag "section". It may happen when the tag has already been closed by another tag. For more info see https://www.w3.org/TR/html5/syntax.html#closing-elements-that-have-implied-end-tags (404:3)
+[error] [0m [90m 402 |[39m       [33m<[39m[33m/[39m[33mbutton[39m[33m>[39m
+[error]  [90m 403 |[39m     [33m<[39m[33m/[39m[33mdiv[39m[33m>[39m
+[error] [31m[1m>[22m[39m[90m 404 |[39m   [33m<[39m[33m/[39m[33msection[39m[33m>[39m
+[error]  [90m     |[39m   [31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m[31m[1m^[22m[39m
+[error]  [90m 405 |[39m
+[error]  [90m 406 |[39m   [33m<[39m[33msection[39m [36mclass[39m[33m=[39m[32m"panel"[39m[33m>[39m
+[error]  [90m 407 |[39m     [33m<[39m[33mdiv[39m [36mclass[39m[33m=[39m[32m"section-header"[39m[33m>[39m[0m
+All matched files use Prettier code style!

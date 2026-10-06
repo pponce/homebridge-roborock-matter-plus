@@ -120,7 +120,6 @@ class RoborockPlatform {
             enableMatterServiceArea: this.platformConfig.enableMatterServiceArea !== false,
             enableLiveRoomTracking: this.platformConfig.enableLiveRoomTracking !== false,
             cloudOnlyMode: Boolean(this.platformConfig.cloudOnlyMode),
-            enableMqttSingleRobotRecovery: this.platformConfig.enableMqttSingleRobotRecovery === true,
             enableMqttPreventiveRefresh: this.platformConfig.enableMqttPreventiveRefresh === true,
             enableMqttSessionRecovery: this.platformConfig.enableMqttSessionRecovery === true,
             log: this.log,
