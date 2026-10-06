@@ -32,6 +32,12 @@ const elements = {
   homeKitStateWaterTankEmpty: document.getElementById(
     "homekit-state-water-tank-empty"
   ),
+  homeKitStateDirtyWaterTankFull: document.getElementById(
+    "homekit-state-dirty-water-tank-full"
+  ),
+  homeKitStateCleaningFluidEmpty: document.getElementById(
+    "homekit-state-cleaning-fluid-empty"
+  ),
   homeKitActionSchedules: document.getElementById("homekit-action-schedules"),
   homeKitActionRoutines: document.getElementById("homekit-action-routines"),
   matterChargedBatteryThreshold: document.getElementById(
@@ -43,9 +49,6 @@ const elements = {
   ),
   enableMqttSessionRecovery: document.getElementById(
     "enableMqttSessionRecovery"
-  ),
-  enableMqttSingleRobotRecovery: document.getElementById(
-    "enableMqttSingleRobotRecovery"
   ),
   enableMqttPreventiveRefresh: document.getElementById(
     "enableMqttPreventiveRefresh"
@@ -102,11 +105,19 @@ const ACTION_SWITCH_ELEMENTS = {
 
 // Kept in the same order as HOMEKIT_STATE_SENSOR_KEYS in src/types.ts, for the
 // same reason as above.
-const STATE_SENSOR_KEYS = ["docked", "cleaning", "waterTankEmpty"];
+const STATE_SENSOR_KEYS = [
+  "docked",
+  "cleaning",
+  "waterTankEmpty",
+  "dirtyWaterTankFull",
+  "cleaningFluidEmpty",
+];
 const STATE_SENSOR_ELEMENTS = {
   docked: () => elements.homeKitStateDocked,
   cleaning: () => elements.homeKitStateCleaning,
   waterTankEmpty: () => elements.homeKitStateWaterTankEmpty,
+  dirtyWaterTankFull: () => elements.homeKitStateDirtyWaterTankFull,
+  cleaningFluidEmpty: () => elements.homeKitStateCleaningFluidEmpty,
 };
 
 function showToast(type, message) {
@@ -227,9 +238,6 @@ async function loadConfig() {
     if (elements.enableMqttSessionRecovery)
       elements.enableMqttSessionRecovery.checked =
         config.enableMqttSessionRecovery === true;
-    if (elements.enableMqttSingleRobotRecovery)
-      elements.enableMqttSingleRobotRecovery.checked =
-        config.enableMqttSingleRobotRecovery === true;
     if (elements.enableMqttPreventiveRefresh)
       elements.enableMqttPreventiveRefresh.checked =
         config.enableMqttPreventiveRefresh === true;
@@ -239,7 +247,6 @@ async function loadConfig() {
         config.preferCloudForMatterCommands ||
         config.enableMqttSessionRecovery ||
         config.enableMqttPreventiveRefresh ||
-        config.enableMqttSingleRobotRecovery ||
         config.cloudOnlyMode
     );
     elements.transientWarningThrottleHours.value =
@@ -669,7 +676,6 @@ const AUTO_SAVED_FIELDS = [
   "preferCloudForMatterCommands",
   "enableMqttSessionRecovery",
   "enableMqttPreventiveRefresh",
-  "enableMqttSingleRobotRecovery",
   "cloudOnlyMode",
   "transientWarningThrottleHours",
 ];
@@ -708,9 +714,6 @@ function getFormValues() {
     preferCloudForMatterCommands: getPreferCloudForMatterCommands(),
     enableMqttSessionRecovery: Boolean(
       elements.enableMqttSessionRecovery?.checked
-    ),
-    enableMqttSingleRobotRecovery: Boolean(
-      elements.enableMqttSingleRobotRecovery?.checked
     ),
     enableMqttPreventiveRefresh: Boolean(
       elements.enableMqttPreventiveRefresh?.checked
@@ -1769,6 +1772,9 @@ async function updatePluginConfig(patch) {
     configs.push(config);
   }
 
+  // Retired in v3.36: upstream now provides single-robot recovery by default.
+  delete config.enableMqttSingleRobotRecovery;
+
   Object.keys(patch).forEach((key) => {
     const value = patch[key];
     if (value === undefined) {
@@ -1955,9 +1961,6 @@ function init() {
     autoSave()
   );
   elements.enableMqttSessionRecovery?.addEventListener("change", () =>
-    autoSave()
-  );
-  elements.enableMqttSingleRobotRecovery?.addEventListener("change", () =>
     autoSave()
   );
   elements.enableMqttPreventiveRefresh?.addEventListener("change", () =>

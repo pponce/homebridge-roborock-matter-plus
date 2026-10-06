@@ -5,8 +5,6 @@
 const SILENCE_WINDOW_MS = 60_000;
 const SNAPSHOT_INTERVAL_MS = 30_000;
 const MAX_ROBOTS = 128;
-const SINGLE_ROBOT_WINDOW_MS = 15 * 60_000;
-const SINGLE_ROBOT_THRESHOLD = 3;
 
 /** @typedef {"raw" | "attributed" | "decoded" | "correlated" | "local"} ActivityStage */
 class MqttSessionDiagnostics {
@@ -29,8 +27,6 @@ class MqttSessionDiagnostics {
     };
     /** @type {Map<string, number>} */
     this.silentReads = new Map();
-    /** @type {Map<string, number[]>} */
-    this.singleRobotReads = new Map();
     /** @type {number | null} */
     this.lastPublishedAt = null;
     /** @type {boolean | null} */
@@ -52,7 +48,6 @@ class MqttSessionDiagnostics {
       local: null,
     };
     this.silentReads.clear();
-    this.singleRobotReads.clear();
     this.rawSilenceDuringRequest = null;
     this.lastReadTimeoutAt = null;
     this.emit(true);
@@ -63,7 +58,6 @@ class MqttSessionDiagnostics {
     this.connected = false;
     this.subscriptionAcknowledged = false;
     this.silentReads.clear();
-    this.singleRobotReads.clear();
     this.rawSilenceDuringRequest = null;
     this.lastReadTimeoutAt = null;
     this.emit(true);
@@ -72,6 +66,9 @@ class MqttSessionDiagnostics {
   /** @param {number} generation @param {unknown} error @param {unknown} granted */
   onSubscribe(generation, error, granted) {
     if (generation !== this.generation || !this.connected) return;
+    // mqtt.js may already own the resubscribe. Its successful no-op callback
+    // carries no grants: it is neither a SUBACK nor a refusal.
+    if (!error && Array.isArray(granted) && granted.length === 0) return;
     this.subscriptionAcknowledged =
       !error &&
       Array.isArray(granted) &&
@@ -86,7 +83,6 @@ class MqttSessionDiagnostics {
     if (stage === "raw") {
       this.rawSequence += 1;
       this.silentReads.clear();
-      this.singleRobotReads.clear();
     }
   }
 
@@ -116,18 +112,6 @@ class MqttSessionDiagnostics {
       requestWasSilent = this.rawSilenceDuringRequest;
       if (requestWasSilent) {
         if (
-          !this.singleRobotReads.has(duid) &&
-          this.singleRobotReads.size >= MAX_ROBOTS
-        ) {
-          const oldest = this.singleRobotReads.keys().next().value;
-          if (oldest !== undefined) this.singleRobotReads.delete(oldest);
-        }
-        const reads = this.singleRobotReads.get(duid) || [];
-        this.singleRobotReads.set(
-          duid,
-          [...reads, performance.now()].slice(-SINGLE_ROBOT_THRESHOLD)
-        );
-        if (
           !this.silentReads.has(duid) &&
           this.silentReads.size >= MAX_ROBOTS
         ) {
@@ -138,24 +122,12 @@ class MqttSessionDiagnostics {
       }
     }
     this.emit(true);
-    return {
-      ...this.snapshot(),
-      requestWasSilent,
-      singleRobotSilentReadCount: requestWasSilent
-        ? this.singleRobotReads.get(duid)?.length || 0
-        : 0,
-    };
+    // Exempt only this qualifying request, never a historical observation.
+    return { ...this.snapshot(), requestWasSilent };
   }
 
   prune() {
     const cutoff = performance.now() - SILENCE_WINDOW_MS;
-    for (const [duid, reads] of this.singleRobotReads) {
-      const recent = reads.filter(
-        (at) => at >= performance.now() - SINGLE_ROBOT_WINDOW_MS
-      );
-      if (recent.length) this.singleRobotReads.set(duid, recent);
-      else this.singleRobotReads.delete(duid);
-    }
     for (const [duid, at] of this.silentReads) {
       if (at < cutoff) this.silentReads.delete(duid);
     }
@@ -185,12 +157,6 @@ class MqttSessionDiagnostics {
       silentReadRobotCount: this.silentReads.size,
       correlatedSilenceObserved: this.silentReads.size >= 2,
       observationWindowMs: SILENCE_WINDOW_MS,
-      singleRobotSilentReadCount: Math.max(
-        0,
-        ...[...this.singleRobotReads.values()].map((reads) => reads.length)
-      ),
-      singleRobotThreshold: SINGLE_ROBOT_THRESHOLD,
-      singleRobotWindowMs: SINGLE_ROBOT_WINDOW_MS,
     };
   }
 

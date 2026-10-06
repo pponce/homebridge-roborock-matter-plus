@@ -29,6 +29,18 @@ exports.STATE_SENSOR_DEFINITIONS = [
         summary: "reads Closed while the robot reports its clean-water tank empty and Open otherwise",
         restingState: false,
     },
+    {
+        key: "dirtyWaterTankFull",
+        nameSuffix: "Dirty Water Tank Full",
+        summary: "reads Closed while the dock reports its dirty-water tank full and Open otherwise",
+        restingState: false,
+    },
+    {
+        key: "cleaningFluidEmpty",
+        nameSuffix: "Cleaning Fluid Empty",
+        summary: "reads Closed while the dock reports its cleaning-fluid cartridge empty and Open otherwise",
+        restingState: false,
+    },
 ];
 function getStateSensorDefinition(key) {
     return exports.STATE_SENSOR_DEFINITIONS.find((definition) => definition.key === key);

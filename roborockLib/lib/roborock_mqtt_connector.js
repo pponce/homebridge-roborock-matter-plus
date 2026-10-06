@@ -8,6 +8,7 @@ const Parser = require("binary-parser").Parser;
 const zlib = require("zlib");
 const roborockCrypto = require("./roborockCrypto");
 const { describeDevice } = require("./describeDevice");
+const { noteLateReply } = require("./lateReplies");
 const {
   describeReplyRefusal,
   createRefusalError,
@@ -51,6 +52,28 @@ const photoBuffers = new Map();
 // Count protocol-301 frames discarded per robot so the normal info-level
 // give-up message can distinguish a silent robot from a plugin-side drop.
 const droppedFrames = new Map();
+
+function isRpcReplyFrame(data) {
+  const protocol = Number(data?.protocol);
+  if (protocol === 102) {
+    return true;
+  }
+  if (protocol !== 4 && protocol !== 5) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(String(data.payload));
+    return (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      parsed.dps !== null &&
+      typeof parsed.dps === "object" &&
+      Object.prototype.hasOwnProperty.call(parsed.dps, "102")
+    );
+  } catch {
+    return false;
+  }
+}
 
 function noteDroppedFrame(duid, reason) {
   let entry = droppedFrames.get(duid);
@@ -301,6 +324,25 @@ class roborock_mqtt_connector {
       return;
     }
 
+    candidate.on("packetreceive", (packet) => {
+      if (
+        !this.isCurrentSession(candidate, generation) ||
+        packet.cmd !== "suback" ||
+        !this.socketConnected
+      )
+        return;
+      const pending = this.pendingSubscription;
+      if (
+        !pending ||
+        pending.candidate !== candidate ||
+        pending.observationGeneration !== this.sessionDiagnostics.generation
+      )
+        return;
+      pending.resolve(
+        packet.granted.map((qos) => ({ topic: pending.topic, qos }))
+      );
+    });
+
     candidate.on("connect", (result) => {
       if (!this.isCurrentSession(candidate, generation)) return;
       this.sessionDiagnostics.onConnect();
@@ -366,9 +408,17 @@ class roborock_mqtt_connector {
     try {
       const granted = await Promise.race([
         new Promise((resolve, reject) => {
-          candidate.subscribe(topic, (error, grants) =>
-            error ? reject(error) : resolve(grants)
-          );
+          this.pendingSubscription = {
+            candidate,
+            observationGeneration,
+            topic,
+            resolve,
+          };
+          candidate.subscribe(topic, (error, grants) => {
+            if (error) reject(error);
+            else if (!Array.isArray(grants) || grants.length > 0)
+              resolve(grants);
+          });
         }),
         new Promise((_, reject) => {
           timer = setTimeout(
@@ -429,6 +479,12 @@ class roborock_mqtt_connector {
         )
       );
     } finally {
+      if (
+        this.pendingSubscription?.observationGeneration ===
+          observationGeneration &&
+        this.pendingSubscription?.candidate === candidate
+      )
+        this.pendingSubscription = null;
       if (timer) clearTimeout(timer);
     }
   }
@@ -570,7 +626,7 @@ class roborock_mqtt_connector {
       // this.adapter.log.debug(`MESSAGE RECEIVED for duid ${duid} with key: ${this.adapter.localKeys.get(duid)} data: ${JSON.stringify(data)}`);
 
       // this.adapter.log.debug("Protocol: " + data.protocol);
-      if (data.protocol == 102) {
+      if (isRpcReplyFrame(data)) {
         const parsedPayload = JSON.parse(data.payload);
         let dps;
         if (typeof parsedPayload.dps["102"] != "undefined") {
@@ -654,6 +710,8 @@ class roborock_mqtt_connector {
           } else {
             pending.resolve(dps.result);
           }
+        } else if (!pending) {
+          noteLateReply(this.adapter, duid, dps.id, "cloud");
         }
         // protocol 300 seems to be for get_photo 0 only. get_photo 0 is for large images. 1 is for small images.
       } else if (data.protocol == 300) {
@@ -774,10 +832,23 @@ class roborock_mqtt_connector {
             // this.adapter.log.debug("raw 301: " + decrypted);
 
             if (!this.adapter.pendingRequests.has(data2.id)) {
-              noteDroppedFrame(duid, "no-request-waiting");
-              this.adapter.log.debug(
-                `Received a protocol 301 message for ${duid} with id ${data2.id}, but no request is waiting for that id. It was decrypted successfully, so the robot did answer something; either this is an unsolicited map push, or a reply arrived after its request had already timed out.`
+              // The other silent drop on this path. An unsolicited map push
+              // lands here legitimately, but so does a reply whose id we
+              // failed to match — and the waiting request then times out
+              // with nothing in the log to say a reply had arrived. Since
+              // 3.35.0 a reply to a request that had ALREADY timed out is
+              // told apart and counted as late, not as discarded: it is the
+              // robot being slow, not this side throwing an answer away.
+              const late = noteLateReply(this.adapter, duid, data2.id, "cloud");
+              noteDroppedFrame(
+                duid,
+                late ? "arrived-after-timeout" : "no-request-waiting"
               );
+              if (!late) {
+                this.adapter.log.debug(
+                  `Received a protocol 301 message for ${duid} with id ${data2.id}, but no request is waiting for that id. It was decrypted successfully, so the robot did answer something; either this is an unsolicited map push, or a reply to a request this plugin did not send.`
+                );
+              }
             }
 
             if (this.adapter.pendingRequests.has(data2.id)) {
@@ -1056,7 +1127,7 @@ class roborock_mqtt_connector {
     for (const [id, pending] of this.pendingCloudRequests(generation)) {
       this.adapter.clearTimeout(pending.timeout);
       this.adapter.pendingRequests.delete(id);
-      pending.reject(
+      (pending.abandon ?? pending.reject)(
         new MqttSessionReplacedError({
           generation,
           method: pending.method,
@@ -1072,7 +1143,7 @@ class roborock_mqtt_connector {
       if (pending.sessionGeneration !== generation) continue;
       this.adapter.clearTimeout(pending.timeout);
       this.adapter.pendingB01MapRequests.delete(duid);
-      pending.reject(
+      (pending.abandon ?? pending.reject)(
         new MqttSessionReplacedError({
           generation,
           method: pending.method,
@@ -1408,6 +1479,7 @@ function resolveB01PendingResponse(adapter, duid, dps) {
 
 module.exports = {
   describeDroppedFrames,
+  isRpcReplyFrame,
   resolveB01PendingResponse,
   roborock_mqtt_connector,
   parseProtocol301Header,

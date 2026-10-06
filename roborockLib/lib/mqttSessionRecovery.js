@@ -2,6 +2,7 @@
 
 const PREVENTIVE_AGE_MS = 4 * 60 * 60 * 1000;
 const COOLDOWN_MS = 60_000;
+const SILENCE_COOLDOWN_MS = 30 * 60_000;
 const READY_TIMEOUT_MS = 20_000;
 const DRAIN_MS = 500;
 
@@ -12,8 +13,6 @@ class MqttSessionRecovery {
     this.adapter = connector.adapter;
     this.preventiveRefreshEnabled =
       this.adapter.config.enableMqttPreventiveRefresh === true;
-    this.singleRobotRecoveryEnabled =
-      this.adapter.config.enableMqttSingleRobotRecovery === true;
     this.installed = new WeakSet();
     /** @type {string | null} */
     this.lastReason = null;
@@ -33,6 +32,34 @@ class MqttSessionRecovery {
     this.installed.add(candidate);
     const connector = this.connector;
     const current = () => !this.stopped && connector.client === candidate;
+    const acknowledge = (generation, error, granted) => {
+      if (
+        !current() ||
+        generation !== connector.sessionDiagnostics.generation ||
+        !connector.sessionDiagnostics.snapshot().connected
+      )
+        return;
+      // mqtt.js handles resubscription itself; an empty callback is not a SUBACK.
+      if (!error && Array.isArray(granted) && granted.length === 0) return;
+      connector.sessionDiagnostics.onSubscribe(generation, error, granted);
+      connector.connected =
+        connector.sessionDiagnostics.snapshot().subscriptionAcknowledged;
+      if (connector.connected) this.readyAt = performance.now();
+      else {
+        this.readyAt = null;
+        connector.logConnectionIssue(
+          "Roborock MQTT reply subscription was not acknowledged; cloud sends remain paused."
+        );
+      }
+    };
+    candidate.on("packetreceive", (packet) => {
+      if (packet.cmd === "suback")
+        acknowledge(
+          connector.sessionDiagnostics.generation,
+          null,
+          packet.granted.map((qos) => ({ qos }))
+        );
+    });
     candidate.on("connect", () => {
       if (!current()) return;
       connector.clearInitialConnectTimeout();
@@ -42,19 +69,7 @@ class MqttSessionRecovery {
       candidate.subscribe(
         `rr/m/o/${connector.rriot.u}/${connector.mqttUser}/#`,
         (error, granted) => {
-          if (
-            !current() ||
-            generation !== connector.sessionDiagnostics.generation
-          )
-            return;
-          connector.sessionDiagnostics.onSubscribe(generation, error, granted);
-          connector.connected =
-            connector.sessionDiagnostics.snapshot().subscriptionAcknowledged;
-          if (connector.connected) this.readyAt = performance.now();
-          else
-            connector.logConnectionIssue(
-              "Roborock MQTT reply subscription was not acknowledged; cloud sends remain paused."
-            );
+          acknowledge(generation, error, granted);
         }
       );
     });
@@ -101,12 +116,6 @@ class MqttSessionRecovery {
       observation?.correlatedSilenceObserved
     ) {
       void this.recreate("correlated-silence");
-    } else if (
-      this.singleRobotRecoveryEnabled &&
-      observation?.requestWasSilent &&
-      observation.singleRobotSilentReadCount >= 3
-    ) {
-      void this.recreate("repeated-single-robot-silence");
     }
   }
 
@@ -114,13 +123,18 @@ class MqttSessionRecovery {
     return {
       enabled: true,
       preventiveRefreshEnabled: this.preventiveRefreshEnabled,
-      singleRobotRecoveryEnabled: this.singleRobotRecoveryEnabled,
       inProgress: this.recovering,
       lastReason: this.lastReason,
       lastResult: this.lastResult,
       cooldownRemainingMs: Math.max(
         0,
         Math.round(this.nextAllowedAt - performance.now())
+      ),
+      silenceCooldownRemainingMs: Math.max(
+        0,
+        (this.adapter.cloudSessionHealth?.lastRestartAt || 0) +
+          SILENCE_COOLDOWN_MS -
+          Date.now()
       ),
       consecutiveFailures: this.failures,
     };
@@ -149,7 +163,8 @@ class MqttSessionRecovery {
     for (const { map, key, request } of this.pending()) {
       this.adapter.clearTimeout(request.timeout);
       map.delete(key);
-      request.reject(
+      // Teardown is not a robot reply; keep upstream silence/breaker evidence.
+      (request.abandon ?? request.reject)(
         Object.assign(
           new Error(
             "The MQTT session was replaced before a reply arrived. The command outcome is unknown; it was not replayed."
@@ -197,8 +212,23 @@ class MqttSessionRecovery {
     } else candidate.end(true);
   }
 
+  canRecoverSilence() {
+    const lastRestartAt = this.adapter.cloudSessionHealth?.lastRestartAt || 0;
+    return (
+      !this.stopped &&
+      !this.inFlight &&
+      performance.now() >= this.nextAllowedAt &&
+      (!lastRestartAt || Date.now() - lastRestartAt >= SILENCE_COOLDOWN_MS)
+    );
+  }
+
   recreate(reason) {
     if (this.inFlight) return this.inFlight;
+    if (
+      (reason === "correlated-silence" || reason === "cloud-silence") &&
+      !this.canRecoverSilence()
+    )
+      return Promise.resolve(false);
     if (this.stopped || performance.now() < this.nextAllowedAt) {
       this.connector.sessionDiagnostics.emit(true);
       return Promise.resolve(false);
@@ -239,13 +269,19 @@ class MqttSessionRecovery {
       // New inbound evidence during a reactive drain also cancels the need.
       if (
         (reason === "preventive" && this.pending().length) ||
-        ((reason === "correlated-silence" ||
-          reason === "repeated-single-robot-silence") &&
+        (reason === "correlated-silence" &&
           before.rawSequence !==
             connector.sessionDiagnostics.captureRequest().rawSequence)
       ) {
         this.lastResult = "deferred";
         return false;
+      }
+      // Both upstream's baseline and correlated recovery use this timestamp.
+      // Record actual teardown, including preventive/connection recovery, so a
+      // second silence policy cannot immediately replace the new session again.
+      if (this.adapter.cloudSessionHealth) {
+        this.adapter.cloudSessionHealth.lastRestartAt = Date.now();
+        this.adapter.cloudSessionHealth.consecutiveSilences = 0;
       }
       this.rejectPending();
       connector.discardSessionFragments();
