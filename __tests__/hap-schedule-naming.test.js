@@ -662,21 +662,29 @@ describe("HAP schedule names and stable group identity", () => {
   });
 });
 
-
 test("repeated same-state taps share the pending write and confirmation", async () => {
   jest.useFakeTimers();
   try {
     const platform = makePlatform();
     let finish;
-    const command = jest.fn(() => new Promise(resolve => { finish = resolve; }));
+    const command = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
     platform.roborockAPI = {
       getServerTimers: jest.fn().mockResolvedValue([["timer-dedup", "on"]]),
-      vacuums: {"device-1": {command}},
+      vacuums: { "device-1": { command } },
     };
     const accessory = new FakeAccessory("Test Vacuum Schedules");
     const coordinator = makeCoordinator(platform, accessory);
-    coordinator.sync([{id: "timer-dedup", enabled: false, timer: ["timer-dedup", "off"]}]);
-    const on = switchService(accessory, "timer-dedup").getCharacteristic(Characteristic.On);
+    coordinator.sync([
+      { id: "timer-dedup", enabled: false, timer: ["timer-dedup", "off"] },
+    ]);
+    const on = switchService(accessory, "timer-dedup").getCharacteristic(
+      Characteristic.On
+    );
     const first = on.setHandler(true);
     await jest.advanceTimersByTimeAsync(2000);
     expect(command).toHaveBeenCalledTimes(1);
@@ -688,55 +696,86 @@ test("repeated same-state taps share the pending write and confirmation", async 
     await Promise.all([first, second]);
     expect(command).toHaveBeenCalledTimes(1);
     expect(on.value).toBe(true);
-  } finally { jest.useRealTimers(); }
+  } finally {
+    jest.useRealTimers();
+  }
 });
-
 
 function optimisticFixture() {
   const platform = makePlatform();
   const accessory = new FakeAccessory("Test Vacuum Schedules");
   const coordinator = makeCoordinator(platform, accessory);
-  coordinator.sync([{id: "optimistic", enabled: false, timer: ["optimistic", "off"]}]);
+  coordinator.sync([
+    { id: "optimistic", enabled: false, timer: ["optimistic", "off"] },
+  ]);
   const calls = [];
-  coordinator.enqueueScheduleWrite = jest.fn(() => new Promise((resolve, reject) => calls.push({resolve,reject})));
-  return {platform, coordinator, calls, on: switchService(accessory, "optimistic").getCharacteristic(Characteristic.On)};
+  coordinator.enqueueScheduleWrite = jest.fn(
+    () => new Promise((resolve, reject) => calls.push({ resolve, reject }))
+  );
+  return {
+    platform,
+    coordinator,
+    calls,
+    on: switchService(accessory, "optimistic").getCharacteristic(
+      Characteristic.On
+    ),
+  };
 }
 
 test("schedule press acknowledges immediately and failure rolls the characteristic back with an explicit warning", async () => {
-  const {platform, on, calls} = optimisticFixture();
+  const { platform, on, calls } = optimisticFixture();
   expect(on.setHandler(true)).toBeUndefined();
   expect(on.value).toBe(true);
   await Promise.resolve();
   calls[0].reject(new Error("cloud refused"));
-  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
   expect(on.value).toBe(false);
-  expect(platform.log.warn).toHaveBeenCalledWith(expect.stringMatching(/Schedule display rollback.*device-1\/optimistic.*cloud refused.*not a user change/));
+  expect(platform.log.warn).toHaveBeenCalledWith(
+    expect.stringMatching(
+      /Schedule display rollback.*device-1\/optimistic.*cloud refused.*not a user change/
+    )
+  );
   on.setHandler(true);
   expect(on.value).toBe(false);
   expect(calls).toHaveLength(1);
 });
 
 test("an older failure cannot overwrite a newer pending schedule intent", async () => {
-  const {on, calls} = optimisticFixture();
-  on.setHandler(true); await Promise.resolve();
-  on.setHandler(false); await Promise.resolve();
-  on.setHandler(true); await Promise.resolve();
+  const { on, calls } = optimisticFixture();
+  on.setHandler(true);
+  await Promise.resolve();
+  on.setHandler(false);
+  await Promise.resolve();
+  on.setHandler(true);
+  await Promise.resolve();
   expect(on.value).toBe(true);
   calls[0].reject(new Error("old failure"));
-  await Promise.resolve(); await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
   expect(on.value).toBe(true);
-  calls[1].resolve(true); await Promise.resolve(); await Promise.resolve();
+  calls[1].resolve(true);
+  await Promise.resolve();
+  await Promise.resolve();
   expect(on.value).toBe(true);
   calls[2].reject(new Error("latest failure"));
-  await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
   expect(on.value).toBe(false);
 });
 
 test("an authoritative refresh during a pending write does not erase its provisional display", async () => {
-  const {on, calls, coordinator} = optimisticFixture();
-  on.setHandler(true); await Promise.resolve();
-  coordinator.sync([{id: "optimistic", enabled: false, timer: ["optimistic", "off"]}]);
+  const { on, calls, coordinator } = optimisticFixture();
+  on.setHandler(true);
+  await Promise.resolve();
+  coordinator.sync([
+    { id: "optimistic", enabled: false, timer: ["optimistic", "off"] },
+  ]);
   expect(on.value).toBe(true);
-  calls[0].resolve(true); await Promise.resolve(); await Promise.resolve();
+  calls[0].resolve(true);
+  await Promise.resolve();
+  await Promise.resolve();
   expect(on.value).toBe(true);
 });
