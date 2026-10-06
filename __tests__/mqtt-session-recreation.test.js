@@ -486,25 +486,42 @@ test("session teardown does not count an abandoned request as a robot reply", as
   expect(await recovery).toBe(true);
 });
 
-
 test("saved diagnostics describe successful recreation and both cooldowns", async () => {
   adapter.cloudSessionHealth = { lastRestartAt: 0, consecutiveSilences: 0 };
-  expect(snapshot().recovery).toMatchObject({lastReason: null, lastResult: "never", consecutiveFailures: 0});
+  expect(snapshot().recovery).toMatchObject({
+    lastReason: null,
+    lastResult: "never",
+    consecutiveFailures: 0,
+  });
   const attempt = connector.reconnectClient(true);
-  expect(snapshot().recovery).toMatchObject({inProgress: true, lastReason: "connection-unavailable", lastResult: "in-progress"});
+  expect(snapshot().recovery).toMatchObject({
+    inProgress: true,
+    lastReason: "connection-unavailable",
+    lastResult: "in-progress",
+  });
   await jest.advanceTimersByTimeAsync(0);
   await replacementReady();
   await expect(attempt).resolves.toBe(true);
-  expect(snapshot().recovery).toMatchObject({inProgress: false, lastResult: "succeeded", consecutiveFailures: 0});
+  expect(snapshot().recovery).toMatchObject({
+    inProgress: false,
+    lastResult: "succeeded",
+    consecutiveFailures: 0,
+  });
   expect(snapshot().recovery.cooldownRemainingMs).toBeGreaterThan(0);
-  expect(snapshot().recovery.silenceCooldownRemainingMs).toBeGreaterThan(29 * 60_000);
+  expect(snapshot().recovery.silenceCooldownRemainingMs).toBeGreaterThan(
+    29 * 60_000
+  );
 });
 
 test("failed recreation persists its result and failure backoff", async () => {
   const attempt = connector.reconnectClient(true);
   await jest.advanceTimersByTimeAsync(20_100);
   await expect(attempt).resolves.toBe(false);
-  expect(snapshot().recovery).toMatchObject({inProgress: false, lastResult: "failed", consecutiveFailures: 1});
+  expect(snapshot().recovery).toMatchObject({
+    inProgress: false,
+    lastResult: "failed",
+    consecutiveFailures: 1,
+  });
   expect(snapshot().recovery.cooldownRemainingMs).toBeGreaterThan(0);
   const previous = snapshot().recovery.lastReason;
   await connector.recovery.recreate("preventive");

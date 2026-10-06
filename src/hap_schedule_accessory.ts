@@ -1926,7 +1926,9 @@ class RoborockHapScheduleSwitchAccessory {
 
   private schedule: RoborockSchedule;
   private disposed = false;
-  private pendingCommand: { enabled: boolean; promise: Promise<void> } | undefined;
+  private pendingCommand:
+    | { enabled: boolean; promise: Promise<void> }
+    | undefined;
 
   constructor(
     private readonly platform: RoborockPlatform,
@@ -2042,7 +2044,8 @@ class RoborockHapScheduleSwitchAccessory {
       return this.pendingCommand.promise;
     }
     const promise = this.performScheduleChange(enabled).finally(() => {
-      if (this.pendingCommand?.promise === promise) this.pendingCommand = undefined;
+      if (this.pendingCommand?.promise === promise)
+        this.pendingCommand = undefined;
     });
     this.pendingCommand = { enabled, promise };
     return promise;

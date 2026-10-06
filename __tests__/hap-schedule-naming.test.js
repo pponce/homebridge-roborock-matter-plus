@@ -662,21 +662,29 @@ describe("HAP schedule names and stable group identity", () => {
   });
 });
 
-
 test("repeated same-state taps share the pending write and confirmation", async () => {
   jest.useFakeTimers();
   try {
     const platform = makePlatform();
     let finish;
-    const command = jest.fn(() => new Promise(resolve => { finish = resolve; }));
+    const command = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
     platform.roborockAPI = {
       getServerTimers: jest.fn().mockResolvedValue([["timer-dedup", "on"]]),
-      vacuums: {"device-1": {command}},
+      vacuums: { "device-1": { command } },
     };
     const accessory = new FakeAccessory("Test Vacuum Schedules");
     const coordinator = makeCoordinator(platform, accessory);
-    coordinator.sync([{id: "timer-dedup", enabled: false, timer: ["timer-dedup", "off"]}]);
-    const on = switchService(accessory, "timer-dedup").getCharacteristic(Characteristic.On);
+    coordinator.sync([
+      { id: "timer-dedup", enabled: false, timer: ["timer-dedup", "off"] },
+    ]);
+    const on = switchService(accessory, "timer-dedup").getCharacteristic(
+      Characteristic.On
+    );
     const first = on.setHandler(true);
     await jest.advanceTimersByTimeAsync(2000);
     expect(command).toHaveBeenCalledTimes(1);
@@ -688,5 +696,7 @@ test("repeated same-state taps share the pending write and confirmation", async 
     await Promise.all([first, second]);
     expect(command).toHaveBeenCalledTimes(1);
     expect(on.value).toBe(true);
-  } finally { jest.useRealTimers(); }
+  } finally {
+    jest.useRealTimers();
+  }
 });
