@@ -135,7 +135,8 @@ class MqttSessionRecovery {
     for (const { map, key, request } of this.pending()) {
       this.adapter.clearTimeout(request.timeout);
       map.delete(key);
-      request.reject(
+      // Teardown is not a robot reply; keep upstream silence/breaker evidence.
+      (request.abandon ?? request.reject)(
         Object.assign(
           new Error(
             "The MQTT session was replaced before a reply arrived. The command outcome is unknown; it was not replayed."
