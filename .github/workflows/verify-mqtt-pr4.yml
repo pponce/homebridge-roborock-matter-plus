@@ -24,7 +24,7 @@ jobs:
           if ! git diff --cached --quiet; then
             git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format MQTT reconnect review candidate [skip ci]"
           fi
-          git push origin HEAD:refs/heads/mqtt-pr4-v336-verified
+          git push origin HEAD:refs/heads/mqtt-pr4-v336-verified-r2
       - name: Formatting
         id: lint
         continue-on-error: true
@@ -56,7 +56,7 @@ jobs:
           done
           git add -f validation-evidence
           git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record reconnect review validation evidence [skip ci]"
-          git push origin HEAD:refs/heads/mqtt-pr4-v336-verified
+          git push origin HEAD:refs/heads/mqtt-pr4-v336-verified-r2
       - name: Require all gates
         if: always()
         run: |
