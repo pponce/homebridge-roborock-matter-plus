@@ -476,7 +476,6 @@ test("a reply resets the baseline streak with experimental recovery enabled", as
   expect(adapter.cloudSessionHealth.consecutiveSilences).toBe(1);
 });
 
-
 test("session teardown does not count an abandoned request as a robot reply", async () => {
   const request = await startRequest("robot-a", "app_start");
   const recovery = connector.reconnectClient(true);
