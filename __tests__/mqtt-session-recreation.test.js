@@ -71,7 +71,14 @@ function acknowledge(granted = [{ qos: 1 }]) {
     cmd: "suback",
     granted: granted.map((x) => x.qos),
   });
-  if (!client.knownTopic) client.subscriptions.at(-1)(null, granted.map(g => ({ topic: client.subscribe.mock.calls.at(-1)[0], ...g })));
+  if (!client.knownTopic)
+    client.subscriptions.at(-1)(
+      null,
+      granted.map((g) => ({
+        topic: client.subscribe.mock.calls.at(-1)[0],
+        ...g,
+      }))
+    );
   client.knownTopic = granted.every((x) => x.qos < 128);
 }
 
@@ -475,7 +482,6 @@ test("a reply resets the baseline streak with experimental recovery enabled", as
   expect(mockClients).toHaveLength(1);
   expect(adapter.cloudSessionHealth.consecutiveSilences).toBe(1);
 });
-
 
 test("session teardown does not count an abandoned request as a robot reply", async () => {
   const request = await startRequest("robot-a", "app_start");

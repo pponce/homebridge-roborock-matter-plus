@@ -130,7 +130,12 @@ class MqttSessionRecovery {
         0,
         Math.round(this.nextAllowedAt - performance.now())
       ),
-      silenceCooldownRemainingMs: Math.max(0, (this.adapter.cloudSessionHealth?.lastRestartAt || 0) + SILENCE_COOLDOWN_MS - Date.now()),
+      silenceCooldownRemainingMs: Math.max(
+        0,
+        (this.adapter.cloudSessionHealth?.lastRestartAt || 0) +
+          SILENCE_COOLDOWN_MS -
+          Date.now()
+      ),
       consecutiveFailures: this.failures,
     };
   }

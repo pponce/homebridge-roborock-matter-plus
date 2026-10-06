@@ -75,7 +75,6 @@ function isRpcReplyFrame(data) {
   }
 }
 
-
 function noteDroppedFrame(duid, reason) {
   let entry = droppedFrames.get(duid);
   if (!entry) {
@@ -326,10 +325,22 @@ class roborock_mqtt_connector {
     }
 
     candidate.on("packetreceive", (packet) => {
-      if (!this.isCurrentSession(candidate, generation) || packet.cmd !== "suback" || !this.socketConnected) return;
+      if (
+        !this.isCurrentSession(candidate, generation) ||
+        packet.cmd !== "suback" ||
+        !this.socketConnected
+      )
+        return;
       const pending = this.pendingSubscription;
-      if (!pending || pending.candidate !== candidate || pending.observationGeneration !== this.sessionDiagnostics.generation) return;
-      pending.resolve(packet.granted.map(qos => ({ topic: pending.topic, qos })));
+      if (
+        !pending ||
+        pending.candidate !== candidate ||
+        pending.observationGeneration !== this.sessionDiagnostics.generation
+      )
+        return;
+      pending.resolve(
+        packet.granted.map((qos) => ({ topic: pending.topic, qos }))
+      );
     });
 
     candidate.on("connect", (result) => {
@@ -397,10 +408,16 @@ class roborock_mqtt_connector {
     try {
       const granted = await Promise.race([
         new Promise((resolve, reject) => {
-          this.pendingSubscription = { candidate, observationGeneration, topic, resolve };
+          this.pendingSubscription = {
+            candidate,
+            observationGeneration,
+            topic,
+            resolve,
+          };
           candidate.subscribe(topic, (error, grants) => {
             if (error) reject(error);
-            else if (!Array.isArray(grants) || grants.length > 0) resolve(grants);
+            else if (!Array.isArray(grants) || grants.length > 0)
+              resolve(grants);
           });
         }),
         new Promise((_, reject) => {
@@ -462,7 +479,12 @@ class roborock_mqtt_connector {
         )
       );
     } finally {
-      if (this.pendingSubscription?.observationGeneration === observationGeneration && this.pendingSubscription?.candidate === candidate) this.pendingSubscription = null;
+      if (
+        this.pendingSubscription?.observationGeneration ===
+          observationGeneration &&
+        this.pendingSubscription?.candidate === candidate
+      )
+        this.pendingSubscription = null;
       if (timer) clearTimeout(timer);
     }
   }
@@ -817,12 +839,7 @@ class roborock_mqtt_connector {
               // 3.35.0 a reply to a request that had ALREADY timed out is
               // told apart and counted as late, not as discarded: it is the
               // robot being slow, not this side throwing an answer away.
-              const late = noteLateReply(
-                this.adapter,
-                duid,
-                data2.id,
-                "cloud"
-              );
+              const late = noteLateReply(this.adapter, duid, data2.id, "cloud");
               noteDroppedFrame(
                 duid,
                 late ? "arrived-after-timeout" : "no-request-waiting"

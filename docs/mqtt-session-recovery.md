@@ -50,7 +50,6 @@ Lifecycle logs contain reasons, generations, timing and cooldowns, not credentia
 or request payloads. The regression tests drive real connector callbacks and
 request-queue timeouts; upstream baseline tests are retained, with additional tests for overlapping triggers and the shared cooldown.
 
-
 ## Home branch integration with v3.36.0
 
 The old `enableMqttSingleRobotRecovery` setting is retired. Any saved value is
