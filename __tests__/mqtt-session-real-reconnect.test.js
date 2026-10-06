@@ -23,7 +23,7 @@ async function until(predicate) {
   }
 }
 
-test("real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCRIBE per connection", async () => {
+test.each([false, true])("real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCRIBE per connection (recovery=%s)", async (enableMqttSessionRecovery) => {
   const connections = [];
   const errors = [];
   const callbackGrants = [];
@@ -81,7 +81,7 @@ test("real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCR
   });
   let latest;
   const adapter = {
-    config: {},
+    config: { enableMqttSessionRecovery },
     log: {
       debug: jest.fn(),
       info: jest.fn(),
@@ -119,6 +119,7 @@ test("real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCR
     expect(
       callbackGrants.some(({ error, grants }) => !error && grants?.length === 0)
     ).toBe(true);
+    if (enableMqttSessionRecovery) expect(connector.isConnected()).toBe(false);
     connections[1].socket.write(connections[1].pendingSuback);
     await until(() => receivedSubacks === 2);
     // This assertion fails on the old connector even though both SUBACKs arrived.
@@ -132,6 +133,7 @@ test("real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCR
     expect(connections[1].subscriptions[0].subscriptions).toEqual(
       connections[0].subscriptions[0].subscriptions
     );
+    expect(connector.isConnected()).toBe(true);
     expect(errors).toEqual([]);
   } finally {
     connector.disconnect();
