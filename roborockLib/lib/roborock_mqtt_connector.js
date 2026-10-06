@@ -1110,7 +1110,7 @@ class roborock_mqtt_connector {
     for (const [id, pending] of this.pendingCloudRequests(generation)) {
       this.adapter.clearTimeout(pending.timeout);
       this.adapter.pendingRequests.delete(id);
-      pending.reject(
+      (pending.abandon ?? pending.reject)(
         new MqttSessionReplacedError({
           generation,
           method: pending.method,
@@ -1126,7 +1126,7 @@ class roborock_mqtt_connector {
       if (pending.sessionGeneration !== generation) continue;
       this.adapter.clearTimeout(pending.timeout);
       this.adapter.pendingB01MapRequests.delete(duid);
-      pending.reject(
+      (pending.abandon ?? pending.reject)(
         new MqttSessionReplacedError({
           generation,
           method: pending.method,
