@@ -6203,6 +6203,8 @@ class Roborock {
       return existing.promise;
     }
 
+    await this.rr_mqtt_connector.waitUntilReady?.();
+
     const messageID = b01Q7Adapter.createB01MessageId();
     const timestamp = Math.floor(Date.now() / 1000);
     const payload = await this.message.buildPayload(
@@ -6228,9 +6230,16 @@ class Roborock {
 
     let entry;
     const promise = new Promise((resolve, reject) => {
+      entry = { resolve, reject, timeout: undefined };
+    });
+    entry.promise = promise;
+    this.pendingB01MapRequests.set(duid, entry);
+    try {
+      this.rr_mqtt_connector.sendMessage(duid, roborockMessage);
+      if (this.pendingB01MapRequests.get(duid) !== entry) return promise;
       const timeout = this.setTimeout(() => {
         this.pendingB01MapRequests.delete(duid);
-        reject(
+        entry.reject(
           new Error(
             `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
           )
@@ -6239,11 +6248,11 @@ class Roborock {
       if (typeof timeout?.unref === "function") {
         timeout.unref();
       }
-      entry = { resolve, reject, timeout };
-    });
-    entry.promise = promise;
-    this.pendingB01MapRequests.set(duid, entry);
-    this.rr_mqtt_connector.sendMessage(duid, roborockMessage);
+      entry.timeout = timeout;
+    } catch (error) {
+      this.pendingB01MapRequests.delete(duid);
+      entry.reject(error);
+    }
     return promise;
   }
 
