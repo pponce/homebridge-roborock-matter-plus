@@ -1,0 +1,100 @@
+          return;
+        }
+        const previous = this.displayName;
+        this.displayName = displayName;
+        const service = this.accessory.getServiceById(
+          this.platform.Service.Switch,
+          this.subtype
+        );
+        if (service) {
+          this.applyName(service, displayName);
+        }·
+        // SAY IT, because the one thing the plugin cannot do is the thing the
+        // user expects. Issue #22: a Routine renamed in the Roborock app kept its
+        // old name in the Home app. The new name IS sent — `Name` and, unless the
+        // user has renamed the switch themselves, `ConfiguredName` are both
+        // rewritten a line above. Apple Home keeps showing the name it stored
+        // when the switch first appeared, and a rename there takes a second and
+        // sticks. Without this line the user sees a stale name and no reason for
+        // it; with it, they know it reached Homebridge and where to change it.
+        if (previous) {
+          this.platform.log.info(
+            `Roborock routine \"${previous}\" is now called \"${displayName}\" in the Roborock app, and the switch has been updated. If Apple Home still shows the old name, rename it there once — the Home app keeps the name it stored when the switch first appeared, whatever the accessory reports afterwards.`
+          );
+        }
+      }·
+      private applyName(
+        service: ReturnType<PlatformAccessory[\"addService\"]>,
+        displayName: string
+      ): void {
+        const previous = service.getCharacteristic(
+          this.platform.Characteristic.Name
+        ).value;
+        service.displayName = displayName;
+        service.setCharacteristic(this.platform.Characteristic.Name, displayName);
+        service.addOptionalCharacteristic(
+          this.platform.Characteristic.ConfiguredName
+        );
+        const configuredName = service.getCharacteristic(
+          this.platform.Characteristic.ConfiguredName
+        );
+        const current = configuredName.value;
+        // A name the user chose in the Home app is theirs; only a name that still
+        // mirrors the previous app name follows the app.
+        if (
+          current == null ||
+          String(current).trim().length === 0 ||
+          String(current) === String(previous)
+        ) {
+          configuredName.setValue(displayName);
+        }
+      }·
+      dispose(): void {
+        this.disposed = true;
+        if (this.resetTimer) {
+          clearTimer(this.resetTimer);
+          this.resetTimer = undefined;
+        }
+      }·
+      private async handlePress(value: boolean): Promise<void> {
+        if (!value || this.disposed) {
+          // The switch turning itself off again. Not a command.
+          return;
+        }·
+        this.scheduleReset();
+        await this.coordinator.runRoutine(this.sceneId, this.displayName);
+      }·
+      private scheduleReset(): void {
+        if (this.resetTimer) {
+          clearTimer(this.resetTimer);
+        }
+        const timer = scheduleTimer(() => {
+          this.resetTimer = undefined;
+          if (this.disposed) return;
+          this.accessory
+            .getServiceById(this.platform.Service.Switch, this.subtype)
+            ?.updateCharacteristic(this.platform.Characteristic.On, false);
+        }, ROUTINE_SWITCH_AUTO_RESET_MS);
+        unrefTimer(timer);
+        this.resetTimer = timer;
+      }
+    }
+    "
+
+    [0m [90m 470 |[39m
+     [90m 471 |[39m   test([32m"schedule switch GET returns cached state without waiting for refresh"[39m[33m,[39m () [33m=>[39m {
+    [31m[1m>[22m[39m[90m 472 |[39m     expect(scheduleSource)[33m.[39mtoMatch(
+     [90m     |[39m                            [31m[1m^[22m[39m
+     [90m 473 |[39m       [35m/\.onGet\(\(\) => \{[\s\S]*?void this\.coordinator\.refreshIfNeeded\(\);[\s\S]*?return this\.schedule\.enabled;/[39m
+     [90m 474 |[39m     )[33m;[39m
+     [90m 475 |[39m     expect(scheduleSource)[33m.[39mnot[33m.[39mtoMatch([0m
+
+      at Object.toMatch (__tests__/schedule-settings-contract.test.js:472:28)
+
+
+Test Suites: 1 failed, 159 passed, 160 total
+Tests:       1 failed, 2257 passed, 2258 total
+Snapshots:   0 total
+Time:        26.506 s
+Ran all test suites.
+Test results written to: ../../_temp/tests.json
