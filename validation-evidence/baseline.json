@@ -1,0 +1,21 @@
+{
+  "passed": 0,
+  "failed": 2,
+  "runtimeErrors": 0,
+  "suites": 2,
+  "failures": [
+    {
+      "name": "pressing the switch reaches the robot the way the tile does acknowledges HomeKit before the robot command settles",
+      "messages": [
+        "Error: expect(received).toBeUndefined()\n\nReceived: Promise {}\n    at Object.toBeUndefined (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/action-switch-press-uses-the-matter-command-path.test.js:195:41)\n    at Promise.finally.completed (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1561:28)\n    at new Promise (<anonymous>)\n    at callAsyncCircusFn (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1501:10)\n    at _callCircusTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1011:40)\n    at _runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:951:3)\n    at /home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:853:7\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:866:11)\n    at _runTestsForDescribeBlock (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:861:11)\n    at run (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:765:3)\n    at runAndTransformResultsToJestFormat (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/jestAdapterInit.js:1993:21)\n    at jestAdapter (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-circus/build/runner.js:111:19)\n    at runTestInternal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:276:16)\n    at runTest (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/node_modules/jest-runner/build/index.js:344:7)"
+      ]
+    },
+    {
+      "name": "MQTT presence notifications equal live values log once and a real recovery logs once",
+      "messages": [
+        "assert.strictEqual(received, expected)\n\nExpected value to strictly be equal to:\n  1\nReceived:\n  2\n    at Object.equal (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/mqtt-presence-notifications.test.js:70:12)"
+      ]
+    }
+  ],
+  "suiteErrors": []
+}

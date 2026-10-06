@@ -1,0 +1,47 @@
+
+> homebridge-roborock-matter@3.36.0 test
+> jest --runInBand __tests__/action-switch-press-uses-the-matter-command-path.test.js __tests__/mqtt-presence-notifications.test.js --testNamePattern=acknowledges HomeKit before|equal live values log once --json --outputFile=/home/runner/work/_temp/baseline.json
+
+FAIL __tests__/action-switch-press-uses-the-matter-command-path.test.js
+  ● pressing the switch reaches the robot the way the tile does › acknowledges HomeKit before the robot command settles
+
+    expect(received).toBeUndefined()
+
+    Received: Promise {}
+
+    [0m [90m 193 |[39m     )[33m;[39m
+     [90m 194 |[39m
+    [31m[1m>[22m[39m[90m 195 |[39m     expect(harness[33m.[39mon[33m.[39msetHandler([36mtrue[39m))[33m.[39mtoBeUndefined()[33m;[39m
+     [90m     |[39m                                         [31m[1m^[22m[39m
+     [90m 196 |[39m     [36mawait[39m flush()[33m;[39m
+     [90m 197 |[39m     expect(harness[33m.[39mappCharge)[33m.[39mtoHaveBeenCalledTimes([35m1[39m)[33m;[39m
+     [90m 198 |[39m[0m
+
+      at Object.toBeUndefined (__tests__/action-switch-press-uses-the-matter-command-path.test.js:195:41)
+
+FAIL __tests__/mqtt-presence-notifications.test.js
+  ● MQTT presence notifications › equal live values log once and a real recovery logs once
+
+    assert.strictEqual(received, expected)
+
+    Expected value to strictly be equal to:
+      1
+    Received:
+      2
+
+    [0m [90m 68 |[39m     emit([36mtrue[39m)[33m;[39m
+     [90m 69 |[39m     emit([36mtrue[39m)[33m;[39m
+    [31m[1m>[22m[39m[90m 70 |[39m     assert[33m.[39mequal(logs[33m.[39mwarn[33m.[39mlength[33m,[39m [35m1[39m)[33m;[39m
+     [90m    |[39m            [31m[1m^[22m[39m
+     [90m 71 |[39m     assert[33m.[39mdeepEqual(logs[33m.[39minfo[33m,[39m [[32m"Test Robot One is back online."[39m])[33m;[39m
+     [90m 72 |[39m     assert[33m.[39mmatch(logs[33m.[39mwarn[[35m0[39m][33m,[39m [35m/does not by itself prove/[39m)[33m;[39m
+     [90m 73 |[39m   })[33m;[39m[0m
+
+      at Object.equal (__tests__/mqtt-presence-notifications.test.js:70:12)
+
+Test Suites: 2 failed, 2 total
+Tests:       2 failed, 23 skipped, 25 total
+Snapshots:   0 total
+Time:        2.131 s
+Ran all test suites matching __tests__/action-switch-press-uses-the-matter-command-path.test.js|__tests__/mqtt-presence-notifications.test.js with tests matching "acknowledges HomeKit before|equal live values log once".
+Test results written to: ../../_temp/baseline.json
