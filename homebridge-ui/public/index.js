@@ -676,7 +676,6 @@ const AUTO_SAVED_FIELDS = [
   "preferCloudForMatterCommands",
   "enableMqttSessionRecovery",
   "enableMqttPreventiveRefresh",
-  "enableMqttSingleRobotRecovery",
   "cloudOnlyMode",
   "transientWarningThrottleHours",
 ];
@@ -1772,6 +1771,9 @@ async function updatePluginConfig(patch) {
     config = { platform: "RoborockVacuumPlatform", name: "Roborock Vacuum" };
     configs.push(config);
   }
+
+  // Retired in v3.36: upstream now provides single-robot recovery by default.
+  delete config.enableMqttSingleRobotRecovery;
 
   Object.keys(patch).forEach((key) => {
     const value = patch[key];

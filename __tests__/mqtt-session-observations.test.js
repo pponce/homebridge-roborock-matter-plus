@@ -586,14 +586,18 @@ test("automatic resubscribe restores silence observations without callback grant
   });
 });
 
-test("a refused automatic SUBACK does not acknowledge the new generation", () => {
+test("a refused automatic SUBACK does not acknowledge the new generation", async () => {
   mockHandlers.get("close")();
   mockHandlers.get("connect")({ sessionPresent: false });
   mockHandlers.get("packetreceive")?.({ cmd: "suback", granted: [128] });
+  await jest.advanceTimersByTimeAsync(0);
   expect(snapshot().subscriptionAcknowledged).toBe(false);
   mockSubscriptions.at(-1)(null, []);
   expect(snapshot().subscriptionAcknowledged).toBe(false);
+  mockHandlers.get("close")();
+  mockHandlers.get("connect")({ sessionPresent: false });
   acknowledge();
+  await jest.advanceTimersByTimeAsync(0);
   expect(snapshot().subscriptionAcknowledged).toBe(true);
 });
 

@@ -3525,12 +3525,7 @@ class Roborock {
    * @returns {void}
    */
   noteRequestUnanswered(duid, method, error) {
-    const opened = this.noteMethodUnanswered(duid, method, error);
-    // The live-room caller also receives this rejection. Carry the result so
-    // it can log the pause without charging the same timeout a second time.
-    if (error && typeof error === "object") {
-      error.unansweredMethodOpened = opened;
-    }
+    this.noteMethodUnanswered(duid, method, error);
   }
 
   /**
@@ -6590,14 +6585,7 @@ class Roborock {
     liveState.consecutiveFailures += 1;
     const message = error?.message || String(error);
 
-    // MessageQueueHandler already reports its structured timeouts. The B01
-    // upload channel has its own timer and still reaches this method directly.
-    const breakerOpened =
-      error && typeof error === "object" && error.unansweredRequest === true
-        ? error.unansweredMethodOpened === true
-        : this.noteMethodUnanswered(duid, method, error);
-
-    if (breakerOpened) {
+    if (this.noteMethodUnanswered(duid, method, error)) {
       this.log.info(
         `Live-room tracking is paused for ${this.describeDevice(duid)}: the robot did not answer the map request ${liveState.consecutiveFailures} times in a row. Everything else keeps working — starting a room clean from Apple Home, the room list and the progress a run reports are all unaffected — only "which room is it in right now" stops updating. Nothing to do: the plugin tries again by itself, and one answer puts it straight back.`
       );

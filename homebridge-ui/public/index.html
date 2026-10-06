@@ -161,7 +161,7 @@
       >
       <div class="checkbox-group">
         <p class="help">
-          These options only take effect when session recovery above is enabled.
+          This option only takes effect when session recovery above is enabled.
         </p>
         <label class="checkbox"
           ><input id="enableMqttPreventiveRefresh" type="checkbox" /><span
@@ -172,6 +172,52 @@
             ></span
           ></label
         >
+      </div>
+    </details>
+
+    <div class="actions">
+      <button
+        id="save-settings"
+        class="secondary"
+        aria-label="Save account settings"
+      >
+        Save Settings
+      </button>
+      <button id="login" class="primary">Password Login</button>
+      <button id="logout" class="secondary hidden">Logout</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="section-header">
+      <div>
+        <h2>Apple Home Features</h2>
+        <p class="help">
+          Everything the robot can show in Apple Home is on, and there is
+          nothing here to switch on or get wrong: rooms, live room tracking,
+          cleaning and suction modes, battery, dock and charging status, and the
+          empty-tank warning all come with the robot. The number below is a
+          preference rather than a feature.
+        </p>
+      </div>
+    </div>
+
+    <label class="field">
+      <span>Charged Battery Threshold (%)</span>
+      <input
+        id="matter-charged-battery-threshold"
+        type="number"
+        min="1"
+        max="100"
+        step="1"
+        placeholder="100"
+      />
+      <small
+        >The tile shows Charging while docked below this battery percentage, and
+        Docked at or above it. Lower it (e.g. 90) if a worn battery makes the
+        robot report fully charged early.</small
+      >
+    </label>
     <label class="checkbox">
       <input id="enable-homekit-action-switches" type="checkbox" />
       <span>
