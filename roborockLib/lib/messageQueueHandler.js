@@ -494,7 +494,11 @@ class messageQueueHandler {
       payload
     );
 
-    if (roborockMessage && useCloudConnection && (deviceOnline || allowOfflineCloudSend)) {
+    if (
+      roborockMessage &&
+      useCloudConnection &&
+      (deviceOnline || allowOfflineCloudSend)
+    ) {
       // Readiness and response have separate budgets. No pending RPC exists yet.
       await this.adapter.rr_mqtt_connector.waitUntilReady?.();
       mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
@@ -709,7 +713,9 @@ class messageQueueHandler {
               reject(error);
             },
             abandon: reject,
-            timeout: /** @type {ReturnType<typeof setTimeout> | undefined} */ (undefined),
+            timeout: /** @type {ReturnType<typeof setTimeout> | undefined} */ (
+              undefined
+            ),
             secure,
             method,
           };
@@ -718,8 +724,13 @@ class messageQueueHandler {
             try {
               send();
               // A synchronous reply can already have removed the request.
-              if (this.adapter.pendingRequests.get(messageID) === pendingRequest) {
-                pendingRequest.timeout = this.adapter.setTimeout(onTimeout, requestTimeout);
+              if (
+                this.adapter.pendingRequests.get(messageID) === pendingRequest
+              ) {
+                pendingRequest.timeout = this.adapter.setTimeout(
+                  onTimeout,
+                  requestTimeout
+                );
               }
             } catch (error) {
               this.adapter.pendingRequests.delete(messageID);
@@ -733,7 +744,9 @@ class messageQueueHandler {
                 `Device ${duid} is marked offline, but sending method ${method} via cloud because the command explicitly allows offline cloud delivery.`
               );
             }
-            publish(() => this.adapter.rr_mqtt_connector.sendMessage(duid, roborockMessage));
+            publish(() =>
+              this.adapter.rr_mqtt_connector.sendMessage(duid, roborockMessage)
+            );
             const lastTransportReason =
               [
                 {
@@ -768,7 +781,9 @@ class messageQueueHandler {
             lengthBuffer.writeUInt32BE(roborockMessage.length, 0);
 
             const fullMessage = Buffer.concat([lengthBuffer, roborockMessage]);
-            publish(() => this.adapter.localConnector.sendMessage(duid, fullMessage));
+            publish(() =>
+              this.adapter.localConnector.sendMessage(duid, fullMessage)
+            );
             this.adapter.updateTransportDiagnostics(duid, {
               lastTransport: "local",
               lastTransportReason: "local-request",

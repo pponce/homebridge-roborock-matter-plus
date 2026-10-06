@@ -209,7 +209,9 @@ class roborock_mqtt_connector {
       ).catch(() => {});
     });
     this.readiness = new MqttReadiness(
-      () => this.connected && this.sessionDiagnostics.snapshot().subscriptionAcknowledged,
+      () =>
+        this.connected &&
+        this.sessionDiagnostics.snapshot().subscriptionAcknowledged,
       () => this.sessionDiagnostics.generation
     );
     this.connected = false;
