@@ -592,7 +592,10 @@ test("a refused automatic SUBACK does not acknowledge the new generation", () =>
 test("packets received while disconnected cannot acknowledge a session", () => {
   mockHandlers.get("close")();
   mockHandlers.get("packetreceive")?.({ cmd: "suback", granted: [1] });
-  expect(snapshot()).toMatchObject({connected: false, subscriptionAcknowledged: false});
+  expect(snapshot()).toMatchObject({
+    connected: false,
+    subscriptionAcknowledged: false,
+  });
 });
 
 test.each(["before-connect", "after-connect", "after-connect-suback"])(
