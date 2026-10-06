@@ -1,0 +1,71 @@
+name: Verify v3.37.0 rebased branches
+on:
+  push:
+    branches: [mqtt-v337-followup-validation]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: "readiness"
+            sha: f9f628d15d941e445390fde20fe5a5c006c00fae
+          - key: "optimistic"
+            sha: d72784d9144f3a2580772100c1f41827b3527169
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Format
+        run: |
+          npx prettier --write .
+          git add -u
+          if ! git diff --cached --quiet; then
+            git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Format v3.37.0 integration"
+          fi
+      - name: Formatting
+        id: lint
+        continue-on-error: true
+        run: npm run lint > "$RUNNER_TEMP/lint.log" 2>&1
+      - name: Typechecks
+        id: types
+        continue-on-error: true
+        run: npm run typecheck > "$RUNNER_TEMP/types.log" 2>&1
+      - name: Tests
+        id: tests
+        continue-on-error: true
+        run: npm test -- --runInBand --json --outputFile="$RUNNER_TEMP/tests.json" > "$RUNNER_TEMP/tests.log" 2>&1
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: npm run build > "$RUNNER_TEMP/build.log" 2>&1
+      - name: Save evidence
+        if: always()
+        run: |
+          mkdir -p validation-evidence
+          for kind in lint types tests build; do
+            if [ -f "$RUNNER_TEMP/$kind.log" ]; then tail -n 100 "$RUNNER_TEMP/$kind.log" > "validation-evidence/$kind.txt"; fi
+          done
+          if [ -f "$RUNNER_TEMP/tests.json" ]; then
+            node -e 'const fs=require("fs");const r=JSON.parse(fs.readFileSync(process.argv[1]));fs.writeFileSync(process.argv[2],JSON.stringify({passed:r.numPassedTests,failed:r.numFailedTests,suites:r.numTotalTestSuites,runtimeErrors:r.numRuntimeErrorTestSuites,failures:r.testResults.filter(t=>t.status==="failed").map(t=>({name:t.name,message:t.message}))},null,2)+"\n")' "$RUNNER_TEMP/tests.json" validation-evidence/tests.json
+          fi
+          if [ "${{ matrix.key }}" = home ]; then git add -f dist; fi
+          git add -f validation-evidence
+          git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record v3.37.0 validation [skip ci]"
+          git push origin HEAD:refs/heads/mqtt-v337-followup-verified-${{ matrix.key }}
+      - name: Require gates
+        if: always()
+        run: |
+          test "${{ steps.lint.outcome }}" = success
+          test "${{ steps.types.outcome }}" = success
+          test "${{ steps.tests.outcome }}" = success
+          test "${{ steps.build.outcome }}" = success
