@@ -1,0 +1,52 @@
+
+> homebridge-roborock-matter@3.36.0 test
+> jest --runInBand __tests__/mqtt-session-observations.test.js __tests__/mqtt-session-real-reconnect.test.js --testNamePattern=real mqtt.js automatic reconnect|a disconnected request timeout --json --outputFile=/home/runner/work/_temp/baseline.json
+
+FAIL __tests__/mqtt-session-observations.test.js
+  ● a disconnected request timeout does not claim a subscription is unacknowledged
+
+    expect(received).not.toContain(expected) // indexOf
+
+    Expected substring: not "subscription not acknowledged"
+    Received string:        "Cloud request with id 1 with method get_status timed out after 10 seconds. MQTT connection state: false MQTT session: subscription not acknowledged (generation 1)."
+
+    [0m [90m 558 |[39m   [36mconst[39m error [33m=[39m [36mawait[39m request[33m.[39mresult[33m;[39m
+     [90m 559 |[39m   expect(error[33m.[39mmessage)[33m.[39mtoContain([32m"MQTT connection state: false"[39m)[33m;[39m
+    [31m[1m>[22m[39m[90m 560 |[39m   expect(error[33m.[39mmessage)[33m.[39mnot[33m.[39mtoContain([32m"subscription not acknowledged"[39m)[33m;[39m
+     [90m     |[39m                             [31m[1m^[22m[39m
+     [90m 561 |[39m })[33m;[39m
+     [90m 562 |[39m
+     [90m 563 |[39m test([32m"automatic resubscribe restores silence observations without callback grants"[39m[33m,[39m [36masync[39m () [33m=>[39m {[0m
+
+      at Object.toContain (__tests__/mqtt-session-observations.test.js:560:29)
+
+FAIL __tests__/mqtt-session-real-reconnect.test.js
+  ● real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCRIBE per connection
+
+    expect(received).toMatchObject(expected)
+
+    - Expected  - 1
+    + Received  + 1
+
+      Object {
+        "generation": 2,
+    -   "subscriptionAcknowledged": true,
+    +   "subscriptionAcknowledged": false,
+      }
+
+    [0m [90m 123 |[39m     [36mawait[39m until(() [33m=>[39m receivedSubacks [33m===[39m [35m2[39m)[33m;[39m
+     [90m 124 |[39m     [90m// This assertion fails on the old connector even though both SUBACKs arrived.[39m
+    [31m[1m>[22m[39m[90m 125 |[39m     expect(latest)[33m.[39mtoMatchObject({
+     [90m     |[39m                    [31m[1m^[22m[39m
+     [90m 126 |[39m       generation[33m:[39m [35m2[39m[33m,[39m
+     [90m 127 |[39m       subscriptionAcknowledged[33m:[39m [36mtrue[39m[33m,[39m
+     [90m 128 |[39m     })[33m;[39m[0m
+
+      at Object.toMatchObject (__tests__/mqtt-session-real-reconnect.test.js:125:20)
+
+Test Suites: 2 failed, 2 total
+Tests:       2 failed, 32 skipped, 34 total
+Snapshots:   0 total
+Time:        3.674 s
+Ran all test suites matching __tests__/mqtt-session-observations.test.js|__tests__/mqtt-session-real-reconnect.test.js with tests matching "real mqtt.js automatic reconnect|a disconnected request timeout".
+Test results written to: ../../_temp/baseline.json
