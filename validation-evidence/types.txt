@@ -1,0 +1,7 @@
+
+> homebridge-roborock-matter@3.37.0 typecheck
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.roborockLib.json
+
+roborockLib/lib/messageQueueHandler.js(690,23): error TS7006: Parameter 'value' implicitly has an 'any' type.
+roborockLib/lib/messageQueueHandler.js(708,22): error TS7006: Parameter 'error' implicitly has an 'any' type.
+roborockLib/lib/messageQueueHandler.js(723,28): error TS7006: Parameter 'send' implicitly has an 'any' type.
