@@ -62,3 +62,20 @@ that start after publication, immediate HomeKit switch acknowledgement with
 schedule-write deduplication, and recovery diagnostics. These are separate from
 the four upstream PRs. Generated `dist/` and personal planning documents are
 retained for branch installation and project history.
+
+## Recovery diagnostics
+
+The persisted `MqttSessionDiagnostics` snapshot includes a `recovery` object:
+`enabled`, `preventiveRefreshEnabled`, `inProgress`, `lastReason`, `lastResult`,
+`consecutiveFailures`, `cooldownRemainingMs`, and `silenceCooldownRemainingMs`.
+The two remaining durations distinguish the general success/failure cooldown from
+the shared 30-minute silence cooldown. They are measured when the snapshot is
+written; a saved snapshot is not a live countdown.
+
+Results are `never`, `in-progress`, `succeeded`, `failed`, `deferred` (new traffic
+or an active request made recreation unnecessary), or `stopped` during teardown.
+Suppressed attempts do not replace the last actual attempt's reason/result.
+Snapshots are emitted when an attempt begins and finishes, including failed
+attempts. Diagnostics change neither trigger policy nor retry timing.
+With experimental recovery disabled, the object is `{ enabled: false }`; it does
+not claim that upstream's separate default cloud-silence rule is disabled.

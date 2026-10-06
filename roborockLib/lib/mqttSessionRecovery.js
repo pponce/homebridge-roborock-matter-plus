@@ -57,7 +57,7 @@ class MqttSessionRecovery {
         acknowledge(
           connector.sessionDiagnostics.generation,
           null,
-          packet.granted.map((qos) => ({ qos }))
+          (packet.granted || []).map((qos) => ({ qos }))
         );
     });
     candidate.on("connect", () => {
@@ -242,6 +242,7 @@ class MqttSessionRecovery {
     // check it again immediately before registering/publishing the request.
     this.recovering = true;
     this.nextAllowedAt = performance.now() + COOLDOWN_MS;
+    this.connector.sessionDiagnostics.emit(true);
     this.inFlight = Promise.resolve()
       .then(() => this.perform(reason))
       .finally(() => {
@@ -335,6 +336,7 @@ class MqttSessionRecovery {
   }
 
   stop() {
+    if (this.recovering) this.lastResult = "stopped";
     this.stopped = true;
     clearInterval(this.timer);
     this.timer = null;
