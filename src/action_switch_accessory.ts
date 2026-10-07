@@ -254,8 +254,11 @@ export default class RoborockActionSwitchAccessory {
   }
 
   private robotLabel(): string {
-    return this.platform.getMatterVacuum(this.duid)?.getDisplayName() ||
-      this.platform.roborockAPI?.getVacuumDeviceInfo(this.duid, "name") || this.duid;
+    return (
+      this.platform.getMatterVacuum(this.duid)?.getDisplayName() ||
+      this.platform.roborockAPI?.getVacuumDeviceInfo(this.duid, "name") ||
+      this.duid
+    );
   }
 
   private scheduleReset(): void {
