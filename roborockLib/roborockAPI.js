@@ -6267,6 +6267,8 @@ class Roborock {
       );
     }
 
+    const concurrent = this.pendingB01MapRequests.get(duid);
+    if (concurrent) return concurrent.promise;
     this.rr_mqtt_connector.assertCanSend?.();
     let entry;
     const promise = new Promise((resolve, reject) => {
@@ -6277,14 +6279,16 @@ class Roborock {
         duid,
         transport: "cloud",
         operationClass: "secure-map",
-        sessionGeneration,
+        sessionGeneration: this.rr_mqtt_connector.getSessionGeneration?.() ?? sessionGeneration,
         method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD,
         publishedAt: null,
       };
     });
     entry.promise = promise;
     this.pendingB01MapRequests.set(duid, entry);
-    this.rr_mqtt_connector.sendMessage(duid, roborockMessage);
+    try {
+      this.rr_mqtt_connector.sendMessage(duid, roborockMessage);
+      if (this.pendingB01MapRequests.get(duid) !== entry) return promise;
     entry.publishedAt = Date.now();
     entry.timeout = this.setTimeout(() => {
       this.pendingB01MapRequests.delete(duid);
@@ -6296,6 +6300,10 @@ class Roborock {
     }, 20000);
     if (typeof entry.timeout?.unref === "function") {
       entry.timeout.unref();
+    }
+    } catch (error) {
+      this.pendingB01MapRequests.delete(duid);
+      entry.reject(error);
     }
     return promise;
   }
