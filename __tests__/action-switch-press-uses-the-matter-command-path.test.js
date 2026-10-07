@@ -358,3 +358,64 @@ describe("a press that cannot be served fails quietly and legibly", () => {
     await expect(harness.press()).resolves.toBeUndefined();
   });
 });
+
+describe("accepted momentary actions report failures prominently", () => {
+  test.each(["clean", "dock", "empty", "pause", "locate"])(
+    "%s accepts before completion and names action, robot and reason on failure",
+    async (action) => {
+      const h = createHarness({ action });
+      let rejectCommand;
+      h.vacuum.runHomeKitAction = jest.fn(
+        () =>
+          new Promise((_, reject) => {
+            rejectCommand = reject;
+          })
+      );
+      h.accessory.displayName = "My renamed button";
+      expect(h.on.setHandler(true)).toBeUndefined();
+      expect(h.vacuum.runHomeKitAction).toHaveBeenCalledWith(action);
+      rejectCommand(new Error("broker unavailable"));
+      await flush();
+      expect(h.platform.log.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Accepted Home action ${getActionSwitchDefinition(action).nameSuffix} for Vicky failed: broker unavailable`
+        )
+      );
+      expect(h.on.getHandler()).toBe(false);
+      h.actionSwitch.dispose();
+    }
+  );
+  test.each([
+    ["clean", "app_start", /start|clean/i],
+    ["dock", "app_charge", /dock/i],
+    ["empty", "app_start_collect_dust", /empty|dust/i],
+    ["pause", "app_pause", /pause|paus/i],
+    ["locate", "find_me", /locate|find|identify/i],
+  ])(
+    "the real %s command failure stays prominent after acknowledgement",
+    async (action, method, actionPattern) => {
+      const h = createHarness({
+        action,
+        status: {
+          state: action === "clean" || action === "empty" ? 8 : 5,
+          charge_status: 1,
+        },
+      });
+      h.platform.roborockAPI[method].mockRejectedValue(
+        new Error("broker unavailable")
+      );
+      expect(h.on.setHandler(true)).toBeUndefined();
+      await flush();
+      const messages = [
+        ...h.platform.log.error.mock.calls,
+        ...h.platform.log.warn.mock.calls,
+      ]
+        .flat()
+        .join("\n");
+      expect(messages).toMatch(/Vicky/);
+      expect(messages).toMatch(actionPattern);
+      expect(messages).toMatch(/broker unavailable/);
+      h.actionSwitch.dispose();
+    }
+  );
+});

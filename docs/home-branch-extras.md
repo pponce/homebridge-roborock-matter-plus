@@ -1,6 +1,6 @@
 # Home branch integration and remaining extras
 
-This inventory compares `MQTT_ACCOUNT_SESSION_RECOVERY` with upstream v3.37.0 plus the submitted versions of PRs #30, #31, #32, #36, #37 and #38. It describes code, not a claim that every proposal has been approved or tested on physical robots. The reasons below describe the intended benefit from our home-branch work; they are not evidence that upstream needs every implementation detail.
+This inventory compares `MQTT_ACCOUNT_SESSION_RECOVERY` with upstream v3.37.0 plus the submitted versions of PRs #30, #31, #32, #36, #37 and #38, plus the focused momentary-action follow-up. It describes code, not a claim that every proposal has been approved or tested on physical robots. The reasons below describe the intended benefit from our home-branch work; they are not evidence that upstream needs every implementation detail.
 
 ## Integration baseline
 
@@ -10,11 +10,13 @@ This inventory compares `MQTT_ACCOUNT_SESSION_RECOVERY` with upstream v3.37.0 pl
 | [#30](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/30) | `bb1777a32c98bcca35570023eddb6140aa7cbd59` | Strictly cross-robot breaker exemption                                                       |
 | [#31](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/31) | `a59ba5a96cdcfe3a7994b5d571237cfdf627ae66` | Experimental recreation, optional preventive refresh, recovery diagnostics                   |
 | [#32](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/32) | `3d1a03f3cc519defceaf0a1b8b6219881a967b8d` | Schedule-write reconciliation and duplicate-write suppression                                |
-| [#36](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/36) | `52a38d05701148667b510ce141cdbbf23725de5c` | Submitted discussion code for momentary actions and presence logging                         |
+| [#36](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/36) | `d68690f03f36745e10e2ade5aa03649d6db3cdc4` | Presence-only logging with first live report at info                         |
 | [#37](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/37) | `bc469f1cd770e3b4639f773d592a4e655d88d552` | Ordinary MQTT readiness gate, separate publication/response budgets, unsent-request handling |
 | [#38](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/38) | `91c4e05e87151588d5b8d558882fac320f620b8b` | Optimistic schedule display, explicit rollback and newer-intent protection                   |
 
-The home branch before this integration was `544097fd5bc3b2a840321b3145c616ce3ddd6294`. It already contained v3.37.0 and the #30–32 changes. This integration adopts #38's schedule-switch implementation and #37's send/timing safeguards, adapting readiness to the existing home connector so its additional lifecycle capabilities remain available. It preserves the current #36-equivalent behavior; it does not implement the future split proposed in that discussion.
+The home branch before this integration was `544097fd5bc3b2a840321b3145c616ce3ddd6294`. It already contained v3.37.0 and the #30–32 changes. This integration adopts #38's schedule-switch implementation and #37's send/timing safeguards, adapting readiness to the existing home connector so its additional lifecycle capabilities remain available. A subsequent integration implements the #36 discussion split: #36 is presence-only, and a separate momentary-action branch covers the five action buttons and routines with prominent failures. Physical-robot validation remains pending.
+
+The focused acknowledgement branch is `momentary-action-acknowledgement` at `2ba3248ff7b91893a61dfb775f32911615d41bc6`. Its upstream draft requires manual creation because the GitHub integration denied PR creation. Both focused changes and the home integration pass automated validation; physical-robot testing remains pending.
 
 ## Active capabilities still specific to the home branch
 
@@ -56,11 +58,9 @@ The intended benefit is to stop waiting promptly when subscription is refused or
 
 These belong next to the lifecycle they protect if upstream needs them. They should not be bundled as unexplained behavior changes. Core recovery reason/result/failure/cooldown reporting is already in #31 and is not an extra.
 
-### 6. Immediate acknowledgement for routine buttons
+### 6. Routine acknowledgement is now covered by the focused action proposal
 
-The home `RoborockHapRoutineSwitchAccessory` accepts a momentary routine press immediately and runs its command in the background. This was added so a routine button does not remain busy for a cloud round trip. It is distinct from a persistent schedule switch, whose optimistic value now follows #38's rollback rules.
-
-The submitted #36 code covers other momentary actions; routine acknowledgement remains an additional home capability relative to that exact submitted version. Mathias agreed that momentary actions should follow one policy and requested a separate focused PR, with failures logged prominently including robot and action, plus physical-robot testing before merge. That future work is not silently included by this integration.
+Routine buttons now share the accepted-press/background-command policy with Start, Dock, Empty Bin, Pause and Find in `momentary-action-acknowledgement`. Failures name the routine or action, robot and reason at warning/error level. This capability is retained in the home branch but is no longer an unproposed extra. Physical-robot validation is still pending; see [the acknowledgement notes](momentary-action-acknowledgement.md).
 
 ## Supporting differences and cleanup candidates
 
@@ -89,4 +89,4 @@ These are not additional user-facing features. They are preserved so integration
 
 The home branch keeps the extras while adopting the submitted PR behavior wherever the features overlap. Which of the remaining pieces should become focused upstream follow-ups, and which should stay fork-specific? In particular, should the ordinary fresh-client lifecycle and the metadata it requires be reviewed together? Are the small lifecycle safeguards useful independently of that implementation? Immediate shutdown ordering can remain parked as requested.
 
-For #36, the agreed future direction remains two focused PRs: momentary-action acknowledgement with prominent failures and physical-device validation, and presence logging with retained snapshots at debug level plus one informational first-live report per robot. This inventory records current submitted code, not completion of that future work. Automated tests also cannot establish exactly how a particular Apple Home version renders a spinner or rollback; that still needs an installed-device check.
+The #36 split is implemented: presence-only logging remains in #36, and momentary actions are prepared independently in `momentary-action-acknowledgement`. Retained snapshots stay debug-only; each robot's first live presence is informational once per plugin lifetime. The focused code and integrated home branch have separate automated validation. Physical-robot acknowledgement/failure checks remain pending and must be reported as integration-branch observations when testing this home branch.

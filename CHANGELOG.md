@@ -2,6 +2,9 @@
 
 ## Unreleased — home branch integration
 
+- First live MQTT presence is informational once per robot; retained snapshots remain debug-only, duplicate live values are suppressed, and cloud offline wording does not imply LAN failure.
+- Momentary Start, Dock, Empty Bin, Pause, Find and routine buttons acknowledge acceptance immediately. Later failures are logged prominently with action, robot and reason; physical-robot validation remains pending.
+
 - Integrates upstream v3.37.0 and the submitted work in #30, #31, #32, #36, #37 and #38 while retaining the home branch's additional capabilities.
 - Ordinary cloud requests wait for MQTT reply-subscription readiness before starting the robot's response budget. A default request can take about 20 seconds across readiness and response waits; an unsent request does not count as robot silence.
 - Schedule switches show the accepted value immediately, suppress duplicate pending writes, and restore confirmed state after failure. Rollback logs identify the schedule and reason, and older failures cannot overwrite newer intent.
