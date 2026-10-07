@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — home branch integration
+
+- Integrates upstream v3.37.0 and the submitted work in #30, #31, #32, #36, #37 and #38 while retaining the home branch's additional capabilities.
+- Ordinary cloud requests wait for MQTT reply-subscription readiness before starting the robot's response budget. A default request can take about 20 seconds across readiness and response waits; an unsent request does not count as robot silence.
+- Schedule switches show the accepted value immediately, suppress duplicate pending writes, and restore confirmed state after failure. Rollback logs identify the schedule and reason, and older failures cannot overwrite newer intent.
+- Documents remaining home-only lifecycle, readiness, routine-button and support differences in `docs/home-branch-extras.md`.
+
 ## 3.37.0
 
 **When a cloud request times out, the diagnostics report can now say whether the MQTT session was actually carrying anything at the time.**

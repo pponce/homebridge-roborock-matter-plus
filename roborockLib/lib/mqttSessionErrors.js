@@ -18,6 +18,9 @@ class MqttReadinessError extends Error {
   constructor(message, code = "MQTT_NOT_READY") {
     super(message);
     this.name = "MqttReadinessError";
+    this.transientKind = "cloud unavailable";
+    this.requestNotSent = true;
+    this.unansweredRequest = false;
     this.code = code;
   }
 }

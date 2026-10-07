@@ -53,6 +53,7 @@ function createRealRoborockOnFakeWire({
   // This fixture fakes an already-ready transport. Real handshake ordering is
   // exercised separately with the real MQTT client and loopback broker.
   api.rr_mqtt_connector.waitUntilReady = jest.fn(async () => 1);
+  api.rr_mqtt_connector.isReady = jest.fn(() => true);
   api.localConnector.isConnected = jest.fn(() => transport === "local");
   api.localConnector.sendMessage = jest.fn();
 

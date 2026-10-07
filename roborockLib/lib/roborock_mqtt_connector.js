@@ -1013,6 +1013,12 @@ class roborock_mqtt_connector {
 
   assertCanSend() {
     this.recovery?.assertCanSend();
+    if (!this.recovery && !this.isReady()) {
+      throw new MqttReadinessError(
+        "MQTT reply subscription is not ready; this command was not sent.",
+        "MQTT_SESSION_NOT_READY"
+      );
+    }
   }
 
   discardSessionFragments() {
@@ -1020,7 +1026,7 @@ class roborock_mqtt_connector {
   }
 
   sendMessage(duid, roborockMessage) {
-    this.recovery?.assertCanSend();
+    this.assertCanSend();
     this.client.publish(
       `rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`,
       roborockMessage,
@@ -1067,7 +1073,7 @@ class roborock_mqtt_connector {
           finish(
             reject,
             new MqttReadinessError(
-              `MQTT session did not become ready within ${timeoutMs}ms.`,
+              `MQTT reply subscription did not become ready within ${timeoutMs}ms; this command was not sent.`,
               "MQTT_READINESS_TIMEOUT"
             )
           ),
