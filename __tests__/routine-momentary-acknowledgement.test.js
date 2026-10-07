@@ -28,7 +28,9 @@ class FakeCharacteristic {
     return this;
   }
 
-  removeAllListeners() { return this; }
+  removeAllListeners() {
+    return this;
+  }
 
   onSet(handler) {
     this.setHandler = handler;
@@ -142,24 +144,42 @@ function switchService(accessory, id) {
   );
 }
 
-
 describe("routine momentary acknowledgement", () => {
-  test.each([false,true])("accepts immediately and handles later failure=%s", async fail => {
-    const platform=makePlatform(); let finish, reject;
-    platform.roborockAPI.executeCloudScene=jest.fn(()=>new Promise((resolve,rej)=>{finish=resolve;reject=rej;}));
-    const accessory=new FakeAccessory("Routines"); const c=makeCoordinator(platform,accessory);
-    c.routineAccessory=accessory; c.exposeRoutines=true;
-    c.syncRoutines([{id:"scene-1",name:"Kitchen routine"}]);
-    const on=accessory.services[0].getCharacteristic(Characteristic.On);
-    expect(on.setHandler(true)).toBeUndefined();
-    await new Promise(resolve=>setImmediate(resolve));
-    expect(platform.roborockAPI.executeCloudScene).toHaveBeenCalledWith("scene-1");
-    if(fail) reject(new Error("cloud refused")); else finish();
-    await new Promise(resolve=>setImmediate(resolve));
-    if(fail) expect(platform.log.warn).toHaveBeenCalledWith('Accepted Home routine "Kitchen routine" for Test Vacuum failed: cloud refused');
-    else expect(platform.log.warn).not.toHaveBeenCalled();
-    expect(on.getHandler()).toBe(false);
-    on.setHandler(false); expect(platform.roborockAPI.executeCloudScene).toHaveBeenCalledTimes(1);
-    c.stopRuntime();
-  });
+  test.each([false, true])(
+    "accepts immediately and handles later failure=%s",
+    async (fail) => {
+      const platform = makePlatform();
+      let finish, reject;
+      platform.roborockAPI.executeCloudScene = jest.fn(
+        () =>
+          new Promise((resolve, rej) => {
+            finish = resolve;
+            reject = rej;
+          })
+      );
+      const accessory = new FakeAccessory("Routines");
+      const c = makeCoordinator(platform, accessory);
+      c.routineAccessory = accessory;
+      c.exposeRoutines = true;
+      c.syncRoutines([{ id: "scene-1", name: "Kitchen routine" }]);
+      const on = accessory.services[0].getCharacteristic(Characteristic.On);
+      expect(on.setHandler(true)).toBeUndefined();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(platform.roborockAPI.executeCloudScene).toHaveBeenCalledWith(
+        "scene-1"
+      );
+      if (fail) reject(new Error("cloud refused"));
+      else finish();
+      await new Promise((resolve) => setImmediate(resolve));
+      if (fail)
+        expect(platform.log.warn).toHaveBeenCalledWith(
+          'Accepted Home routine "Kitchen routine" for Test Vacuum failed: cloud refused'
+        );
+      else expect(platform.log.warn).not.toHaveBeenCalled();
+      expect(on.getHandler()).toBe(false);
+      on.setHandler(false);
+      expect(platform.roborockAPI.executeCloudScene).toHaveBeenCalledTimes(1);
+      c.stopRuntime();
+    }
+  );
 });

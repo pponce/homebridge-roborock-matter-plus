@@ -372,11 +372,18 @@ describe("accepted momentary actions report failures prominently", () => {
     expect(h.on.getHandler()).toBe(false);
     h.actionSwitch.dispose();
   });
-  test("the real dock command failure is still prominent after acknowledgement", async () => {
-    const h=createHarness(); h.platform.roborockAPI.app_charge.mockRejectedValue(new Error("broker unavailable"));
+  test.each([
+    ["clean", "app_start", /start|clean/i],
+    ["dock", "app_charge", /dock/i],
+    ["empty", "app_start_collect_dust", /empty|dust/i],
+    ["pause", "app_pause", /pause|paus/i],
+    ["locate", "find_me", /locate|find|identify/i],
+  ])("the real %s command failure stays prominent after acknowledgement", async (action, method, actionPattern) => {
+    const h=createHarness({action, status:{state: action === "clean" || action === "empty" ? 8 : 5, charge_status:1}});
+    h.platform.roborockAPI[method].mockRejectedValue(new Error("broker unavailable"));
     expect(h.on.setHandler(true)).toBeUndefined(); await flush();
     const messages=[...h.platform.log.error.mock.calls,...h.platform.log.warn.mock.calls].flat().join("\n");
-    expect(messages).toMatch(/Vicky/); expect(messages).toMatch(/dock/i); expect(messages).toMatch(/broker unavailable/);
+    expect(messages).toMatch(/Vicky/); expect(messages).toMatch(actionPattern); expect(messages).toMatch(/broker unavailable/);
     h.actionSwitch.dispose();
   });
 });

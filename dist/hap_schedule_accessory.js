@@ -1144,6 +1144,9 @@ class RoborockHapScheduleAccessory {
      * HAP set handler that throws shows as a broken accessory rather than as
      * the reason.
      */
+    getRoutineRobotLabel() {
+        return this.vacuumName || this.duid;
+    }
     async runRoutine(sceneId, displayName) {
         const api = this.platform.roborockAPI;
         try {
@@ -1156,7 +1159,7 @@ class RoborockHapScheduleAccessory {
             });
         }
         catch (error) {
-            this.platform.log.warn(`Unable to run Roborock routine "${displayName}": ${error instanceof Error ? error.message : String(error)}`);
+            this.platform.log.warn(`Accepted Home routine "${displayName}" for ${this.vacuumName || this.duid} failed: ${error instanceof Error ? error.message : String(error)}`);
         }
     }
     /**
@@ -1674,7 +1677,7 @@ class RoborockHapRoutineSwitch {
         void this.handlePress(value).catch((error) => {
             // runRoutine owns expected cloud errors. Keep an unexpected background
             // failure from becoming an unhandled rejection after HAP was answered.
-            this.platform.log.warn(`Unable to accept Roborock routine "${this.displayName}": ${error instanceof Error ? error.message : String(error)}`);
+            this.platform.log.warn(`Accepted Home routine "${this.displayName}" for ${this.coordinator.getRoutineRobotLabel()} failed: ${error instanceof Error ? error.message : String(error)}`);
         });
     }
     async handlePress(value) {

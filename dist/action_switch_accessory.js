@@ -148,7 +148,7 @@ class RoborockActionSwitchAccessory {
         void this.handlePress(value).catch((error) => {
             // handlePress owns expected command errors. This catch is only a final
             // guard for an unexpected failure outside its command try/catch.
-            this.platform.log.error(`Unable to accept ${this.accessory.displayName}: ${error instanceof Error ? error.message : String(error)}`);
+            this.platform.log.error(`Accepted Home action ${this.definition.nameSuffix} for ${this.robotLabel()} failed: ${error instanceof Error ? error.message : String(error)}`);
         });
     }
     /**
@@ -168,18 +168,24 @@ class RoborockActionSwitchAccessory {
         try {
             const vacuum = this.platform.getMatterVacuum(this.duid);
             if (!vacuum) {
-                this.platform.log.warn(`${this.accessory.displayName} was pressed, but the robot behind it is not set up yet. Try again once startup has finished.`);
+                this.platform.log.warn(`Accepted Home action ${this.definition.nameSuffix} for ${this.robotLabel()} failed: robot is not set up yet. Try again once startup has finished.`);
                 return;
             }
             if (!vacuum.supportsHomeKitAction(this.definition.key)) {
-                this.platform.log.warn(`${this.accessory.displayName} was pressed, but ${vacuum.getDisplayName()} does not support that command.`);
+                this.platform.log.warn(`Accepted Home action ${this.definition.nameSuffix} for ${this.robotLabel()} failed: robot does not support that command.`);
                 return;
             }
             await vacuum.runHomeKitAction(this.definition.key);
         }
         catch (error) {
-            this.platform.log.error(`Unable to run ${this.accessory.displayName}: ${error instanceof Error ? error.message : String(error)}`);
+            this.platform.log.error(`Accepted Home action ${this.definition.nameSuffix} for ${this.robotLabel()} failed: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+    robotLabel() {
+        var _a, _b;
+        return (((_a = this.platform.getMatterVacuum(this.duid)) === null || _a === void 0 ? void 0 : _a.getDisplayName()) ||
+            ((_b = this.platform.roborockAPI) === null || _b === void 0 ? void 0 : _b.getVacuumDeviceInfo(this.duid, "name")) ||
+            this.duid);
     }
     scheduleReset() {
         if (this.resetTimer) {
