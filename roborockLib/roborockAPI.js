@@ -6228,6 +6228,10 @@ class Roborock {
       );
     }
 
+    // Another caller may have published while this one waited or built its payload.
+    const concurrent = this.pendingB01MapRequests.get(duid);
+    if (concurrent) return concurrent.promise;
+
     let entry;
     const promise = new Promise((resolve, reject) => {
       entry = { resolve, reject, timeout: undefined };

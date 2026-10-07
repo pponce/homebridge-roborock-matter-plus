@@ -210,3 +210,17 @@ test("B01 map readiness expiry never starts a pending map request", async () => 
   expect(adapter.pendingB01MapRequests.size).toBe(0);
   expect(mockClients[0].publish).not.toHaveBeenCalled();
 });
+
+
+test("a local-unavailable request can wait for a briefly disconnected cloud fallback", async () => {
+  adapter.config.cloudOnlyMode = false;
+  mockClients[0].handlers.get("close")();
+  const {result, id} = await startRequest();
+  expect(mockClients[0].publish).not.toHaveBeenCalled();
+  mockClients[0].handlers.get("connect")({}); acknowledge();
+  await jest.advanceTimersByTimeAsync(25);
+  expect(mockClients[0].publish).toHaveBeenCalledTimes(1);
+  const pending = adapter.pendingRequests.get(id);
+  clearTimeout(pending.timeout); adapter.pendingRequests.delete(id); pending.resolve(["cloud"]);
+  expect(await result).toEqual(["cloud"]);
+});
