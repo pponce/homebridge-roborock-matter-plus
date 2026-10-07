@@ -360,23 +360,47 @@ describe("a press that cannot be served fails quietly and legibly", () => {
 });
 
 describe("accepted momentary actions report failures prominently", () => {
-  test.each(["clean", "dock", "empty", "pause", "locate"])("%s accepts before completion and names action, robot and reason on failure", async action => {
-    const h = createHarness({action});
-    let rejectCommand;
-    h.vacuum.runHomeKitAction = jest.fn(() => new Promise((_,reject) => {rejectCommand=reject;}));
-    h.accessory.displayName = "My renamed button";
-    expect(h.on.setHandler(true)).toBeUndefined();
-    expect(h.vacuum.runHomeKitAction).toHaveBeenCalledWith(action);
-    rejectCommand(new Error("broker unavailable")); await flush();
-    expect(h.platform.log.error).toHaveBeenCalledWith(expect.stringContaining(`Accepted Home action ${getActionSwitchDefinition(action).nameSuffix} for Vicky failed: broker unavailable`));
-    expect(h.on.getHandler()).toBe(false);
-    h.actionSwitch.dispose();
-  });
+  test.each(["clean", "dock", "empty", "pause", "locate"])(
+    "%s accepts before completion and names action, robot and reason on failure",
+    async (action) => {
+      const h = createHarness({ action });
+      let rejectCommand;
+      h.vacuum.runHomeKitAction = jest.fn(
+        () =>
+          new Promise((_, reject) => {
+            rejectCommand = reject;
+          })
+      );
+      h.accessory.displayName = "My renamed button";
+      expect(h.on.setHandler(true)).toBeUndefined();
+      expect(h.vacuum.runHomeKitAction).toHaveBeenCalledWith(action);
+      rejectCommand(new Error("broker unavailable"));
+      await flush();
+      expect(h.platform.log.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Accepted Home action ${getActionSwitchDefinition(action).nameSuffix} for Vicky failed: broker unavailable`
+        )
+      );
+      expect(h.on.getHandler()).toBe(false);
+      h.actionSwitch.dispose();
+    }
+  );
   test("the real dock command failure is still prominent after acknowledgement", async () => {
-    const h=createHarness(); h.platform.roborockAPI.app_charge.mockRejectedValue(new Error("broker unavailable"));
-    expect(h.on.setHandler(true)).toBeUndefined(); await flush();
-    const messages=[...h.platform.log.error.mock.calls,...h.platform.log.warn.mock.calls].flat().join("\n");
-    expect(messages).toMatch(/Vicky/); expect(messages).toMatch(/dock/i); expect(messages).toMatch(/broker unavailable/);
+    const h = createHarness();
+    h.platform.roborockAPI.app_charge.mockRejectedValue(
+      new Error("broker unavailable")
+    );
+    expect(h.on.setHandler(true)).toBeUndefined();
+    await flush();
+    const messages = [
+      ...h.platform.log.error.mock.calls,
+      ...h.platform.log.warn.mock.calls,
+    ]
+      .flat()
+      .join("\n");
+    expect(messages).toMatch(/Vicky/);
+    expect(messages).toMatch(/dock/i);
+    expect(messages).toMatch(/broker unavailable/);
     h.actionSwitch.dispose();
   });
 });
