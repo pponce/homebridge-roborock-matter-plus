@@ -1,0 +1,100 @@
+PASS __tests__/live-status-gate-matches-what-the-publish-reads.test.js
+PASS __tests__/the-slow-lane-and-the-fast-start.test.js
+PASS __tests__/a-refused-reply-is-not-an-empty-answer.test.js
+PASS __tests__/log-lines-name-the-robot.test.js
+PASS __tests__/a-q10-status-poll-is-not-a-failure.test.js
+PASS __tests__/a-reply-that-comes-too-late-is-called-late.test.js
+PASS __tests__/late-replies-belong-to-the-current-silence.test.js
+PASS __tests__/a-reconnect-does-not-wait-for-a-dead-link.test.js
+PASS __tests__/the-dock-status-word-carries-the-tanks.test.js
+PASS __tests__/a-finished-b01-clean-is-not-an-unmapped-fault.test.js
+PASS __tests__/schedule-generic-poll-ownership.test.js
+PASS __tests__/live-room-diagnosis.test.js
+PASS __tests__/a-hello-drop-with-the-cloud-down-is-refused-at-once.test.js
+PASS __tests__/a-write-batch-cannot-wait-on-a-refresh-queued-behind-it.test.js
+PASS __tests__/each-request-is-blamed-for-its-own-silence.test.js
+PASS __tests__/an-l01-robot-always-waits-for-its-hello.test.js
+PASS __tests__/b01-v1-poll-skipping.test.js
+PASS __tests__/schedule-scene-reconciliation.test.js
+PASS __tests__/a-mute-local-socket-is-given-up-on.test.js
+PASS __tests__/cloud-only-markers-are-reconciled.test.js
+PASS __tests__/operational-state-is-advertised.test.js
+PASS __tests__/capability-detection.test.js
+PASS __tests__/a-cleared-fault-gives-the-tile-its-real-state-back.test.js
+PASS __tests__/a-quiet-tank-is-not-a-refilled-tank.test.js
+PASS __tests__/mqtt-silent-read-integration.test.js
+PASS __tests__/a-bad-cloud-day-is-survivable.test.js
+PASS __tests__/mqtt-session-readiness.test.js
+PASS __tests__/the-periodic-poll-makes-no-cloud-request-nobody-reads.test.js
+PASS __tests__/mqtt-session-real-reconnect.test.js
+PASS __tests__/a-dropped-map-reply-says-so.test.js
+PASS __tests__/every-switch-is-wired-all-the-way-through.test.js
+PASS __tests__/every-sensor-is-wired-all-the-way-through.test.js
+PASS __tests__/a-placeholder-position-is-not-a-robot-between-rooms.test.js
+PASS __tests__/a-q10-reads-its-own-status-codes-from-home-data.test.js
+PASS __tests__/a-service-area-write-matter-would-refuse-is-not-published.test.js
+PASS __tests__/a-fault-is-never-published-beside-a-working-state.test.js
+PASS __tests__/action-switches-survive-the-legacy-sweep.test.js
+PASS __tests__/an-owner-report-decides-a-new-dock-type.test.js
+PASS __tests__/a-recovery-line-names-only-a-failure-the-log-announced.test.js
+PASS __tests__/mqtt-presence-notifications.test.js
+PASS __tests__/live-dps-mapping.test.js
+PASS __tests__/b01-live-room-latency.test.js
+PASS __tests__/live-room-docs-match-the-code.test.js
+PASS __tests__/cloud-ok-acknowledgement.test.js
+PASS __tests__/an-empty-tank-does-not-turn-a-cleaning-robot-into-an-error.test.js
+PASS __tests__/each-silence-is-counted-once-and-a-refusal-is-an-answer.test.js
+PASS __tests__/a-login-retry-does-not-outlive-shutdown.test.js
+PASS __tests__/a-debug-log-is-safe-to-paste.test.js
+PASS __tests__/stale-accessory-guard.test.js
+PASS __tests__/b01-live-room-coordinates.test.js
+PASS __tests__/a-robot-swapping-its-mop-mid-run-is-not-at-rest.test.js
+PASS __tests__/installing-the-package-runs-no-build.test.js
+PASS __tests__/report-settings-come-from-saved-config.test.js
+PASS __tests__/a-decoded-mqtt-message-counts-toward-its-robot.test.js
+PASS __tests__/readme-test-count-is-not-invented.test.js
+PASS __tests__/matter-service-area.test.js
+PASS __tests__/capability-model-gating.test.js
+PASS __tests__/shipped-locales-are-selectable.test.js
+PASS __tests__/vacuum-command-options.test.js
+PASS __tests__/schedule-startup-recovery.test.js
+PASS __tests__/platform-device-update.test.js
+PASS __tests__/diagnostics-redaction.test.js
+PASS __tests__/a-quiet-mqtt-session-is-restarted.test.js
+PASS __tests__/diagnostics-priority-keys.test.js
+PASS __tests__/roborock-crypto.test.js
+PASS __tests__/persist-debounce.test.js
+PASS __tests__/two-maps-with-one-name-are-both-published.test.js
+PASS __tests__/hap-schedule-api.test.js
+PASS __tests__/a-delivering-mqtt-session-is-not-restarted.test.js
+PASS __tests__/saros10-status-fields.test.js
+PASS __tests__/localConnector.test.js
+PASS __tests__/roborock-mqtt-connector.test.js
+
+Summary of all failing tests
+FAIL __tests__/hap-schedule-naming.test.js
+  ● HAP schedule names and stable group identity › presents a schedule press immediately and suppresses repeats while it is pending
+
+    expect(received).toHaveLength(expected)
+
+    Expected length: 1
+    Received length: 0
+    Received array:  []
+
+    [0m [90m 491 |[39m           message[33m.[39mincludes([32m"Schedule command: queueing disable"[39m)
+     [90m 492 |[39m         )
+    [31m[1m>[22m[39m[90m 493 |[39m       )[33m.[39mtoHaveLength([35m1[39m)[33m;[39m
+     [90m     |[39m         [31m[1m^[22m[39m
+     [90m 494 |[39m
+     [90m 495 |[39m       [36mawait[39m jest[33m.[39madvanceTimersByTimeAsync([35m4000[39m)[33m;[39m
+     [90m 496 |[39m[0m
+
+      at Object.toHaveLength (__tests__/hap-schedule-naming.test.js:493:9)
+
+
+Test Suites: 1 failed, 164 passed, 165 total
+Tests:       1 failed, 2299 passed, 2300 total
+Snapshots:   0 total
+Time:        27.312 s
+Ran all test suites.
+Test results written to: ../../_temp/tests.json
