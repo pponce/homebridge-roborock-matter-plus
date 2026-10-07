@@ -1,12 +1,7 @@
 {
-  "passed": 2195,
-  "failed": 1,
+  "passed": 2200,
+  "failed": 0,
   "suites": 157,
   "runtimeErrors": 0,
-  "failures": [
-    {
-      "name": "/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/a-schedule-the-robot-denies-is-read-from-the-cloud.test.js",
-      "message": "  ● the Routines accessory › a failed run is a warning, not a thrown handler\n\n    expect(received).resolves.toBeUndefined()\n\n    Matcher error: received value must be a promise or a function returning a promise\n\n    Received has value: undefined\n\n    \u001b[0m \u001b[90m 675 |\u001b[39m       \u001b[33mCharacteristic\u001b[39m\u001b[33m.\u001b[39m\u001b[33mOn\u001b[39m\n     \u001b[90m 676 |\u001b[39m     )\u001b[33m;\u001b[39m\n    \u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 677 |\u001b[39m     \u001b[36mawait\u001b[39m expect(on\u001b[33m.\u001b[39msetHandler(\u001b[36mtrue\u001b[39m))\u001b[33m.\u001b[39mresolves\u001b[33m.\u001b[39mtoBeUndefined()\u001b[33m;\u001b[39m\n     \u001b[90m     |\u001b[39m                                                \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 678 |\u001b[39m     expect(platform\u001b[33m.\u001b[39mlog\u001b[33m.\u001b[39mwarn)\u001b[33m.\u001b[39mtoHaveBeenCalledWith(\n     \u001b[90m 679 |\u001b[39m       expect\u001b[33m.\u001b[39mstringMatching(\n     \u001b[90m 680 |\u001b[39m         \u001b[35m/Unable to run Roborock routine \"Saugen\\+\": device offline/\u001b[39m\u001b[0m\n\n      at Object.toBeUndefined (node_modules/expect/build/index.js:2138:11)\n      at Object.toBeUndefined (__tests__/a-schedule-the-robot-denies-is-read-from-the-cloud.test.js:677:48)\n"
-    }
-  ]
+  "failures": []
 }

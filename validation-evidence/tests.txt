@@ -1,3 +1,25 @@
+PASS __tests__/the-heartbeat-still-heals-a-dropped-write.test.js
+PASS __tests__/resume-continues-the-paused-room-clean.test.js
+PASS __tests__/a-prerelease-must-never-publish-as-latest.test.js
+PASS __tests__/matter-fault-reporting.test.js
+PASS __tests__/clean-mode-prep-sends-every-command.test.js
+PASS __tests__/clean-mode-keeps-the-known-suction-level.test.js
+PASS __tests__/b01-map-field-survey.test.js
+PASS __tests__/shutdown-and-resources-are-tidy.test.js
+PASS __tests__/a-q10-is-not-sent-q7-frames-it-cannot-read.test.js
+PASS __tests__/a-hello-belongs-to-its-own-socket.test.js (8.849 s)
+PASS __tests__/a-cloud-timeout-says-whether-the-reply-ever-arrived.test.js
+PASS __tests__/cloud-silence-separates-unattributed-traffic-from-none.test.js
+PASS __tests__/b01-room-mapping-asks-for-nothing-it-cannot-read.test.js
+PASS __tests__/an-implicit-save-writes-only-its-own-fields.test.js
+PASS __tests__/the-settings-page-follows-homebridge-s-theme.test.js
+PASS __tests__/a-closed-settings-page-is-not-a-crash.test.js
+PASS __tests__/crash-safety-and-discovery.test.js
+PASS __tests__/vacuum-room-mapping.test.js
+PASS __tests__/a-q10-live-room-is-not-polled.test.js
+PASS __tests__/shutdown-closes-the-discovery-socket.test.js
+PASS __tests__/a-network-blip-is-not-a-silent-robot.test.js
+PASS __tests__/a-q10-read-refusal-is-calm-by-construction.test.js
 PASS __tests__/the-routines-accessory-is-registered-when-it-has-switches.test.js
 PASS __tests__/ui-server-local-probe.test.js
 PASS __tests__/live-status-gate-matches-what-the-publish-reads.test.js
@@ -70,31 +92,9 @@ PASS __tests__/hap-schedule-api.test.js
 PASS __tests__/localConnector.test.js
 PASS __tests__/roborock-mqtt-connector.test.js
 
-Summary of all failing tests
-FAIL __tests__/a-schedule-the-robot-denies-is-read-from-the-cloud.test.js
-  ● the Routines accessory › a failed run is a warning, not a thrown handler
-
-    expect(received).resolves.toBeUndefined()
-
-    Matcher error: received value must be a promise or a function returning a promise
-
-    Received has value: undefined
-
-    [0m [90m 675 |[39m       [33mCharacteristic[39m[33m.[39m[33mOn[39m
-     [90m 676 |[39m     )[33m;[39m
-    [31m[1m>[22m[39m[90m 677 |[39m     [36mawait[39m expect(on[33m.[39msetHandler([36mtrue[39m))[33m.[39mresolves[33m.[39mtoBeUndefined()[33m;[39m
-     [90m     |[39m                                                [31m[1m^[22m[39m
-     [90m 678 |[39m     expect(platform[33m.[39mlog[33m.[39mwarn)[33m.[39mtoHaveBeenCalledWith(
-     [90m 679 |[39m       expect[33m.[39mstringMatching(
-     [90m 680 |[39m         [35m/Unable to run Roborock routine "Saugen\+": device offline/[39m[0m
-
-      at Object.toBeUndefined (node_modules/expect/build/index.js:2138:11)
-      at Object.toBeUndefined (__tests__/a-schedule-the-robot-denies-is-read-from-the-cloud.test.js:677:48)
-
-
-Test Suites: 1 failed, 156 passed, 157 total
-Tests:       1 failed, 2195 passed, 2196 total
+Test Suites: 157 passed, 157 total
+Tests:       2200 passed, 2200 total
 Snapshots:   0 total
-Time:        33.263 s
+Time:        29.539 s
 Ran all test suites.
 Test results written to: ../../_temp/tests.json
