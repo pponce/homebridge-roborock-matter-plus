@@ -70,7 +70,14 @@ function acknowledge(granted = [{ qos: 1 }]) {
     cmd: "suback",
     granted: granted.map((x) => x.qos),
   });
-  if (!client.knownTopic) client.subscriptions.at(-1)(null, granted.map(g => ({topic: client.subscribe.mock.calls.at(-1)[0], ...g})));
+  if (!client.knownTopic)
+    client.subscriptions.at(-1)(
+      null,
+      granted.map((g) => ({
+        topic: client.subscribe.mock.calls.at(-1)[0],
+        ...g,
+      }))
+    );
   client.knownTopic = granted.every((x) => x.qos < 128);
 }
 
