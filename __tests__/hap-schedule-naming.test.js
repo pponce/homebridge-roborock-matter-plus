@@ -698,6 +698,7 @@ function optimisticFixture() {
   const coordinator = makeCoordinator(platform, accessory);
   coordinator.sync([{id: "optimistic", enabled: false, timer: ["optimistic", "off"]}]);
   const calls = [];
+  coordinator.refreshIfNeeded = jest.fn(() => new Promise(() => {}));
   coordinator.enqueueScheduleWrite = jest.fn(() => new Promise((resolve, reject) => calls.push({resolve,reject})));
   return {platform, coordinator, calls, on: switchService(accessory, "optimistic").getCharacteristic(Characteristic.On)};
 }
@@ -706,10 +707,12 @@ test("schedule press acknowledges immediately and failure rolls the characterist
   const {platform, on, calls} = optimisticFixture();
   expect(on.setHandler(true)).toBeUndefined();
   expect(on.value).toBe(true);
+  expect(on.getHandler()).toBe(true);
   await Promise.resolve();
   calls[0].reject(new Error("cloud refused"));
   await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
   expect(on.value).toBe(false);
+  expect(on.getHandler()).toBe(false);
   expect(platform.log.warn).toHaveBeenCalledWith(expect.stringMatching(/Schedule display rollback.*device-1\/optimistic.*cloud refused.*not a user change/));
   on.setHandler(true);
   expect(on.value).toBe(false);
