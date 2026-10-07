@@ -1,0 +1,4 @@
+
+> homebridge-roborock-matter@3.37.0 build
+> rimraf ./dist && tsc
+

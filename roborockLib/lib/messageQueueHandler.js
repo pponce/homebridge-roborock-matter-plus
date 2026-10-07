@@ -441,7 +441,12 @@ class messageQueueHandler {
       secure ||
       photo ||
       method == "get_network_info";
-    if (!useCloudConnection && !localConnectionState && mqttConnectionState) {
+    if (
+      !useCloudConnection &&
+      !localConnectionState &&
+      (mqttConnectionState ||
+        typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")
+    ) {
       useCloudConnection = true;
       await this.adapter.updateTransportDiagnostics(duid, {
         lastTransport: "cloud",
@@ -473,7 +478,8 @@ class messageQueueHandler {
       localConnectionState = this.adapter.localConnector.isConnected(duid);
       if (
         !localConnectionState &&
-        this.adapter.rr_mqtt_connector.isConnected()
+        (this.adapter.rr_mqtt_connector.isConnected() ||
+          typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")
       ) {
         useCloudConnection = true;
         this.adapter.log.debug(
@@ -520,6 +526,7 @@ class messageQueueHandler {
     if (
       roborockMessage &&
       useCloudConnection &&
+      (deviceOnline || allowOfflineCloudSend) &&
       !this.adapter.rr_mqtt_connector.recovery &&
       typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function"
     ) {
@@ -531,7 +538,12 @@ class messageQueueHandler {
 
     if (roborockMessage) {
       // Recheck after async payload building: a recreation may have begun.
-      if (useCloudConnection) this.adapter.rr_mqtt_connector.assertCanSend?.();
+      if (useCloudConnection) {
+        this.adapter.rr_mqtt_connector.assertCanSend?.();
+        sessionGeneration =
+          this.adapter.rr_mqtt_connector.getSessionGeneration?.() ??
+          sessionGeneration;
+      }
       return new Promise((resolve, reject) => {
         if (
           !deviceOnline &&
@@ -764,12 +776,26 @@ class messageQueueHandler {
             publishedAt: null,
           };
           this.adapter.pendingRequests.set(messageID, pendingRequest);
-          const armResponseTimeout = () => {
-            pendingRequest.publishedAt = Date.now();
-            pendingRequest.timeout = this.adapter.setTimeout(
-              onTimeout,
-              requestTimeout
-            );
+          /** @param {() => void} send */
+          const publish = (send) => {
+            try {
+              send();
+              // Immediate replies may already have removed the pending request.
+              if (
+                this.adapter.pendingRequests.get(messageID) === pendingRequest
+              ) {
+                pendingRequest.publishedAt = Date.now();
+                pendingRequest.timeout = this.adapter.setTimeout(
+                  onTimeout,
+                  requestTimeout
+                );
+              }
+              return true;
+            } catch (error) {
+              this.adapter.pendingRequests.delete(messageID);
+              reject(error); // A publication failure is not a robot answer or silence.
+              return false;
+            }
           };
 
           if (useCloudConnection) {
@@ -778,8 +804,15 @@ class messageQueueHandler {
                 `Device ${duid} is marked offline, but sending method ${method} via cloud because the command explicitly allows offline cloud delivery.`
               );
             }
-            this.adapter.rr_mqtt_connector.sendMessage(duid, roborockMessage);
-            armResponseTimeout();
+            if (
+              !publish(() =>
+                this.adapter.rr_mqtt_connector.sendMessage(
+                  duid,
+                  roborockMessage
+                )
+              )
+            )
+              return;
             const lastTransportReason =
               [
                 {
@@ -814,8 +847,12 @@ class messageQueueHandler {
             lengthBuffer.writeUInt32BE(roborockMessage.length, 0);
 
             const fullMessage = Buffer.concat([lengthBuffer, roborockMessage]);
-            this.adapter.localConnector.sendMessage(duid, fullMessage);
-            armResponseTimeout();
+            if (
+              !publish(() =>
+                this.adapter.localConnector.sendMessage(duid, fullMessage)
+              )
+            )
+              return;
             this.adapter.updateTransportDiagnostics(duid, {
               lastTransport: "local",
               lastTransportReason: "local-request",

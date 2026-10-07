@@ -12,7 +12,7 @@ jobs:
       matrix:
         include:
           - key: "home"
-            sha: 326c1228dfd02d841f8320ed28cc817fa24ff8ad
+            sha: e4b6ded9a1c2d16d8e8559624c7a6a9030c49070
     steps:
       - uses: actions/checkout@v5
         with:
@@ -59,7 +59,7 @@ jobs:
           if [ "${{ matrix.key }}" = home ]; then git add -f dist; fi
           git add -f validation-evidence
           git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record v3.37.0 validation [skip ci]"
-          git push origin HEAD:refs/heads/mqtt-home-integrated-v1-${{ matrix.key }}
+          git push origin HEAD:refs/heads/mqtt-home-integrated-v2-${{ matrix.key }}
       - name: Require gates
         if: always()
         run: |
