@@ -43,3 +43,17 @@ brief reconnect that succeeds and an outage exceeding 10 seconds, for both a
 Matter command and a HAP switch. Include timestamps for the press, publication or
 readiness failure, and the displayed state. Do not describe the expiry as a robot
 refusal: no command was sent.
+
+## Home-branch integration
+
+This branch combines #37 with #31 and the existing home connector. Ordinary
+requests use the bounded readiness wait; experimental recovery retains its
+explicit send gate while recreation is in progress. The home connector uses
+event-driven waiters and can fail earlier on an explicit subscription failure.
+It also retains internal cancellation and per-request budget hooks.
+
+The response timer starts after publication on both paths. Unsent requests do
+not become robot silence evidence. Momentary HAP actions can acknowledge before
+the background command finishes (#36 and the retained routine-button behavior),
+and persistent schedule switches use #38's optimistic display and rollback.
+See [the extras inventory](home-branch-extras.md) for the remaining differences.

@@ -1014,7 +1014,10 @@ class roborock_mqtt_connector {
   assertCanSend() {
     this.recovery?.assertCanSend();
     if (!this.recovery && !this.isReady()) {
-      throw new MqttReadinessError("MQTT reply subscription is not ready; this command was not sent.", "MQTT_SESSION_NOT_READY");
+      throw new MqttReadinessError(
+        "MQTT reply subscription is not ready; this command was not sent.",
+        "MQTT_SESSION_NOT_READY"
+      );
     }
   }
 

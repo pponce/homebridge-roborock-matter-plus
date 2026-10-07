@@ -486,6 +486,8 @@ describe("HAP schedule names and stable group identity", () => {
 
       expect(presses).toEqual([undefined, undefined, undefined, undefined]);
       expect(onCharacteristic.value).toBe(false);
+      // The display acknowledges synchronously; cloud work starts in a microtask.
+      await jest.advanceTimersByTimeAsync(0);
       expect(
         platform.log.info.mock.calls.filter(([message]) =>
           message.includes("Schedule command: queueing disable")

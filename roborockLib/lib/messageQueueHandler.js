@@ -441,7 +441,12 @@ class messageQueueHandler {
       secure ||
       photo ||
       method == "get_network_info";
-    if (!useCloudConnection && !localConnectionState && (mqttConnectionState || typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")) {
+    if (
+      !useCloudConnection &&
+      !localConnectionState &&
+      (mqttConnectionState ||
+        typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")
+    ) {
       useCloudConnection = true;
       await this.adapter.updateTransportDiagnostics(duid, {
         lastTransport: "cloud",
@@ -473,7 +478,8 @@ class messageQueueHandler {
       localConnectionState = this.adapter.localConnector.isConnected(duid);
       if (
         !localConnectionState &&
-        (this.adapter.rr_mqtt_connector.isConnected() || typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")
+        (this.adapter.rr_mqtt_connector.isConnected() ||
+          typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")
       ) {
         useCloudConnection = true;
         this.adapter.log.debug(
@@ -534,7 +540,9 @@ class messageQueueHandler {
       // Recheck after async payload building: a recreation may have begun.
       if (useCloudConnection) {
         this.adapter.rr_mqtt_connector.assertCanSend?.();
-        sessionGeneration = this.adapter.rr_mqtt_connector.getSessionGeneration?.() ?? sessionGeneration;
+        sessionGeneration =
+          this.adapter.rr_mqtt_connector.getSessionGeneration?.() ??
+          sessionGeneration;
       }
       return new Promise((resolve, reject) => {
         if (
@@ -773,9 +781,14 @@ class messageQueueHandler {
             try {
               send();
               // Immediate replies may already have removed the pending request.
-              if (this.adapter.pendingRequests.get(messageID) === pendingRequest) {
+              if (
+                this.adapter.pendingRequests.get(messageID) === pendingRequest
+              ) {
                 pendingRequest.publishedAt = Date.now();
-                pendingRequest.timeout = this.adapter.setTimeout(onTimeout, requestTimeout);
+                pendingRequest.timeout = this.adapter.setTimeout(
+                  onTimeout,
+                  requestTimeout
+                );
               }
               return true;
             } catch (error) {
@@ -791,7 +804,15 @@ class messageQueueHandler {
                 `Device ${duid} is marked offline, but sending method ${method} via cloud because the command explicitly allows offline cloud delivery.`
               );
             }
-            if (!publish(() => this.adapter.rr_mqtt_connector.sendMessage(duid, roborockMessage))) return;
+            if (
+              !publish(() =>
+                this.adapter.rr_mqtt_connector.sendMessage(
+                  duid,
+                  roborockMessage
+                )
+              )
+            )
+              return;
             const lastTransportReason =
               [
                 {
@@ -826,7 +847,12 @@ class messageQueueHandler {
             lengthBuffer.writeUInt32BE(roborockMessage.length, 0);
 
             const fullMessage = Buffer.concat([lengthBuffer, roborockMessage]);
-            if (!publish(() => this.adapter.localConnector.sendMessage(duid, fullMessage))) return;
+            if (
+              !publish(() =>
+                this.adapter.localConnector.sendMessage(duid, fullMessage)
+              )
+            )
+              return;
             this.adapter.updateTransportDiagnostics(duid, {
               lastTransport: "local",
               lastTransportReason: "local-request",
