@@ -141,13 +141,11 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-
-
 test("waits for SUBACK before publishing and preserves the whole response budget", async () => {
   const client = mockClients[0];
   client.handlers.get("close")();
-  client.handlers.get("connect")({sessionPresent: false});
-  const {result, id} = await startRequest();
+  client.handlers.get("connect")({ sessionPresent: false });
+  const { result, id } = await startRequest();
   await jest.advanceTimersByTimeAsync(9000);
   expect(client.publish).not.toHaveBeenCalled();
   expect(adapter.pendingRequests.size).toBe(0);
@@ -158,33 +156,43 @@ test("waits for SUBACK before publishing and preserves the whole response budget
   await jest.advanceTimersByTimeAsync(9999);
   expect(adapter.pendingRequests.has(id)).toBe(true);
   await jest.advanceTimersByTimeAsync(1);
-  expect(await result).toMatchObject({unansweredRequest: true});
+  expect(await result).toMatchObject({ unansweredRequest: true });
 });
 
 test("expired readiness is unsent, never robot silence, and cannot publish later", async () => {
   const client = mockClients[0];
   client.handlers.get("close")();
-  const {result} = await startRequest();
+  const { result } = await startRequest();
   await jest.advanceTimersByTimeAsync(10000);
-  expect(await result).toMatchObject({code: "MQTT_READINESS_TIMEOUT", requestNotSent: true, unansweredRequest: false});
+  expect(await result).toMatchObject({
+    code: "MQTT_READINESS_TIMEOUT",
+    requestNotSent: true,
+    unansweredRequest: false,
+  });
   expect(adapter.pendingRequests.size).toBe(0);
   expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
-  client.handlers.get("connect")({}); acknowledge();
+  client.handlers.get("connect")({});
+  acknowledge();
   await jest.advanceTimersByTimeAsync(25);
   expect(client.publish).not.toHaveBeenCalled();
 });
 
 test("disconnect settles all outstanding readiness waits without waiting for the deadline", async () => {
   mockClients[0].handlers.get("close")();
-  const {result} = await startRequest();
+  const { result } = await startRequest();
   connector.disconnect();
-  expect(await result).toMatchObject({code: "MQTT_SHUTTING_DOWN", requestNotSent: true});
+  expect(await result).toMatchObject({
+    code: "MQTT_SHUTTING_DOWN",
+    requestNotSent: true,
+  });
   expect(connector.readiness.waiters.size).toBe(0);
 });
 
 test("synchronous publication failure leaves no request or response timer", async () => {
-  mockClients[0].publish.mockImplementation(() => { throw new Error("publish failed"); });
-  const {result} = await startRequest();
+  mockClients[0].publish.mockImplementation(() => {
+    throw new Error("publish failed");
+  });
+  const { result } = await startRequest();
   expect((await result).message).toBe("publish failed");
   expect(adapter.pendingRequests.size).toBe(0);
   await jest.advanceTimersByTimeAsync(10000);
@@ -195,32 +203,41 @@ test("a working local connection bypasses the MQTT readiness wait", async () => 
   adapter.config.cloudOnlyMode = false;
   adapter.localConnector.isConnected.mockReturnValue(true);
   mockClients[0].handlers.get("close")();
-  const {result, id} = await startRequest();
+  const { result, id } = await startRequest();
   expect(adapter.localConnector.sendMessage).toHaveBeenCalledTimes(1);
   const pending = adapter.pendingRequests.get(id);
-  clearTimeout(pending.timeout); adapter.pendingRequests.delete(id); pending.resolve(["local"]);
+  clearTimeout(pending.timeout);
+  adapter.pendingRequests.delete(id);
+  pending.resolve(["local"]);
   expect(await result).toEqual(["local"]);
 });
 
 test("B01 map readiness expiry never starts a pending map request", async () => {
   mockClients[0].handlers.get("close")();
-  const result = Roborock.prototype.sendB01MapRequest.call(adapter, "robot-a", 0).catch(e=>e);
+  const result = Roborock.prototype.sendB01MapRequest
+    .call(adapter, "robot-a", 0)
+    .catch((e) => e);
   await jest.advanceTimersByTimeAsync(10000);
-  expect(await result).toMatchObject({requestNotSent: true, code: "MQTT_READINESS_TIMEOUT"});
+  expect(await result).toMatchObject({
+    requestNotSent: true,
+    code: "MQTT_READINESS_TIMEOUT",
+  });
   expect(adapter.pendingB01MapRequests.size).toBe(0);
   expect(mockClients[0].publish).not.toHaveBeenCalled();
 });
 
-
 test("a local-unavailable request can wait for a briefly disconnected cloud fallback", async () => {
   adapter.config.cloudOnlyMode = false;
   mockClients[0].handlers.get("close")();
-  const {result, id} = await startRequest();
+  const { result, id } = await startRequest();
   expect(mockClients[0].publish).not.toHaveBeenCalled();
-  mockClients[0].handlers.get("connect")({}); acknowledge();
+  mockClients[0].handlers.get("connect")({});
+  acknowledge();
   await jest.advanceTimersByTimeAsync(25);
   expect(mockClients[0].publish).toHaveBeenCalledTimes(1);
   const pending = adapter.pendingRequests.get(id);
-  clearTimeout(pending.timeout); adapter.pendingRequests.delete(id); pending.resolve(["cloud"]);
+  clearTimeout(pending.timeout);
+  adapter.pendingRequests.delete(id);
+  pending.resolve(["cloud"]);
   expect(await result).toEqual(["cloud"]);
 });

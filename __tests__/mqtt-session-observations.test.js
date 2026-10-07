@@ -547,7 +547,10 @@ test("an unacknowledged subscription refuses the unsent request without recordin
   expect(error.message).toContain(
     "MQTT reply subscription did not become ready within 10000ms; this command was not sent."
   );
-  expect(error).toMatchObject({ requestNotSent: true, unansweredRequest: false });
+  expect(error).toMatchObject({
+    requestNotSent: true,
+    unansweredRequest: false,
+  });
   expect(error.message).not.toContain("capturedAt");
   expect(snapshot().rawSilenceDuringRequest).toBeNull();
 });

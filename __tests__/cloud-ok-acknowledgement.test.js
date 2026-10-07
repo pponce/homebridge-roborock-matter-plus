@@ -102,7 +102,10 @@ describe("the secure flag reaches the pending request", () => {
     // the old `[^}]*` window closed too early. Look at the whole call instead.
     const at = source.indexOf("const pendingRequest = {");
     expect(at).toBeGreaterThan(-1);
-    const entry = source.slice(at, source.indexOf("this.adapter.pendingRequests.set", at));
+    const entry = source.slice(
+      at,
+      source.indexOf("this.adapter.pendingRequests.set", at)
+    );
     expect(entry).toMatch(/\bsecure\b/);
     expect(entry).toMatch(/\bmethod\b/);
   });

@@ -121,10 +121,10 @@ describe("messageQueueHandler transport selection", () => {
     });
     adapter.rr_mqtt_connector.sendMessage.mockImplementation(() => {
       queueMicrotask(() => {
-      const pending = adapter.pendingRequests.get(42);
-      adapter.clearTimeout(pending.timeout);
-      adapter.pendingRequests.delete(42);
-      pending.resolve(["ok"]);
+        const pending = adapter.pendingRequests.get(42);
+        adapter.clearTimeout(pending.timeout);
+        adapter.pendingRequests.delete(42);
+        pending.resolve(["ok"]);
       });
     });
 
