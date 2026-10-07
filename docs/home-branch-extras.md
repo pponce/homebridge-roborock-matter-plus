@@ -4,15 +4,15 @@ This inventory compares `MQTT_ACCOUNT_SESSION_RECOVERY` with upstream v3.37.0 pl
 
 ## Integration baseline
 
-| Included work | Reviewed commit | Scope |
-| --- | --- | --- |
-| v3.37.0 / merged #29 | `4d23bf0e812111758afbd46b68e26d1c9bd52e8c` | Passive diagnostics, real SUBACK observations, persistence flush after teardown |
-| [#30](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/30) | `bb1777a32c98bcca35570023eddb6140aa7cbd59` | Strictly cross-robot breaker exemption |
-| [#31](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/31) | `a59ba5a96cdcfe3a7994b5d571237cfdf627ae66` | Experimental recreation, optional preventive refresh, recovery diagnostics |
-| [#32](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/32) | `3d1a03f3cc519defceaf0a1b8b6219881a967b8d` | Schedule-write reconciliation and duplicate-write suppression |
-| [#36](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/36) | `52a38d05701148667b510ce141cdbbf23725de5c` | Submitted discussion code for momentary actions and presence logging |
+| Included work                                                               | Reviewed commit                            | Scope                                                                                        |
+| --------------------------------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------- |
+| v3.37.0 / merged #29                                                        | `4d23bf0e812111758afbd46b68e26d1c9bd52e8c` | Passive diagnostics, real SUBACK observations, persistence flush after teardown              |
+| [#30](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/30) | `bb1777a32c98bcca35570023eddb6140aa7cbd59` | Strictly cross-robot breaker exemption                                                       |
+| [#31](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/31) | `a59ba5a96cdcfe3a7994b5d571237cfdf627ae66` | Experimental recreation, optional preventive refresh, recovery diagnostics                   |
+| [#32](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/32) | `3d1a03f3cc519defceaf0a1b8b6219881a967b8d` | Schedule-write reconciliation and duplicate-write suppression                                |
+| [#36](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/36) | `52a38d05701148667b510ce141cdbbf23725de5c` | Submitted discussion code for momentary actions and presence logging                         |
 | [#37](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/37) | `bc469f1cd770e3b4639f773d592a4e655d88d552` | Ordinary MQTT readiness gate, separate publication/response budgets, unsent-request handling |
-| [#38](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/38) | `91c4e05e87151588d5b8d558882fac320f620b8b` | Optimistic schedule display, explicit rollback and newer-intent protection |
+| [#38](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/38) | `91c4e05e87151588d5b8d558882fac320f620b8b` | Optimistic schedule display, explicit rollback and newer-intent protection                   |
 
 The home branch before this integration was `544097fd5bc3b2a840321b3145c616ce3ddd6294`. It already contained v3.37.0 and the #30–32 changes. This integration adopts #38's schedule-switch implementation and #37's send/timing safeguards, adapting readiness to the existing home connector so its additional lifecycle capabilities remain available. It preserves the current #36-equivalent behavior; it does not implement the future split proposed in that discussion.
 
@@ -46,13 +46,13 @@ The intended benefit is to stop waiting promptly when subscription is refused or
 
 ### 5. Small lifecycle safeguards and diagnostic details
 
-| Difference | Intended benefit and discussion scope |
-| --- | --- |
+| Difference                                                         | Intended benefit and discussion scope                                                                                         |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
 | Prevent duplicate recovery-handler installation on the same client | Avoid multiple reactions when home initialization paths revisit a client; no demonstrated upstream duplication bug is claimed |
-| Clear the startup watchdog on experimental connection | Avoid an obsolete initial-connect timeout after a successful connection |
-| Log recreation start and reason | Show that recovery began, even before its result is available |
-| Emit diagnostics when a general cooldown blocks recreation | Make the reason for deferring an attempt visible |
-| Catch and warn on hourly health-check errors | Avoid an unexpected rejected health-check promise disappearing without useful context |
+| Clear the startup watchdog on experimental connection              | Avoid an obsolete initial-connect timeout after a successful connection                                                       |
+| Log recreation start and reason                                    | Show that recovery began, even before its result is available                                                                 |
+| Emit diagnostics when a general cooldown blocks recreation         | Make the reason for deferring an attempt visible                                                                              |
+| Catch and warn on hourly health-check errors                       | Avoid an unexpected rejected health-check promise disappearing without useful context                                         |
 
 These belong next to the lifecycle they protect if upstream needs them. They should not be bundled as unexplained behavior changes. Core recovery reason/result/failure/cooldown reporting is already in #31 and is not an extra.
 
@@ -66,15 +66,15 @@ The submitted #36 code covers other momentary actions; routine acknowledgement r
 
 These are not additional user-facing features. They are preserved so integration does not also become an unrelated cleanup.
 
-| Item | Purpose / present status |
-| --- | --- |
-| Per-robot raw/decoded/correlated ages in the connector health snapshot | Additional internal inspection data; no production consumer found beyond the existing diagnostic/test surfaces |
-| `recoverMqttSession` API facade | Entry point for explicit recovery; no production caller found |
-| `isRecoverableScheduleCloudFailure` helper | Classifies schedule/cloud failures; retained helper/test coverage, not a separate current behavior |
-| Additional refresh-result `failedSources` / `error` fields | Carry partial-failure information; no production consumer found for the extra fields |
-| `isPreventiveReconnectDue` helper | Retained helper/test surface; active preventive policy is already supplied by #31 |
-| Older maintenance/preventive constants and `silentCloudReadTimeouts` bookkeeping | Leftovers from earlier iterations; do not represent a second active preventive or single-robot policy |
-| Home-specific regression tests, generated `dist/`, build workflow and working notes | Support the fork's installation and development process; not product capabilities proposed upstream |
+| Item                                                                                | Purpose / present status                                                                                       |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Per-robot raw/decoded/correlated ages in the connector health snapshot              | Additional internal inspection data; no production consumer found beyond the existing diagnostic/test surfaces |
+| `recoverMqttSession` API facade                                                     | Entry point for explicit recovery; no production caller found                                                  |
+| `isRecoverableScheduleCloudFailure` helper                                          | Classifies schedule/cloud failures; retained helper/test coverage, not a separate current behavior             |
+| Additional refresh-result `failedSources` / `error` fields                          | Carry partial-failure information; no production consumer found for the extra fields                           |
+| `isPreventiveReconnectDue` helper                                                   | Retained helper/test surface; active preventive policy is already supplied by #31                              |
+| Older maintenance/preventive constants and `silentCloudReadTimeouts` bookkeeping    | Leftovers from earlier iterations; do not represent a second active preventive or single-robot policy          |
+| Home-specific regression tests, generated `dist/`, build workflow and working notes | Support the fork's installation and development process; not product capabilities proposed upstream            |
 
 ## Features that are no longer extras
 
