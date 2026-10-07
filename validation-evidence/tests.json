@@ -1,12 +1,7 @@
 {
-  "passed": 2299,
-  "failed": 1,
+  "passed": 2300,
+  "failed": 0,
   "suites": 165,
   "runtimeErrors": 0,
-  "failures": [
-    {
-      "name": "/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/hap-schedule-naming.test.js",
-      "message": "  ● HAP schedule names and stable group identity › presents a schedule press immediately and suppresses repeats while it is pending\n\n    expect(received).toHaveLength(expected)\n\n    Expected length: 1\n    Received length: 0\n    Received array:  []\n\n    \u001b[0m \u001b[90m 491 |\u001b[39m           message\u001b[33m.\u001b[39mincludes(\u001b[32m\"Schedule command: queueing disable\"\u001b[39m)\n     \u001b[90m 492 |\u001b[39m         )\n    \u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 493 |\u001b[39m       )\u001b[33m.\u001b[39mtoHaveLength(\u001b[35m1\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m     |\u001b[39m         \u001b[31m\u001b[1m^\u001b[22m\u001b[39m\n     \u001b[90m 494 |\u001b[39m\n     \u001b[90m 495 |\u001b[39m       \u001b[36mawait\u001b[39m jest\u001b[33m.\u001b[39madvanceTimersByTimeAsync(\u001b[35m4000\u001b[39m)\u001b[33m;\u001b[39m\n     \u001b[90m 496 |\u001b[39m\u001b[0m\n\n      at Object.toHaveLength (__tests__/hap-schedule-naming.test.js:493:9)\n"
-    }
-  ]
+  "failures": []
 }

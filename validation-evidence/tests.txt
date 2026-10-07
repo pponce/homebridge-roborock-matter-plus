@@ -1,3 +1,24 @@
+PASS __tests__/matter-fault-reporting.test.js
+PASS __tests__/shutdown-and-resources-are-tidy.test.js
+PASS __tests__/clean-mode-prep-sends-every-command.test.js
+PASS __tests__/clean-mode-keeps-the-known-suction-level.test.js
+PASS __tests__/b01-map-field-survey.test.js
+PASS __tests__/a-q10-is-not-sent-q7-frames-it-cannot-read.test.js
+PASS __tests__/a-hello-belongs-to-its-own-socket.test.js (8.839 s)
+PASS __tests__/a-cloud-timeout-says-whether-the-reply-ever-arrived.test.js
+PASS __tests__/cloud-silence-separates-unattributed-traffic-from-none.test.js
+PASS __tests__/a-network-blip-is-not-a-silent-robot.test.js
+PASS __tests__/b01-room-mapping-asks-for-nothing-it-cannot-read.test.js
+PASS __tests__/an-implicit-save-writes-only-its-own-fields.test.js
+PASS __tests__/the-settings-page-follows-homebridge-s-theme.test.js
+PASS __tests__/a-closed-settings-page-is-not-a-crash.test.js
+PASS __tests__/ui-server-local-probe.test.js
+PASS __tests__/vacuum-room-mapping.test.js
+PASS __tests__/crash-safety-and-discovery.test.js
+PASS __tests__/a-q10-live-room-is-not-polled.test.js
+PASS __tests__/shutdown-closes-the-discovery-socket.test.js
+PASS __tests__/a-q10-read-refusal-is-calm-by-construction.test.js
+PASS __tests__/the-routines-accessory-is-registered-when-it-has-switches.test.js
 PASS __tests__/live-status-gate-matches-what-the-publish-reads.test.js
 PASS __tests__/the-slow-lane-and-the-fast-start.test.js
 PASS __tests__/a-refused-reply-is-not-an-empty-answer.test.js
@@ -71,30 +92,9 @@ PASS __tests__/saros10-status-fields.test.js
 PASS __tests__/localConnector.test.js
 PASS __tests__/roborock-mqtt-connector.test.js
 
-Summary of all failing tests
-FAIL __tests__/hap-schedule-naming.test.js
-  ● HAP schedule names and stable group identity › presents a schedule press immediately and suppresses repeats while it is pending
-
-    expect(received).toHaveLength(expected)
-
-    Expected length: 1
-    Received length: 0
-    Received array:  []
-
-    [0m [90m 491 |[39m           message[33m.[39mincludes([32m"Schedule command: queueing disable"[39m)
-     [90m 492 |[39m         )
-    [31m[1m>[22m[39m[90m 493 |[39m       )[33m.[39mtoHaveLength([35m1[39m)[33m;[39m
-     [90m     |[39m         [31m[1m^[22m[39m
-     [90m 494 |[39m
-     [90m 495 |[39m       [36mawait[39m jest[33m.[39madvanceTimersByTimeAsync([35m4000[39m)[33m;[39m
-     [90m 496 |[39m[0m
-
-      at Object.toHaveLength (__tests__/hap-schedule-naming.test.js:493:9)
-
-
-Test Suites: 1 failed, 164 passed, 165 total
-Tests:       1 failed, 2299 passed, 2300 total
+Test Suites: 165 passed, 165 total
+Tests:       2300 passed, 2300 total
 Snapshots:   0 total
-Time:        27.312 s
+Time:        29.462 s
 Ran all test suites.
 Test results written to: ../../_temp/tests.json
