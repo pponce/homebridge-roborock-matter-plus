@@ -743,3 +743,20 @@ test("an authoritative refresh during a pending write does not erase its provisi
   calls[0].resolve(true); await Promise.resolve(); await Promise.resolve();
   expect(on.value).toBe(true);
 });
+
+
+test("a cooldown-suppressed tap is corrected after HAP applies its accepted value", async () => {
+  jest.useFakeTimers();
+  try {
+    const {on, calls} = optimisticFixture();
+    on.setHandler(true); await Promise.resolve();
+    calls[0].reject(new Error("refused"));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(on.value).toBe(false);
+    on.setHandler(true);
+    on.value = true; // HAP writes the requested value after the setter acknowledges.
+    await jest.advanceTimersByTimeAsync(0);
+    expect(on.value).toBe(false);
+    expect(calls).toHaveLength(1);
+  } finally { jest.useRealTimers(); }
+});

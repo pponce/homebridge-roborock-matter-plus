@@ -2042,13 +2042,13 @@ class RoborockHapScheduleSwitchAccessory {
     if (this.pendingCommand?.enabled === enabled) return this.pendingCommand.promise;
     const recent = this.suppression.get(this.scheduleId);
     if (!this.pendingCommand && recent?.enabled === enabled && Date.now() - recent.timestamp < WRITE_SUPPRESSION_MS) {
-      this.updateService(this.schedule.enabled);
+      this.restoreConfirmedDisplay();
       return Promise.resolve();
     }
     const failed = this.failedCommands.get(this.scheduleId);
     if (!this.pendingCommand && failed?.enabled === enabled &&
         Date.now() - failed.timestamp < RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS) {
-      this.updateService(this.schedule.enabled);
+      this.restoreConfirmedDisplay();
       this.platform.log.warn(`Schedule request suppressed after failure for ${this.duid}/${this.scheduleId}; retaining confirmed ${this.schedule.enabled ? "on" : "off"} state.`);
       return Promise.resolve();
     }
@@ -2085,6 +2085,16 @@ class RoborockHapScheduleSwitchAccessory {
     this.pendingCommand = { enabled, promise };
     this.updateService(enabled);
     return promise;
+  }
+
+  private restoreConfirmedDisplay(): void {
+    this.updateService(this.schedule.enabled);
+    // HAP applies the requested value after onSet returns. Reassert the
+    // correction on the next turn so a suppressed tap cannot leave it on.
+    const timer = scheduleTimer(() => {
+      if (!this.disposed) this.updateService(this.pendingCommand?.enabled ?? this.schedule.enabled);
+    }, 0);
+    unrefTimer(timer);
   }
 
   private updateService(enabled: boolean): void {
