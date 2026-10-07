@@ -11,12 +11,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - key: "presence"
-            sha: c3d43343e215dff3b2727bb2801457dc8aa6c101
           - key: "actions"
-            sha: 485f3b29c952267235f573a1e898603d26363231
+            sha: 7bcc8e6ab77926c1245bf86adf95396a32fd24c3
           - key: "home"
-            sha: d453236d3307e84a16fdcccc44c492679735ea1e
+            sha: 8c30458ed4645653db643efe0588be4797a8eebf
     steps:
       - uses: actions/checkout@v5
         with:
@@ -63,7 +61,7 @@ jobs:
           if [ "${{ matrix.key }}" = home ]; then git add -f dist; fi
           git add -f validation-evidence
           git -c user.name="pponce" -c user.email="pponce@users.noreply.github.com" commit -m "Record v3.37.0 validation [skip ci]"
-          git push origin HEAD:refs/heads/mqtt-pr36-split-verified-v1-${{ matrix.key }}
+          git push origin HEAD:refs/heads/mqtt-pr36-split-verified-v2-${{ matrix.key }}
       - name: Require gates
         if: always()
         run: |
