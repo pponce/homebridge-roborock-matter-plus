@@ -200,8 +200,7 @@ class NativeScheduleController {
   async recoverDue() {
     for (const duid of Object.keys(this.state.robots)) {
       const s = this.state.robots[duid];
-      const featureHidden = (s.paused && this.config.enableSchedulePauseUntilTomorrow !== true && this.config.enableScheduleDelay !== true) ||
-        (s.paused && s.pauseSource === "delay" && this.config.enableScheduleDelay !== true) ||
+      const featureHidden = (s.paused && (s.pauseSource === "delay" ? this.config.enableScheduleDelay !== true : this.config.enableSchedulePauseUntilTomorrow !== true)) ||
         (Object.keys(s.jobs).length && this.config.enableScheduleDelay !== true);
       if (!featureHidden && ((!s.recovering && s.expiresAt > this.clock()) || (s.retryAt && s.retryAt > this.clock()))) continue;
       if (!s.paused && !s.recovering && !Object.keys(s.jobs).length && !Object.keys(s.timers).length) continue;
@@ -218,7 +217,7 @@ class NativeScheduleController {
       }
       if (s && !s.paused && !s.recovering && !Object.keys(s.jobs).length && !Object.keys(s.timers).length) s = undefined;
       if (action === "resume") {
-        if (!s) return;
+        if (!s?.paused) return;
         s.recovering = true; s.recoveryMode = "all"; this.save();
         try { return await this.restoreAll(duid); } catch (error) { this.deferRecovery(duid); throw error; }
       }

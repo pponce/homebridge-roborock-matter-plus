@@ -1,7 +1,11 @@
-# Native schedule controls: requirements and open decisions
+# Native schedule controls: design and requirements
 
-Status: the ten-minute occurrence selector is implemented and unit-tested.
-The native Home controls and persistent controller are not implemented yet.
+Status: the selector, persistent controller, Home switches, configuration UI and
+compiled runtime are implemented. The repository's automated tests and build
+have passed. Live robot validation of the combined controls is still pending;
+the earlier one-schedule trials verified cloud time editing and restoration.
+See [Schedule controls](schedule-controls.md) for settings, recovery behavior and
+migration instructions. Both features remain disabled by default.
 
 ## Confirmed requirements
 
@@ -95,11 +99,10 @@ their originals and keep the affected Delay Active indicator ON until restoratio
 succeeds or a conflicting manual edit is explicitly reconciled. A reset must not
 visually claim success just because the user requested OFF.
 
-The remaining switch interaction to choose is manually turning an inactive
-Delay Active switch ON. Recommended behavior: apply one delay interval; repeated
-ON writes while already active do not add time. Extra increments remain on the
-momentary Delay for X controls. For the all-vacuum stateful control, this would
-apply one interval only to eligible vacuums without an existing active delay.
+Manually turning an inactive Delay Active switch ON applies one delay interval;
+repeated ON writes while already active do not add time. Extra increments remain
+on the momentary Delay for X controls. The all-vacuum stateful control applies
+one interval only to eligible vacuums without an existing active delay.
 
 ## Shared pause interval
 
@@ -125,7 +128,7 @@ Homebridge host's timezone to match the existing expiration timer. Compare
 actual occurrence timestamps with the next reset timestamp; do not compare
 clock strings. Each cloud schedule still uses its own timezone for cron math.
 
-Proposed boundary and scope details for this requirement:
+Boundary and scope details:
 
 - Treat a proposed run exactly at the reset as exceeding the postponement
   window as well, avoiding a race between cloud execution and restoration.
@@ -141,6 +144,10 @@ Proposed boundary and scope details for this requirement:
   presses do not alter its schedules under the already-paused rule. Their explicit
   docking action still applies to active cleaning. Ordinary unpause can end this
   pause before its expiry.
+- Delay Active remains ON for a pause created by the cutoff. Turning it OFF can
+  cancel that pause even when ordinary Pause controls are hidden. A separate
+  explicit ordinary Pause takes precedence and is not canceled by Delay Active
+  OFF. Turning an inactive ordinary Pause OFF leaves an independent delay alone.
 - Midnight is not itself the cutoff. With a `00:05` reset, a 23:00 occurrence
   shifted to 00:00 can still run before reset; 23:30 shifted to 00:30 converts
   to a pause until reset. A postponed occurrence keeps its original occurrence
@@ -218,7 +225,7 @@ Do not arbitrarily select by job ID. With intervals shorter than the ten-minute
 lookback, a shifted time can remain in the past: never add extra intervals
 silently or claim that a past time will trigger another cleaning today.
 
-## Proposed defaults, subject to the design discussion
+## Additional behavior
 
 - No remaining eligible runs: leave schedule times unchanged; do not pre-delay
   tomorrow's schedules. The explicit command still docks any active cleaning.

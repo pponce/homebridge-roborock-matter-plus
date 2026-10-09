@@ -205,3 +205,18 @@ test("models that mirror timer enable into cloud.enabled preserve the fresh flag
   assert.equal(h.jobs[0].cron, "0 9 ? * 1,2,3,4,5");
   assert.equal(h.jobs.every((j) => j.enabled), true);
 });
+
+test("turning an inactive Pause switch OFF does not cancel a separate active delay", async (t) => {
+  const h = harness(t); await h.controller.execute("robot", "delay");
+  await h.controller.execute("robot", "resume");
+  assert.equal(h.controller.status("robot").delayed, true);
+  assert.equal(h.jobs[0].cron, "0 10 ? * 1,2,3,4,5");
+});
+
+test("hiding the ordinary pause feature restores its mask even if Delay remains enabled", async (t) => {
+  const h = harness(t); await h.controller.execute("robot", "pause"); h.controller.dispose();
+  const changed = h.newController({ enableSchedulePauseUntilTomorrow: false });
+  await changed.initialize();
+  assert.equal(changed.status("robot").paused, false);
+  assert.equal(h.timers.every((timer) => timer.enabled), true);
+});
