@@ -42,6 +42,24 @@ class NativeScheduleController {
       (s.recovering && !s.paused && Object.keys(s.timers).length))), recovering: Boolean(s?.recovering) };
   }
   save() { this.store.save(this.state); }
+  get pauseUntilTomorrow() { return this.state.pauseUntilTomorrow !== false; }
+  setPauseUntilTomorrow(enabled) {
+    if (typeof enabled !== "boolean") return Promise.reject(new Error("Pause Until Tomorrow must be ON or OFF"));
+    return this.enqueue(() => {
+      if (this.pauseUntilTomorrow === enabled) return;
+      const next = copy(this.state);
+      next.pauseUntilTomorrow = enabled;
+      if (enabled) {
+        // Re-enabling this preference permits the next daily reset. An old
+        // deadline from an indefinite pause must not cause immediate resume.
+        const expiresAt = nextReset(this.clock(), this.settings.resetTime);
+        for (const s of Object.values(next.robots)) if (s.paused && !s.recovering) s.expiresAt = expiresAt;
+      }
+      this.store.save(next);
+      this.state = next;
+    }, false);
+  }
+  expiryEnabled(s) { return !s.paused || this.pauseUntilTomorrow; }
   record(duid) {
     const current = this.state.robots[duid];
     if (current && !current.paused && !current.recovering && !Object.keys(current.jobs).length && !Object.keys(current.timers).length) {
@@ -50,10 +68,10 @@ class NativeScheduleController {
     return this.state.robots[duid] ||= { expiresAt: nextReset(this.clock(), this.settings.resetTime), paused: false,
       jobs: {}, timers: {}, conflicts: [], recovering: false, failures: 0 };
   }
-  enqueue(operation) {
+  enqueue(operation, useAccountQueue = true) {
     const run = this.tail.then(() => {
       if (this.disposed) throw new Error("Schedule controls are shutting down");
-      return this.api.enqueue ? this.api.enqueue(operation) : operation();
+      return useAccountQueue && this.api.enqueue ? this.api.enqueue(operation) : operation();
     });
     this.tail = run.catch(() => {});
     return run.finally(() => { this.changed(); this.arm(); });
@@ -63,7 +81,7 @@ class NativeScheduleController {
   arm() {
     clearTimeout(this.timer);
     if (this.disposed) return;
-    const times = Object.values(this.state.robots).filter((s) => s.paused || s.recovering || Object.keys(s.jobs).length || Object.keys(s.timers).length)
+    const times = Object.values(this.state.robots).filter((s) => s.recovering || (this.expiryEnabled(s) && (s.paused || Object.keys(s.jobs).length || Object.keys(s.timers).length)))
       .map((s) => s.recovering ? (s.retryAt || this.clock() + MINUTE) : Math.max(s.expiresAt, s.retryAt || 0));
     if (!times.length) return;
     const delay = Math.max(1000, Math.min(2147483647, Math.min(...times) - this.clock()));
@@ -197,21 +215,28 @@ class NativeScheduleController {
       s.recovering = false; s.failures = 0; delete s.retryAt; delete s.recoveryMode; this.save();
     } else await this.restoreAll(duid);
   }
+  needsRecovery(s) {
+    if (!s || (!s.paused && !s.recovering && !Object.keys(s.jobs).length && !Object.keys(s.timers).length)) return false;
+    const featureHidden = (s.paused && (s.pauseSource === "delay" ? this.config.enableScheduleDelay !== true : this.config.enableSchedulePauseUntilTomorrow !== true)) ||
+      (Object.keys(s.jobs).length && this.config.enableScheduleDelay !== true);
+    if (featureHidden) return true;
+    if (!s.recovering && (!this.expiryEnabled(s) || s.expiresAt > this.clock())) return false;
+    return !s.retryAt || s.retryAt <= this.clock();
+  }
   async recoverDue() {
     for (const duid of Object.keys(this.state.robots)) {
-      const s = this.state.robots[duid];
-      const featureHidden = (s.paused && (s.pauseSource === "delay" ? this.config.enableScheduleDelay !== true : this.config.enableSchedulePauseUntilTomorrow !== true)) ||
-        (Object.keys(s.jobs).length && this.config.enableScheduleDelay !== true);
-      if (!featureHidden && ((!s.recovering && s.expiresAt > this.clock()) || (s.retryAt && s.retryAt > this.clock()))) continue;
-      if (!s.paused && !s.recovering && !Object.keys(s.jobs).length && !Object.keys(s.timers).length) continue;
-      try { await this.enqueue(() => this.recoverOne(duid)); }
+      if (!this.needsRecovery(this.state.robots[duid])) continue;
+      try { await this.enqueue(() => {
+        // A preference or newer request may have changed while this waited.
+        if (this.needsRecovery(this.state.robots[duid])) return this.recoverOne(duid);
+      }); }
       catch { this.deferRecovery(duid); }
     }
   }
   async execute(duid, action, pressedAt = this.clock()) {
     return this.enqueue(async () => {
       let s = this.state.robots[duid];
-      if (s && (s.recovering || s.expiresAt <= this.clock())) {
+      if (s && (s.recovering || (this.expiryEnabled(s) && s.expiresAt <= this.clock()))) {
         try { await this.recoverOne(duid); } catch (error) { this.deferRecovery(duid); throw error; }
         s = this.state.robots[duid];
       }
@@ -274,7 +299,7 @@ class NativeScheduleController {
       const targets = selection.selected.map((item) => ({ ...item, targetAt: item.scheduledAt + this.settings.minutes * MINUTE }));
       if (targets.some((item) => item.targetAt >= cutoff)) {
         await this.pause(duid, current, "delay");
-        this.log(duid, "The delay would reach the daily reset; schedules are paused until reset instead.");
+        this.log(duid, "The delay would reach the daily reset; schedules are paused instead.");
         return;
       }
       if (targets.some((item) => item.targetAt <= this.clock() + MINUTE)) {
@@ -312,7 +337,7 @@ class NativeScheduleController {
       }
       await this.restoreTimes(duid, current);
       s.recovering = false; s.failures = 0; delete s.retryAt; delete s.recoveryMode; this.save();
-      this.log(duid, "Schedules are paused until the daily reset.");
+      this.log(duid, this.pauseUntilTomorrow ? "Schedules are paused until the daily reset." : "Schedules are paused until manually resumed or automatic resume is enabled.");
     } catch (error) { this.deferRecovery(duid); throw error; }
   }
 }

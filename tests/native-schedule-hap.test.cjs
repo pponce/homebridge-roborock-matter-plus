@@ -37,10 +37,16 @@ class Accessory {
   addService(key) { const s = new Service(); this.services.set(key, s); return s; }
 }
 function harness(t, config = {}, hap) {
-  const h = { calls: [], registered: [], removed: [], engines: [], errors: [] };
+  const h = { calls: [], registered: [], removed: [], engines: [], errors: [], preferences: [] };
   class Controller {
     constructor(options) { this.options = options; this.state = { robots: {} }; h.engines.push(this); }
     async initialize() { if (h.initializing) await h.initializing; }
+    get pauseUntilTomorrow() { return this.state.pauseUntilTomorrow !== false; }
+    async setPauseUntilTomorrow(value) {
+      h.preferences.push(value);
+      if (h.preferenceFail) throw new Error("preference save failed");
+      this.state.pauseUntilTomorrow = value; this.options.changed();
+    }
     status(id) { return this.state.robots[id] || { paused: false, delayed: false }; }
     async execute(id, action) {
       h.calls.push([id, action]);
@@ -87,8 +93,8 @@ function harness(t, config = {}, hap) {
 test("new controls are opt-in and independent of the legacy action-switch master", (t) => {
   const off = harness(t); off.sync(); assert.equal(off.registered.length, 0);
   const on = harness(t, { enableSchedulePauseUntilTomorrow: true, enableScheduleDelay: true, enableHomeKitActionSwitches: false });
-  on.sync(); on.sync(); assert.equal(on.registered.length, 9);
-  assert.equal(new Set(on.registered.map((a) => a.UUID)).size, 9);
+  on.sync(); on.sync(); assert.equal(on.registered.length, 10);
+  assert.equal(new Set(on.registered.map((a) => a.UUID)).size, 10);
 });
 
 function deferred() {
@@ -226,7 +232,7 @@ test("stateful ON requests one delay and disabling exposure removes only these c
   const unrelated = new Accessory("Existing schedule", "existing");
   h.accessories.push(unrelated);
   h.platform.platformConfig.enableScheduleDelay = false; h.sync();
-  assert.equal(h.removed.length, 6);
+  assert.equal(h.removed.length, 7);
   assert.deepEqual(h.accessories, [unrelated]);
 });
 
@@ -277,3 +283,78 @@ test("real HAP emits OFF after intervening reads and an already-OFF cached value
   assert.equal(await button.handleGetRequest(), false);
   write.resolve(); await h.manager.commandTail;
 });
+
+
+test("Pause Active keeps its accessory identity and one shared preference defaults ON", async (t) => {
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true }); h.sync();
+  const pauses = h.accessories.filter((a) => a.context.control === "pause");
+  assert.equal(pauses.length, 3);
+  const downtown = pauses.find((a) => a.context.duid === "b");
+  assert.equal(downtown.UUID, "hap:roborock:native-schedule:robot:b:pause");
+  downtown.displayName = "Downtown Pause Until Tomorrow";
+  h.sync();
+  assert.equal(downtown.displayName, "Downtown Pause Active");
+  const preference = h.accessories.filter((a) => a.context.control === "pauseUntilTomorrow");
+  assert.equal(preference.length, 1);
+  assert.equal(preference[0].context.duid, null);
+  assert.equal(preference[0].displayName, "Pause Until Tomorrow");
+  assert.equal(h.characteristic(null, "pauseUntilTomorrow").get(), true);
+  assert.equal(h.characteristic(null, "pause").get(), false);
+  assert.equal(h.removed.length, 0);
+  h.characteristic(null, "pauseUntilTomorrow").set(false);
+  assert.equal(h.characteristic(null, "pauseUntilTomorrow").get(), false);
+  await h.manager.commandTail;
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.preferences, [false]);
+  h.sync();
+  assert.equal(h.characteristic(null, "pauseUntilTomorrow").get(), false);
+});
+
+test("preference requests retain press order with pauses and revert on persistence failure", async (t) => {
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true }); h.sync();
+  const seen = [];
+  h.execute = async (_id, _action, engine) => { seen.push(engine.pauseUntilTomorrow); };
+  h.characteristic(null, "pauseUntilTomorrow").set(false);
+  h.characteristic("b", "pause").set(true);
+  h.characteristic(null, "pauseUntilTomorrow").set(true);
+  await h.manager.commandTail;
+  assert.deepEqual(seen, [false]);
+  assert.equal(h.characteristic(null, "pauseUntilTomorrow").get(), true);
+  h.preferenceFail = true;
+  h.characteristic(null, "pauseUntilTomorrow").set(false);
+  await h.manager.commandTail;
+  assert.equal(h.characteristic(null, "pauseUntilTomorrow").get(), true);
+  assert.match(h.errors[0], /SCHEDULE CONTROL FAILED.*Pause Until Tomorrow.*preference save failed.*reverted to ON/);
+});
+
+test("failed Delay Active ON reverts OFF when no schedule changes remain", async (t) => {
+  const h = harness(t, { enableScheduleDelay: true }); h.sync(); h.fail = "b";
+  h.characteristic("b", "delayActive").set(true);
+  assert.equal(h.characteristic("b", "delayActive").get(), true);
+  await h.manager.commandTail;
+  assert.equal(h.characteristic("b", "delayActive").get(), false);
+  assert.match(h.errors[0], /SCHEDULE CONTROL FAILED.*startDelay.*reverted to OFF/);
+});
+
+for (const action of ["start", "cancel"]) {
+  test(`failed delay ${action} keeps Delay Active ON while schedule recovery remains`, async (t) => {
+    const h = harness(t, { enableScheduleDelay: true }); h.sync();
+    if (action === "cancel") h.engines[0].state.robots.b = { paused: false, delayed: true };
+    h.execute = async (id, _action, engine) => {
+      engine.state.robots[id] = { paused: false, delayed: true, recovering: true };
+      engine.options.changed(); throw new Error("schedule update refused after partial changes");
+    };
+    const requested = action === "start";
+    h.characteristic("b", "delayActive").set(requested);
+    assert.equal(h.characteristic("b", "delayActive").get(), requested);
+    await h.manager.commandTail;
+    assert.equal(h.characteristic("b", "delayActive").get(), true);
+    assert.equal(h.characteristic(null, "delayActive").get(), true);
+    h.sync(); h.engines[0].options.changed();
+    assert.equal(h.characteristic("b", "delayActive").get(), true);
+    assert.match(h.errors[0], /Delay Active remains ON until schedule restoration finishes/);
+    delete h.engines[0].state.robots.b; h.engines[0].options.changed();
+    assert.equal(h.characteristic("b", "delayActive").get(), false);
+    assert.equal(h.characteristic(null, "delayActive").get(), false);
+  });
+}

@@ -261,3 +261,128 @@ test("calendar uses the cloud timezone even when the host timezone differs", () 
     assert.equal(shiftedCron(schedule, occurrence.timestamp, time("00:50", "2026-10-10")), "50 0 ? * 6");
   } finally { process.env.TZ = originalZone; }
 });
+
+test("automatic resume defaults ON and the preference alone never operates a robot", async (t) => {
+  const h = harness(t);
+  assert.equal(h.controller.pauseUntilTomorrow, true);
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.setPauseUntilTomorrow(true);
+  assert.equal(h.controller.pauseUntilTomorrow, true);
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.saved.robots, {});
+});
+
+test("indefinite pause survives multiple resets and a restart without undoing manual enables", async (t) => {
+  const h = harness(t); h.timers[1].enabled = false;
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.execute("robot", "pause");
+  h.controller.dispose();
+  const calls = h.calls.length;
+  h.now = time("10:00", "2026-10-12");
+  const restarted = h.newController();
+  await restarted.initialize();
+  assert.equal(restarted.pauseUntilTomorrow, false);
+  assert.equal(restarted.status("robot").paused, true);
+  assert.deepEqual(h.timers.map((t) => t.enabled), [false, false]);
+  h.timers[0].enabled = true; h.timers[1].enabled = true;
+  await restarted.recoverDue();
+  assert.equal(h.calls.length, calls);
+  assert.deepEqual(h.timers.map((t) => t.enabled), [true, true]);
+  await restarted.execute("robot", "resume");
+  assert.equal(restarted.status("robot").paused, false);
+  assert.deepEqual(h.timers.map((t) => t.enabled), [true, true]);
+  assert.equal(restarted.pauseUntilTomorrow, false);
+});
+
+test("re-enabling automatic resume after missed resets waits until the next reset", async (t) => {
+  const h = harness(t);
+  await h.controller.execute("robot", "pause");
+  await h.controller.setPauseUntilTomorrow(false);
+  h.now = time("10:00", "2026-10-12");
+  await h.controller.setPauseUntilTomorrow(true);
+  const calls = h.calls.length;
+  await h.controller.recoverDue();
+  assert.equal(h.controller.status("robot").paused, true);
+  assert.equal(h.calls.length, calls);
+  assert.equal(h.saved.robots.robot.expiresAt, time("00:05", "2026-10-13"));
+  h.now = time("00:05", "2026-10-13");
+  await h.controller.recoverDue();
+  assert.equal(h.controller.status("robot").paused, false);
+  assert.deepEqual(h.timers.map((t) => t.enabled), [true, true]);
+  assert.equal(h.controller.pauseUntilTomorrow, true);
+});
+
+test("a new delay press does not expire an indefinite ordinary pause", async (t) => {
+  const h = harness(t);
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.execute("robot", "pause");
+  const calls = h.calls.length;
+  h.now = time("10:00", "2026-10-12");
+  await h.controller.execute("robot", "delay");
+  assert.equal(h.controller.status("robot").paused, true);
+  assert.equal(h.calls.length, calls);
+});
+
+test("delayed times still restore daily with automatic pause resume OFF", async (t) => {
+  const h = harness(t); const originals = h.jobs.map((j) => j.cron);
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.execute("robot", "delay");
+  h.now = time("00:05", "2026-10-10");
+  await h.controller.recoverDue();
+  assert.deepEqual(h.jobs.map((j) => j.cron), originals);
+  assert.equal(h.controller.status("robot").delayed, false);
+  assert.equal(h.controller.pauseUntilTomorrow, false);
+});
+
+test("a delay converted to a pause honors the preference and can still be canceled", async (t) => {
+  const h = harness(t, { now: time("23:45"), jobs: [job(1, "50 23 ? * 5")] });
+  h.cleaning = false;
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.execute("robot", "delay");
+  h.now = time("00:05", "2026-10-10");
+  await h.controller.recoverDue();
+  assert.equal(h.controller.status("robot").paused, true);
+  assert.equal(h.controller.status("robot").delayed, true);
+  assert.equal(h.timers[0].enabled, false);
+  await h.controller.execute("robot", "cancelDelay");
+  assert.equal(h.timers[0].enabled, true);
+});
+
+test("recovery and disabling pause exposure still restore with automatic resume OFF", async (t) => {
+  const h = harness(t);
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.execute("robot", "pause");
+  h.readFails = true;
+  await assert.rejects(h.controller.execute("robot", "resume"));
+  h.readFails = false; h.now += 61000;
+  await h.controller.recoverDue();
+  assert.equal(h.controller.status("robot").paused, false);
+  await h.controller.execute("robot", "pause");
+  h.controller.dispose();
+  const hidden = h.newController({ enableSchedulePauseUntilTomorrow: false });
+  await hidden.initialize();
+  assert.equal(hidden.status("robot").paused, false);
+  assert.equal(hidden.pauseUntilTomorrow, false);
+});
+
+test("a failed preference save preserves the saved setting and pause deadline", async (t) => {
+  const h = harness(t);
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.execute("robot", "pause");
+  const before = clone(h.controller.state);
+  h.now = time("10:00", "2026-10-12"); h.storageFails = true;
+  await assert.rejects(h.controller.setPauseUntilTomorrow(true), /disk unavailable/);
+  assert.equal(h.controller.pauseUntilTomorrow, false);
+  assert.deepEqual(h.controller.state, before);
+});
+
+test("queued expiration rechecks a preference switched OFF before it can run", async (t) => {
+  const h = harness(t);
+  await h.controller.execute("robot", "pause");
+  h.now = time("00:05", "2026-10-10");
+  const preference = h.controller.setPauseUntilTomorrow(false);
+  const expiration = h.controller.recoverDue();
+  await Promise.all([preference, expiration]);
+  assert.equal(h.controller.status("robot").paused, true);
+  assert.deepEqual(h.timers.map((t) => t.enabled), [false, false]);
+});

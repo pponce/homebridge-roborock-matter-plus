@@ -156,10 +156,10 @@
         "default": false
       },
       "enableSchedulePauseUntilTomorrow": {
-        "title": "Pause Until Tomorrow",
+        "title": "Pause Schedules",
         "type": "boolean",
         "default": false,
-        "description": "Adds a pause switch per vacuum and one for all vacuums. Pauses cloud schedules until the daily reset and docks active cleaning. Turn off to restore early."
+        "description": "Adds Pause Active switches per vacuum and for all vacuums. ON pauses schedules and docks active cleaning; OFF restores them. A shared Pause Until Tomorrow switch defaults to ON; turn it OFF to keep pauses indefinite."
       },
       "enableScheduleDelay": {
         "title": "Delay Schedules",
@@ -180,7 +180,7 @@
         "type": "string",
         "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
         "default": "00:05",
-        "description": "Homebridge local time, shared by Pause Until Tomorrow and schedule-time restoration."
+        "description": "Homebridge local time. Restores delayed times daily and ends pauses when Pause Until Tomorrow is ON."
       },
       "homeKitActionSwitches": {
         "title": "Which Switches to Add",

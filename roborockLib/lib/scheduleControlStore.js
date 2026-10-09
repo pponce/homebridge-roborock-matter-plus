@@ -10,6 +10,9 @@ class ScheduleControlStore {
     try { text = fs.readFileSync(this.filename, "utf8"); }
     catch (error) { if (error.code === "ENOENT") return { version: 1, robots: {} }; throw error; }
     const state = JSON.parse(text);
+    if (state?.pauseUntilTomorrow !== undefined && typeof state.pauseUntilTomorrow !== "boolean") {
+      throw new Error("Saved Pause Until Tomorrow preference is invalid; originals have been left untouched");
+    }
     if (state?.version !== 1 || !state.robots || typeof state.robots !== "object" || Array.isArray(state.robots)) {
       throw new Error("Saved schedule controls state is invalid; originals have been left untouched");
     }

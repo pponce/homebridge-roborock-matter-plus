@@ -305,8 +305,8 @@
     <h3>Schedule controls</h3>
     <label class="checkbox">
       <input id="enable-schedule-pause" type="checkbox" />
-      <span>Pause Until Tomorrow
-        <small>Adds a pause switch per vacuum and one for all vacuums. Pausing stops active cleaning and returns the robot to its dock. Turn off to restore schedules early.</small>
+      <span>Pause Schedules
+        <small>Adds Pause Active switches per vacuum and for all vacuums. ON pauses schedules and docks active cleaning; OFF restores them.</small>
       </span>
     </label>
     <label class="checkbox">
@@ -326,7 +326,7 @@
       <label class="field">
         <span>Daily reset time</span>
         <input id="schedule-reset-time" type="time" value="00:05" />
-        <small>Homebridge's local time. Restores original schedule times and ends pauses for all vacuums. A delay reaching this time becomes a pause until reset. Homebridge must be running and connected to restore on time.</small>
+        <small>Homebridge's local time. Delayed times are restored daily. The shared Pause Until Tomorrow switch defaults to ON and allows pauses to end at this time; turn it OFF to keep pauses indefinite. Turning it back ON allows resume at the next reset. Homebridge must be running and connected to restore on time.</small>
         <small>Supports existing cloud schedules; Routines are not delayed. Before enabling, restore any pauses in an external controller and disable its schedule automations.</small>
       </label>
     </div>

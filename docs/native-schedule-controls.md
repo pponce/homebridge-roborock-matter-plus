@@ -2,8 +2,10 @@
 
 Status: the selector, persistent controller, Home switches, configuration UI and
 compiled runtime are implemented. The repository's automated tests and build
-have passed. Live robot validation of the combined controls is still pending;
-the earlier one-schedule trials verified cloud time editing and restoration.
+have passed. A live check confirmed two successive 60-minute delays and restoring
+original times with Delay Active OFF, plus the momentary switch reset at about
+1.5 seconds. The separate automatic-resume preference
+and indefinite-pause flow still need live validation.
 See [Schedule controls](schedule-controls.md) for settings, recovery behavior and
 migration instructions. Both features remain disabled by default.
 
@@ -14,8 +16,8 @@ migration instructions. Both features remain disabled by default.
   external scripts, cron, or the separate pause project's systemd timers.
 - Preserve the saved-state restore and docking behavior of
   `pponce/roborockPauseSchedules` for individual pause and Pause All. The latest
-  requested native UI exposes Pause Until Tomorrow as an optional feature with
-  individual and aggregate controls; see the layout below.
+  requested native UI exposes Pause Active controls plus the shared, default-ON
+  Pause Until Tomorrow preference; see the layout below.
 - Add one momentary timed-pause switch per vacuum and one momentary timed-pause
   switch for all vacuums. One shared configurable interval applies to every
   timed-pause switch; default 60 minutes, with values such as 15 or 30 minutes
@@ -60,7 +62,8 @@ migration instructions. Both features remain disabled by default.
   all active delays, including those started individually. Keep the momentary
   Delay for X switches as the explicit way to add or extend a delay.
 - If another interval would move an affected occurrence past the next reset time,
-  convert that vacuum to a pause until the reset instead of extending the delay.
+  convert that vacuum to a pause instead of extending the delay. The shared
+  Pause Until Tomorrow preference controls whether that pause expires at reset.
 
 ## Configuration UI and Home controls
 
@@ -68,36 +71,43 @@ Expose two independent feature options under Schedule controls:
 
 | Setting | Default | Visibility and effect |
 | --- | --- | --- |
-| Enable Pause Until Tomorrow | Off | Adds one persistent pause switch per vacuum and one Pause All switch. |
+| Enable Pause Schedules | Off | Adds Pause Active per vacuum and for all vacuums. |
 | Enable Delay Schedules | Off | Adds momentary Delay for X and stateful Delay Active switches per vacuum, plus corresponding all-vacuum switches. |
 | Delay interval (minutes) | 60 | Shown beneath Enable Delay Schedules when enabled; shared by every delay switch. |
 | Daily reset time | 00:05 | Shown once when either feature is enabled; shared by both features and their individual/all-vacuum controls. |
 
 The options are independent; users may enable either one or both. Both options
-enabled for two vacuums add nine control switches. Keep the shared reset setting
+enabled for two vacuums add ten control switches, including the shared preference. Keep the shared reset setting
 outside either feature's dependent fields so it is not duplicated or hidden
 when only the other feature is enabled.
 
-Interpretation of the requested Pause Until Tomorrow group: ON pauses the chosen
-vacuum(s) until the next configured reset, and OFF restores early. This replaces
-the old setup's separate global Pause Until Tomorrow preference tile; do not add
-that extra tile alongside these controls. The old controller's behavior below
-is reference material, not a requirement to retain its separate preference UI.
+Pause Active ON pauses the chosen vacuum(s); OFF restores owned schedule states.
+Keep the existing pause accessory UUIDs when renaming them, preserving automations.
+A separate global Pause Until Tomorrow switch is shown whenever either feature is
+enabled. It defaults to ON, persists across restarts, and never initiates a pause.
+ON allows automatic resume at the daily reset; OFF makes pauses indefinite.
+Switching it back ON schedules existing pauses for the next reset, without an
+immediate resume or replay of an old expired deadline. Its ON state remains after
+restoration. Manually enabling individual schedules is allowed; no background
+pause enforcement should disable them again.
 
-The Delay feature must work independently of whether the Pause Until Tomorrow
-controls are displayed. Crossing the delay cutoff still creates a per-vacuum
-pause until reset when only Delay is enabled. Hiding or disabling a feature must
-not discard saved originals or abandon outstanding restoration work.
+The Delay feature works independently of whether Pause Active controls are shown.
+Crossing the cutoff creates a per-vacuum pause governed by the shared preference.
+Temporary time edits always restore at reset, including when the pause preference
+is OFF. Hiding a feature restores its owned changes regardless of the preference;
+it must not discard saved originals. Recovery from an unfinished or failed write
+continues independently of automatic pause expiration.
 
 These are requirements for the eventual working UI. Do not publish selectable
 configuration fields that have no implemented runtime behavior. Integrate the
 custom Homebridge UI, schema, TypeScript configuration and committed dist together.
 
-For the stateful controls, the ON display must follow saved, verified delay state,
-not the most recent button press. If restoring some schedules fails, preserve
-their originals and keep the affected Delay Active indicator ON until restoration
-succeeds or a conflicting manual edit is explicitly reconciled. A reset must not
-visually claim success just because the user requested OFF.
+Direct stateful switch writes acknowledge the requested state optimistically
+while processing, then revert on failure. A failed delay that leaves edited times
+or temporary timer changes must keep Delay Active ON until restoration succeeds.
+Do not hide unresolved changes after a failed optimistic ON. Pressing the
+momentary Delay button does not optimistically set Delay Active; its 1.5-second
+reset is independent of cloud completion. Errors must be prominent in the log.
 
 Manually turning an inactive Delay Active switch ON applies one delay interval;
 repeated ON writes while already active do not add time. Extra increments remain
@@ -133,10 +143,10 @@ Boundary and scope details:
 - Treat a proposed run exactly at the reset as exceeding the postponement
   window as well, avoiding a race between cloud execution and restoration.
 - Check every affected run before applying an increment. If any would reach or
-  exceed the cutoff, pause the entire affected vacuum until the reset.
+  exceed the cutoff, pause the entire affected vacuum.
 - Preserve its original enabled-state snapshot, dock it if cleaning, and restore
   original times while schedules remain paused. At reset, restore the enabled
-  states owned by this pause, preserving detected manual changes.
+  states owned by this pause when Pause Until Tomorrow is ON, preserving detected manual changes.
 - Give the converted pause an explicit per-vacuum expiry without changing
   unrelated vacuums' pause policies.
   A global timed-pause press makes this decision separately for each vacuum.
@@ -150,7 +160,7 @@ Boundary and scope details:
   OFF. Turning an inactive ordinary Pause OFF leaves an independent delay alone.
 - Midnight is not itself the cutoff. With a `00:05` reset, a 23:00 occurrence
   shifted to 00:00 can still run before reset; 23:30 shifted to 00:30 converts
-  to a pause until reset. A postponed occurrence keeps its original occurrence
+  to a pause governed by Pause Until Tomorrow. A postponed occurrence keeps its original occurrence
   date even when its temporary run time passes midnight.
 
 ## Reference behavior in the old setup
@@ -170,8 +180,8 @@ Reviewed the current `master` README and controller sources in
   controller when no preference has been saved. It does not initiate a pause.
   The old optional timer restores active pauses at 00:05 in the host's local
   timezone when this preference is ON. OFF leaves them paused until resumed.
-  The new requested UI instead provides direct pause-until-reset controls as
-  described above, without the extra global preference tile.
+  The native UI retains this separate global preference and calls the per-vacuum
+  and aggregate pause switches Pause Active.
 - Saved state and bounded reconciliation survive process restarts. Preserve
   user-visible behavior without copying the old polling-via-Homebridge approach.
 

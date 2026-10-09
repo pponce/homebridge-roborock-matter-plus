@@ -52,3 +52,15 @@ test("adapter uses existing authentication, correct timer envelopes and acknowle
   assert.equal(put[2], '{"cron":"0 10 ? * 5","enabled":true}');
   assert.equal(put[3].headers["Content-Type"], "application/json");
 });
+
+test("the resume preference survives storage and invalid values cannot silently enable resume", (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "roborock-preference-test-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const filename = path.join(directory, "state.json"), store = new ScheduleControlStore(filename);
+  store.save({ version: 1, robots: {}, pauseUntilTomorrow: false });
+  assert.equal(new ScheduleControlStore(filename).load().pauseUntilTomorrow, false);
+  for (const value of ["false", null, 0]) {
+    store.save({ version: 1, robots: {}, pauseUntilTomorrow: value });
+    assert.throws(() => store.load(), /preference is invalid/);
+  }
+});

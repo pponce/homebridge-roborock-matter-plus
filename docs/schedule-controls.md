@@ -10,14 +10,24 @@ Pair the plugin's Homebridge child bridge with HomeKit to see these switches.
 
 | Control | What it does |
 | --- | --- |
-| Pause Until Tomorrow | ON pauses schedules and docks active cleaning. OFF restores the schedules that this pause disabled. It expires at the daily reset. |
+| Pause Active | ON pauses schedules and docks active cleaning. OFF restores the schedules owned by that pause. |
+| Pause Until Tomorrow | One shared preference, ON by default. ON allows pauses to end at the daily reset. OFF keeps pauses indefinite. It does not start or immediately end a pause. |
 | Delay X Minutes | A momentary switch that resets OFF after 1.5 seconds, independently of cloud success. Each press docks active cleaning and adds the configured interval to today's eligible schedules. |
 | Delay Active | ON reflects an active delay. OFF cancels it and restores original times. Manually turning it ON while inactive applies one interval; use the momentary switch to add further intervals. |
 
-Each control is available per vacuum and for all vacuums. An all-vacuum stateful
+Pause Active, Delay X Minutes and Delay Active are available per vacuum and for
+all vacuums. Pause Until Tomorrow appears once when either feature is enabled.
+An all-vacuum stateful
 switch is ON when at least one vacuum has the corresponding active state. Its
 OFF action restores all affected vacuums. A failure for one vacuum does not stop
 the operation for the others; check the Homebridge log for the result.
+
+Direct ON/OFF presses on stateful switches display the requested state immediately
+while work completes. A failed request reverts that display. If a delay only
+partially succeeds, Delay Active stays ON until saved schedules are restored.
+Turning Delay Active OFF is optimistic too; a failed cancellation returns it to
+ON. A momentary Delay button reset is an acknowledgement of the press, not proof
+that schedules changed.
 
 ## Which schedules are delayed?
 
@@ -51,15 +61,30 @@ presses, preserving the original times already saved. An edit whose new time is
 already past or less than a minute away is refused, without adding extra intervals.
 
 The daily reset defaults to **00:05**, in the Homebridge host's timezone. Each
-schedule's own timezone determines which day/time is eligible. Existing pauses
-and delays retain the reset deadline saved when they began; changes to the reset
-setting apply to subsequent periods.
+schedule's own timezone determines which day/time is eligible. Delayed times
+always return to their originals at the daily reset. Paused schedules resume
+there only when **Pause Until Tomorrow** is ON.
 
-If a selected delay would reach or pass the reset, that vacuum is paused until
-reset instead. Delay Active remains ON for this converted pause, so it can still
+Turning Pause Until Tomorrow OFF leaves current and future pauses active until
+you turn Pause Active OFF or enable automatic resume again. Turning the preference
+back ON schedules existing pauses for the **next** daily reset, even if they have
+been paused for several days. It does not resume immediately. The preference stays
+ON after a reset, and its saved ON/OFF value survives Homebridge restarts.
+
+You can manually enable individual schedules while Pause Active is ON. The plugin
+does not keep turning them back OFF. Resume preserves those enabled schedules and
+restores the remaining enabled states owned by the pause. Pause Active tracks the
+pause awaiting restoration; it does not promise that every schedule remains OFF.
+
+Existing pauses and delays retain the deadline saved when they began; changing
+the reset time applies to subsequent periods. Re-enabling Pause Until Tomorrow
+uses the currently configured next reset.
+
+If a selected delay would reach or pass the reset, that vacuum is paused instead.
+This pause also follows the shared Pause Until Tomorrow preference. Delay Active remains ON for this converted pause, so it can still
 be canceled when only Delay Schedules is enabled. Turning it OFF restores that
-delay's saved enable states. An independently requested Pause Until Tomorrow
-continues until canceled or expired.
+delay's saved enable states. An independently requested Pause Active
+continues until manually restored or ended by an enabled daily reset.
 
 Canceling a delay restores times without starting cleaning or docking a robot.
 Original times are saved separately from the accumulated delays. Originals and
