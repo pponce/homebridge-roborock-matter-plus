@@ -58,6 +58,10 @@ flag means relative to the robot's pause switch. The report still marks
 `robotPauseStateChecked: false`; app confirmation of the original time and
 intended pause state remains separate.
 
+After this trial, the owner confirmed that the Roborock app showed 09:15 and
+disabled. This is a separate manual observation; the diagnostic itself did not
+read the robot pause switch.
+
 The next implementation work is persistent original-state tracking and native
 pause/postpone controls in this fork. Delayed execution, midnight/day-of-week
 boundaries, timezone/DST handling, manual edits, and recovery after restart or
