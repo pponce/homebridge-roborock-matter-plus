@@ -26,6 +26,9 @@ class NativeScheduleControls {
         this.devices = new Map();
         this.bindings = new Map();
         this.resetTimers = new Map();
+        this.commandTail = Promise.resolve();
+        this.pending = new Map();
+        this.failedValues = new Map();
         const config = platform.platformConfig;
         if (typeof storagePath !== "string")
             return;
@@ -133,9 +136,20 @@ class NativeScheduleControls {
     value(context) {
         if (!this.controller || context.control === "delay")
             return false;
-        const ids = context.duid === null ? Object.keys(this.controller.state.robots) : [context.duid];
+        const ids = context.duid === null ? [...new Set([...this.devices.keys(), ...Object.keys(this.controller.state.robots)])] : [context.duid];
         return ids.some((id) => {
+            const key = JSON.stringify([id, context.control]);
+            const pending = this.pending.get(key);
+            if (pending)
+                return pending.value;
             const status = this.controller.status(id);
+            // A failed pause can leave a tentative journal flag while recovery restores
+            // partially changed schedules. Do not display that flag as a successful ON.
+            if (this.failedValues.has(key)) {
+                if (status.recovering)
+                    return this.failedValues.get(key);
+                this.failedValues.delete(key);
+            }
             return context.control === "pause" ? status.paused : status.delayed;
         });
     }
@@ -144,6 +158,14 @@ class NativeScheduleControls {
             return;
         const pressedAt = Date.now();
         const action = context.control === "pause" ? (value ? "pause" : "resume") : context.control === "delay" ? "delay" : value ? "startDelay" : "cancelDelay";
+        const ids = context.duid === null
+            ? [...new Set([...this.devices.keys(), ...(["resume", "cancelDelay"].includes(action) ? Object.keys(this.controller.state.robots) : [])])]
+            : [context.duid];
+        const token = {};
+        if (context.control !== "delay") {
+            for (const id of ids)
+                this.pending.set(JSON.stringify([id, context.control]), { token, value });
+        }
         clearTimeout(this.resetTimers.get(accessory.UUID));
         const timer = setTimeout(() => {
             var _a;
@@ -155,23 +177,47 @@ class NativeScheduleControls {
         }, context.control === "delay" ? 1500 : 0);
         timer.unref();
         this.resetTimers.set(accessory.UUID, timer);
-        // Acknowledge the Home command promptly. The cloud operation may exceed
-        // HAP's write timeout, so confirmed state is published when it finishes.
-        void this.ready.then(async () => {
+        // GETs and refreshes use the requested state immediately, including the
+        // aggregate tile. Serialize whole requests so all-vacuum and individual
+        // presses execute in order; older completions cannot clear newer intent.
+        this.commandTail = this.commandTail.then(() => this.ready).then(async () => {
+            var _a, _b;
             if (this.disposed)
                 return;
-            const ids = context.duid === null
-                ? [...new Set([...this.devices.keys(), ...(["resume", "cancelDelay"].includes(action) ? Object.keys(this.controller.state.robots) : [])])]
-                : [context.duid];
             for (const id of ids) {
+                if (this.disposed)
+                    break;
+                const key = JSON.stringify([id, context.control]);
+                const status = this.controller.status(id);
+                const previous = status.recovering && this.failedValues.has(key) ? this.failedValues.get(key)
+                    : Boolean(context.control === "pause" ? status.paused : status.delayed);
                 try {
                     await this.controller.execute(id, action, pressedAt);
+                    this.failedValues.delete(key);
                 }
                 catch (error) {
-                    this.platform.log.error(`${this.name(id)} schedule control failed: ${this.describeError(error)}`);
+                    if (context.control !== "delay")
+                        this.failedValues.set(key, previous);
+                    const newer = ((_a = this.pending.get(key)) === null || _a === void 0 ? void 0 : _a.token) !== token;
+                    this.platform.log.error(`[SCHEDULE CONTROL FAILED] ${this.name(id)}: ${action}: ${this.describeError(error)}. ` +
+                        (context.control === "delay" ? "Delay request failed." : newer ? "A newer switch request is still pending." : `Switch reverted to ${previous ? "ON" : "OFF"}.`) +
+                        (this.controller.status(id).recovering ? " Schedule restoration is still pending; saved originals will be retried." : ""));
+                }
+                finally {
+                    if (((_b = this.pending.get(key)) === null || _b === void 0 ? void 0 : _b.token) === token)
+                        this.pending.delete(key);
+                    this.refresh();
                 }
             }
-        }).catch((error) => this.platform.log.error(`Schedule control failed: ${this.describeError(error)}`)).finally(() => this.refresh());
+        }).catch((error) => {
+            var _a;
+            for (const id of ids) {
+                const key = JSON.stringify([id, context.control]);
+                if (((_a = this.pending.get(key)) === null || _a === void 0 ? void 0 : _a.token) === token)
+                    this.pending.delete(key);
+            }
+            this.platform.log.error(`[SCHEDULE CONTROL FAILED] ${this.name(context.duid)}: ${action}: ${this.describeError(error)}. Switches refreshed from saved state.`);
+        }).finally(() => this.refresh());
     }
     refresh() {
         var _a;
@@ -190,6 +236,8 @@ class NativeScheduleControls {
         for (const timer of this.resetTimers.values())
             clearTimeout(timer);
         this.resetTimers.clear();
+        this.pending.clear();
+        this.failedValues.clear();
     }
 }
 exports.NativeScheduleControls = NativeScheduleControls;
