@@ -9,22 +9,75 @@ Status: design discussion. These controls are not implemented by this document.
   external scripts, cron, or the separate pause project's systemd timers.
 - Preserve the behavior of `pponce/roborockPauseSchedules` for individual pause,
   Pause All, and the global Pause Until Tomorrow preference.
-- Add one momentary Pause for 1 Hour switch per vacuum and one momentary
-  Pause All for 1 Hour switch. Repeated presses add another hour.
-- The one-hour action must stop a cleaning vacuum and return it to its dock,
+- Add one momentary timed-pause switch per vacuum and one momentary timed-pause
+  switch for all vacuums. One shared configurable interval applies to every
+  timed-pause switch; default 60 minutes, with values such as 15 or 30 minutes
+  supported. Do not expose several independently configured duration switches.
+  Repeated presses add another configured interval.
+- The timed-pause action must stop a cleaning vacuum and return it to its dock,
   as the existing ordinary pause does. Postpone the interrupted scheduled run
   along with the other affected schedules for that vacuum on that day.
 - Calculate the new time from the original scheduled time plus accumulated
-  one-hour increments, rather than automatically using one hour from the press.
+  configured intervals, rather than automatically using that interval from the
+  time of the press.
 - Affect schedules that run on the current day only. Schedules with no occurrence
   that day must not have their times changed.
-- A vacuum with an active ordinary pause must be skipped by the one-hour action.
+- A vacuum with an active ordinary pause must be skipped by the timed-pause action.
   The all-vacuum action evaluates each vacuum separately, so a paused vacuum
   does not prevent an eligible vacuum from being postponed.
 - Only schedules that were active are eligible. Already-disabled schedules must
   remain disabled. The cloud job's enabled field alone does not establish this:
   Uptown's enabled cloud definitions were observed alongside disabled robot timers.
-- Preserve original schedule times and return to normal timing the next day.
+- Preserve original schedule times and return to normal timing at the daily
+  reset. Make the reset time configurable in plugin settings, default `00:05`.
+  Use this same setting for ordinary Pause Until Tomorrow expiration and
+  restoration of temporary time shifts.
+- If another interval would move an affected occurrence past the next reset time,
+  convert that vacuum to a pause until the reset instead of extending the delay.
+
+## Shared pause interval
+
+Expose one plugin setting, Pause interval (minutes), default 60. Validate a
+positive whole number of minutes. The configured interval is shared by the
+individual and all-vacuum timed-pause actions. Each accepted press uses that
+interval once; transport retries must not count as another press.
+
+Persist accumulated delay in minutes, not just a press count. Changing the
+setting applies to future presses and does not recalculate already-applied
+delays. Example: one 60-minute press followed by changing the setting to 15 and
+pressing again produces 75 minutes of accumulated postponement.
+
+Use stable accessory identifiers independent of the configured duration. Default
+display names can include the selected interval, while preserving user-assigned
+names. Apple Home can cache names, so do not promise that changing an accessory's
+reported name immediately renames an existing Home tile.
+
+## Daily reset and postponement cutoff
+
+Use a daily local clock setting in `HH:mm` form with default `00:05`, in the
+Homebridge host's timezone to match the existing expiration timer. Compare
+actual occurrence timestamps with the next reset timestamp; do not compare
+clock strings. Each cloud schedule still uses its own timezone for cron math.
+
+Proposed boundary and scope details for this requirement:
+
+- Treat a proposed run exactly at the reset as exceeding the postponement
+  window as well, avoiding a race between cloud execution and restoration.
+- Check every affected run before applying an increment. If any would reach or
+  exceed the cutoff, pause the entire affected vacuum until the reset.
+- Preserve its original enabled-state snapshot, dock it if cleaning, and restore
+  original times while schedules remain paused. At reset, restore the enabled
+  states owned by this pause, preserving detected manual changes.
+- Give the converted pause an explicit per-vacuum expiry. Do not flip the global
+  Pause Until Tomorrow preference or change unrelated vacuums' pause policies.
+  A global timed-pause press makes this decision separately for each vacuum.
+- The ordinary Pause tile shows paused after conversion, so subsequent timed-pause
+  presses are ignored under the already-paused rule. Explicit ordinary unpause
+  can still end this pause before its expiry.
+- Midnight is not itself the cutoff. With a `00:05` reset, a 23:00 occurrence
+  shifted to 00:00 can still run before reset; 23:30 shifted to 00:30 converts
+  to a pause until reset. A postponed occurrence keeps its original occurrence
+  date even when its temporary run time passes midnight.
 
 ## Existing behavior to retain
 
@@ -47,28 +100,27 @@ Reviewed the current `master` README and controller sources in
   user-visible behavior without copying the old polling-via-Homebridge approach.
 
 The plugin already exposes routine actions as momentary HAP Switch services.
-Use that interaction pattern for the new one-hour actions. HAP's programmable
+Use that interaction pattern for the new timed-pause actions. HAP's programmable
 switch event is a read/notify event from an accessory; the normal On
 characteristic supports controller writes.
 
 ## Decisions to settle before implementing postponement
 
-1. What if the proposed time has already passed? Example: a 09:00 scheduled run
-   is still cleaning at 10:30, so adding one hour produces 10:00 in the past.
-   Choose whether to advance by enough whole-hour increments to make it future,
+1. What if the proposed time has already passed? Example with the default
+   60-minute interval: a 09:00 scheduled run is still cleaning at 10:30, so adding
+   one interval produces 10:00 in the past. Choose whether to advance by enough
+   whole configured intervals to make it future,
    use a different restart deadline, or skip the affected occurrence. Do not
    silently write a past recurring time and claim that the run will restart.
-2. What happens across midnight? A 23:30 run shifted one hour would fall at 00:30.
-   Choose whether it carries into tomorrow or is skipped for this day, with
-   tomorrow's normal schedule retained. Carrying it forward requires coordinating
-   restoration with the deferred occurrence and tomorrow's scheduled work.
-3. What if the current cleaning job was started manually? The user requires
+2. What if the current cleaning job was started manually? The user requires
    stopping/docking active cleaning, but a manual job has no original scheduled
    time. Proposed behavior: postpone the day's eligible schedules and do not
    invent a new scheduled occurrence for the manual job. Confirm this behavior.
 
 The scope and active-cleaning questions from the first discussion were answered:
 all affected runs for that day shift, and active cleaning is stopped and docked.
+The midnight question was resolved by using the configurable next reset as the
+cutoff and converting an overflowing postponement to a pause until that reset.
 The new cloud trigger may start the interrupted schedule again from its beginning;
 resuming exactly where it left off has not been verified. Reliable identification
 of the currently running schedule also needs investigation. Do not infer task
@@ -82,7 +134,7 @@ identity solely from whichever schedule most recently became due.
 - Ordinary Pause ON takes precedence: cancel remaining postponement, restore
   original times while schedules remain paused, and retain the original enabled
   states for the eventual unpause. The global tomorrow preference does not gate
-  the separate requirement to restore postponed times the next day.
+  the separate requirement to restore postponed times at the configured reset.
 - Detected manual edits take precedence. Do not overwrite changed definitions or
   recreate deleted schedules. New schedules are not silently added to an earlier
   postponement. Stop managing conflicting records and make the conflict visible.
