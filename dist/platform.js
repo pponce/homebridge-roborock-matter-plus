@@ -31,6 +31,7 @@ const action_switch_accessory_1 = __importStar(require("./action_switch_accessor
 const state_sensor_accessory_1 = __importStar(require("./state_sensor_accessory"));
 const hap_schedule_accessory_1 = __importStar(require("./hap_schedule_accessory"));
 const logger_1 = __importDefault(require("./logger"));
+const native_schedule_controls_1 = require("./native_schedule_controls");
 const types_1 = require("./types");
 const settings_1 = require("./settings");
 const crypto_1 = require("./crypto");
@@ -127,6 +128,7 @@ class RoborockPlatform {
             storagePath: storagePath,
             errorLogThrottleMs: transientWarningThrottleHours * 60 * 60 * 1000,
         });
+        this.nativeScheduleControls = new native_schedule_controls_1.NativeScheduleControls(this, this.accessories, this.scheduleAccountCoordinator, storagePath);
         /**
          * When this event is fired it means Homebridge has restored all cached accessories from disk.
          * Dynamic Platform plugins should only register new accessories after this event was fired,
@@ -171,6 +173,7 @@ class RoborockPlatform {
             for (const schedule of this.hapScheduleAccessories.values()) {
                 step("schedule shutdown", () => schedule.shutdown());
             }
+            step("native schedule controls shutdown", () => { var _a; return (_a = this.nativeScheduleControls) === null || _a === void 0 ? void 0 : _a.dispose(); });
             if (this.roborockAPI) {
                 step("stopService", () => {
                     void Promise.resolve(this.roborockAPI.stopService()).catch((error) => {
@@ -387,6 +390,7 @@ class RoborockPlatform {
      * must not be registered again to prevent "duplicate UUID" errors.
      */
     async discoverDevices() {
+        var _a;
         this.log.debug("Discovering vacuum devices...");
         try {
             const self = this;
@@ -413,6 +417,7 @@ class RoborockPlatform {
             this.removeLegacyHomeKitAccessories();
             const knownDevices = Array.isArray(devices) ? devices : [];
             this.syncHapSchedules(knownDevices);
+            (_a = this.nativeScheduleControls) === null || _a === void 0 ? void 0 : _a.sync(knownDevices);
             this.syncActionSwitches(knownDevices);
             this.syncStateSensors(knownDevices);
             // After both syncs, so the count is the total a user has to find in
@@ -825,7 +830,8 @@ class RoborockPlatform {
         return ((0, action_switch_accessory_1.isActionSwitchAccessory)(accessory) ||
             (0, state_sensor_accessory_1.isStateSensorAccessory)(accessory) ||
             (0, hap_schedule_accessory_1.isHapScheduleAccessory)(accessory) ||
-            (0, hap_schedule_accessory_1.isHapRoutineAccessory)(accessory));
+            (0, hap_schedule_accessory_1.isHapRoutineAccessory)(accessory) ||
+            (0, native_schedule_controls_1.isNativeScheduleControl)(accessory));
     }
     /**
      * Which action switches the user has asked for.
@@ -1137,8 +1143,11 @@ class RoborockPlatform {
      * situation, and a hint tied to one feature would have left them without it.
      */
     logHapPairingHint() {
-        var _a;
+        var _a, _b;
         const parts = [];
+        if (((_a = this.nativeScheduleControls) === null || _a === void 0 ? void 0 : _a.size) > 0) {
+            parts.push(`${this.nativeScheduleControls.size} schedule control switches`);
+        }
         if (this.actionSwitches.size > 0) {
             parts.push(`${this.actionSwitches.size} switch${this.actionSwitches.size === 1 ? "" : "es"}`);
         }
@@ -1166,7 +1175,7 @@ class RoborockPlatform {
             return;
         }
         const bridgeName = bridge.name || "this plugin's child bridge";
-        if (((_a = bridge.hap) === null || _a === void 0 ? void 0 : _a.enabled) === false) {
+        if (((_b = bridge.hap) === null || _b === void 0 ? void 0 : _b.enabled) === false) {
             this.log.warn(`${published} published, but HAP is turned OFF for '${bridgeName}', so Apple Home cannot see them at all and no QR code will help until that changes. ${where} -> Enable HAP, then restart Homebridge. After the restart, pair the bridge from that same screen with Connect to HomeKit and scan THAT QR code — ${notThese}.`);
             return;
         }
