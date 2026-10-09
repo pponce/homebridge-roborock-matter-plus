@@ -140,7 +140,7 @@ export class NativeScheduleControls {
     const pressedAt = Date.now();
     const action = context.control === "pause" ? (value ? "pause" : "resume") : context.control === "delay" ? "delay" : value ? "startDelay" : "cancelDelay";
     const ids = context.duid === null
-      ? [...new Set([...this.devices.keys(), ...Object.keys(this.controller.state.robots)])]
+      ? [...new Set([...this.devices.keys(), ...(["resume", "cancelDelay"].includes(action) ? Object.keys(this.controller.state.robots) : [])])]
       : [context.duid];
     const token = {};
     if (context.control !== "delay") {
