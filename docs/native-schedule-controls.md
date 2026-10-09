@@ -1,6 +1,7 @@
 # Native schedule controls: requirements and open decisions
 
-Status: design discussion. These controls are not implemented by this document.
+Status: the ten-minute occurrence selector is implemented and unit-tested.
+The native Home controls and persistent controller are not implemented yet.
 
 ## Confirmed requirements
 
@@ -15,13 +16,14 @@ Status: design discussion. These controls are not implemented by this document.
   switch for all vacuums. One shared configurable interval applies to every
   timed-pause switch; default 60 minutes, with values such as 15 or 30 minutes
   supported. Do not expose several independently configured duration switches.
-  Repeated presses add another configured interval.
+  Repeated presses re-evaluate eligibility using the current delayed times and
+  add one configured interval to each qualifying occurrence.
 - The timed-pause action must stop a cleaning vacuum and return it to its dock,
-  as the existing ordinary pause does. Postpone the interrupted scheduled run
-  along with the other affected schedules for that vacuum on that day.
-- Docking applies whether cleaning was started manually or by a schedule. Include
-  the eligible schedule that just ran/started when postponing today's schedules;
-  an already-past original start time must not by itself exclude that occurrence.
+  as the existing ordinary pause does. Postpone occurrences selected by the
+  ten-minute rule below for that vacuum on that day.
+- Docking applies whether cleaning was started manually or by a schedule.
+  Use the owner's ten-minute rule below to choose whether a recent scheduled
+  occurrence is included alongside the remaining future occurrences.
 - Manual runs started in the Roborock app or Home app remain independent of
   schedule management. Do not create, shift, automatically resume or replay a
   manual cleaning job. An explicit Pause ON or delay command still docks any
@@ -44,6 +46,15 @@ Status: design discussion. These controls are not implemented by this document.
   reset. Make the reset time configurable in plugin settings, default `00:05`.
   Use this same setting for ordinary Pause Until Tomorrow expiration and
   restoration of temporary time shifts.
+- Add stateful Delay Active controls per vacuum and for all vacuums with the
+  Delay feature. These replace the initially requested momentary Reset Schedule
+  Times controls. ON reflects an applied schedule-time delay. OFF restores saved
+  original times and cancels accumulated delay. Preserve pause/enable states;
+  restoring times does not dock, start or resume cleaning and does not cancel a
+  separate pause-until-reset expiry. Automatic restoration clears this state too.
+- The all-vacuum Delay Active switch is ON if any vacuum has a delay. OFF restores
+  all active delays, including those started individually. Keep the momentary
+  Delay for X switches as the explicit way to add or extend a delay.
 - If another interval would move an affected occurrence past the next reset time,
   convert that vacuum to a pause until the reset instead of extending the delay.
 
@@ -54,19 +65,19 @@ Expose two independent feature options under Schedule controls:
 | Setting | Default | Visibility and effect |
 | --- | --- | --- |
 | Enable Pause Until Tomorrow | Off | Adds one persistent pause switch per vacuum and one Pause All switch. |
-| Enable Delay Schedules | Off | Adds one momentary delay switch per vacuum and one Delay All switch. |
+| Enable Delay Schedules | Off | Adds momentary Delay for X and stateful Delay Active switches per vacuum, plus corresponding all-vacuum switches. |
 | Delay interval (minutes) | 60 | Shown beneath Enable Delay Schedules when enabled; shared by every delay switch. |
 | Daily reset time | 00:05 | Shown once when either feature is enabled; shared by both features and their individual/all-vacuum controls. |
 
 The options are independent; users may enable either one or both. Both options
-enabled for two vacuums add six control switches. Keep the shared reset setting
+enabled for two vacuums add nine control switches. Keep the shared reset setting
 outside either feature's dependent fields so it is not duplicated or hidden
 when only the other feature is enabled.
 
 Interpretation of the requested Pause Until Tomorrow group: ON pauses the chosen
 vacuum(s) until the next configured reset, and OFF restores early. This replaces
 the old setup's separate global Pause Until Tomorrow preference tile; do not add
-that extra tile alongside these six controls. The old controller's behavior below
+that extra tile alongside these controls. The old controller's behavior below
 is reference material, not a requirement to retain its separate preference UI.
 
 The Delay feature must work independently of whether the Pause Until Tomorrow
@@ -77,6 +88,18 @@ not discard saved originals or abandon outstanding restoration work.
 These are requirements for the eventual working UI. Do not publish selectable
 configuration fields that have no implemented runtime behavior. Integrate the
 custom Homebridge UI, schema, TypeScript configuration and committed dist together.
+
+For the stateful controls, the ON display must follow saved, verified delay state,
+not the most recent button press. If restoring some schedules fails, preserve
+their originals and keep the affected Delay Active indicator ON until restoration
+succeeds or a conflicting manual edit is explicitly reconciled. A reset must not
+visually claim success just because the user requested OFF.
+
+The remaining switch interaction to choose is manually turning an inactive
+Delay Active switch ON. Recommended behavior: apply one delay interval; repeated
+ON writes while already active do not add time. Extra increments remain on the
+momentary Delay for X controls. For the all-vacuum stateful control, this would
+apply one interval only to eligible vacuums without an existing active delay.
 
 ## Shared pause interval
 
@@ -150,30 +173,50 @@ Use that interaction pattern for the new timed-pause actions. HAP's programmable
 switch event is a read/notify event from an accessory; the normal On
 characteristic supports controller writes.
 
-## Timing decision to settle before implementing postponement
+## Ten-minute eligibility rule, including stacked presses
 
-1. What if the proposed time has already passed? Example with the default
-   60-minute interval: a 09:00 scheduled run is still cleaning at 10:30, so adding
-   one interval produces 10:00 in the past. Choose whether to advance by enough
-   whole configured intervals to make it future,
-   use a different restart deadline, or skip the affected occurrence. Do not
-   silently write a past recurring time and claim that the run will restart.
-The scope and active-cleaning questions from the first discussion were answered:
-all affected runs for that day shift, and active cleaning is stopped and docked
-whether started manually or by a schedule. Include the eligible schedule that
-just ran, even if its original start time has passed. Manual cleaning does not
-automatically identify a corresponding cloud schedule: reliable association
-remains an implementation investigation, not a reason to ignore docking or the
-day's eligible schedules. Manual jobs are not candidates for an automatic restart
-and must not be treated as proof that an earlier scheduled occurrence ran.
-The feature edits existing jobs rather than creating a replacement cloud job
-for a manual cleaning command.
-The midnight question was resolved by using the configurable next reset as the
-cutoff and converting an overflowing postponement to a pause until that reset.
-The new cloud trigger may start the interrupted schedule again from its beginning;
-resuming exactly where it left off has not been verified. Reliable identification
-of the currently running schedule also needs investigation. Do not infer task
-identity solely from whichever schedule most recently became due.
+The owner chose this timing heuristic on 2026-10-09, replacing the proposal to
+identify scheduled runs from cleaning history. No run-history diagnostic or
+automatic completion matching is required for this design.
+
+For every individual or all-vacuum Delay press, evaluate each vacuum separately
+using fresh cleaning/timer state and the timestamp of the press:
+
+1. If the vacuum's schedules are already paused, make no schedule changes.
+2. Include enabled occurrences for today whose current scheduled time is later
+   than the press. Use effective delayed times, not the saved original times.
+3. If the vacuum is actively cleaning, also include the most recent enabled
+   occurrence for today between the press minus ten minutes and the press,
+   inclusive. A robot returning home or merely sitting at the dock does not by
+   itself establish active cleaning.
+4. If it is not cleaning, include no past occurrences. A later stacked press
+   must not re-add an old occurrence just because an earlier press included it.
+5. Add exactly one configured interval to each selected current scheduled time.
+   Preserve the first original time separately for automatic/manual restoration.
+   Keep the existing next-reset cutoff and already-disabled exclusion.
+6. An explicit Delay command still docks active cleaning regardless of its
+   origin or whether a schedule qualifies. Do not create a scheduled job for a
+   manual clean or continuously enforce docking afterward.
+
+Example with a sixty-minute interval: press at 09:05 while cleaning after a
+09:00 schedule, moving it to 10:00. A second press at 09:20 moves that still-future
+occurrence to 11:00 even though the vacuum has docked. A press at 11:04 while it
+is cleaning can move 11:00 to 12:00. Its original remains 09:00 for restoration.
+
+This heuristic cannot guarantee that every completed schedule is excluded. A
+manual run shortly after a completed schedule can make that recent schedule
+eligible again; a scheduled run still cleaning more than ten minutes after its
+effective start is excluded from rescheduling but is still docked. These are
+consequences of the chosen rule, not verified cleaning-history classifications.
+An included occurrence may restart from the beginning; exact continuation has
+not been verified.
+
+If several recent schedules have different times, use the most recent one.
+If several share that most recent timestamp, report the ambiguity and leave
+those recent entries unchanged while delaying the unambiguous future entries.
+Do not arbitrarily select by job ID. With intervals shorter than the ten-minute
+lookback, a shifted time can remain in the past: never add extra intervals
+silently or claim that a past time will trigger another cleaning today.
 
 ## Proposed defaults, subject to the design discussion
 
@@ -191,10 +234,8 @@ identity solely from whichever schedule most recently became due.
 - Detected manual edits take precedence. Do not overwrite changed definitions or
   recreate deleted schedules. New schedules are not silently added to an earlier
   postponement. Stop managing conflicting records and make the conflict visible.
-- Proposed completed-run rule: leave finished runs alone; only the interrupted
-  run and not-yet-started runs should be postponed. Do not repeat completed or
-  missed occurrences as a side effect of restoration. Guard against due-time
-  races and verify how completed/interrupted runs can be identified.
+- Apply the ten-minute selection rule on every press, including stacked presses.
+  Do not claim that this proves which runs completed or were interrupted.
 - Serialize overlapping controls per vacuum and use the existing account queue.
   Persist the original and intended result before each cloud mutation; verify
   changes and restoration against fresh reads.

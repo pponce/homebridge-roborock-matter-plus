@@ -68,6 +68,10 @@ jobs:
       - run: npm test -- --coverage
         env:
           CI: true
+      - name: Run Node diagnostic tests
+        run: node --test tests/*.test.cjs
+      - name: Run Python diagnostic tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Upload coverage to Codecov
         run: |
           if [ -z "$CODECOV_TOKEN" ]; then

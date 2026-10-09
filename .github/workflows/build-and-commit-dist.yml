@@ -39,6 +39,12 @@ jobs:
         env:
           CI: true
 
+      - name: Run Node diagnostic tests
+        run: node --test tests/*.test.cjs
+
+      - name: Run Python diagnostic tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
       - name: Build
         run: npm run build
 
