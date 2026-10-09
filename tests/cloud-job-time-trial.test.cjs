@@ -6,7 +6,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { runTimeTrial } = require("../roborockLib/lib/cloudJobTimeTrial");
-const { makeRequester, writePrivate, argumentsFrom } = require("../scripts/test-schedule-time.cjs");
+const { makeRequester, writePrivate, argumentsFrom, loadSavedSession } = require("../scripts/test-schedule-time.cjs");
+const { encryptSession } = require("../dist/crypto");
 const { buildHawkAuthorization } = require("../roborockLib/lib/hawkSignature");
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -187,4 +188,61 @@ test("private originals cannot be overwritten and the execute flag is required",
   } finally { fs.rmSync(root, { recursive: true }); }
   assert.throws(() => argumentsFrom([]));
   assert.throws(() => argumentsFrom(["--execute", "--unknown", "yes"]));
+});
+
+test("UI encrypted login works without UserData and takes precedence over a stale cache", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-session-"));
+  const current = { token: "test-current-token", rriot: { u: "current-user", s: "current-session", h: "current-secret", r: { a: "https://api-us.roborock.com" } } };
+  try {
+    const encryptedToken = encryptSession(current, root);
+    const configFile = path.join(root, "config.json"), keyFile = path.join(root, "roborock.token.key");
+    const config = { platforms: [{ platform: "UnrelatedPlugin", password: "unrelated" }, { platform: "RoborockVacuumPlatform", encryptedToken }] };
+    fs.writeFileSync(configFile, JSON.stringify(config), { mode: 0o600 });
+    const before = [fs.readFileSync(configFile), fs.readFileSync(keyFile)];
+    const timestamps = [fs.statSync(configFile).mtimeMs, fs.statSync(keyFile).mtimeMs];
+    assert.deepEqual(loadSavedSession(root), { rriot: current.rriot, source: "encryptedConfig" });
+    assert.equal(fs.existsSync(path.join(root, "roborock.UserData")), false);
+    fs.writeFileSync(path.join(root, "roborock.UserData"), JSON.stringify({ val: JSON.stringify({ token: "old", rriot: { u: "old-user" } }) }));
+    assert.deepEqual(loadSavedSession(root), { rriot: current.rriot, source: "encryptedConfig" });
+    assert.deepEqual([fs.readFileSync(configFile), fs.readFileSync(keyFile)], before);
+    assert.deepEqual([fs.statSync(configFile).mtimeMs, fs.statSync(keyFile).mtimeMs], timestamps);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test("missing, invalid and incorrect keys are never created or replaced", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-session-key-"));
+  try {
+    const encryptedToken = encryptSession({ token: "test-token", rriot: {} }, root);
+    const keyFile = path.join(root, "roborock.token.key");
+    const configFile = path.join(root, "config.json");
+    fs.writeFileSync(configFile, JSON.stringify({ platforms: [{ platform: "RoborockVacuumPlatform", encryptedToken }] }));
+    const configBefore = fs.readFileSync(configFile);
+    fs.unlinkSync(keyFile);
+    assert.throws(() => loadSavedSession(root), { code: "EXISTING_SESSION_KEY_UNAVAILABLE" });
+    assert.equal(fs.existsSync(keyFile), false);
+    for (const key of [Buffer.from("short"), Buffer.alloc(32)]) {
+      fs.writeFileSync(keyFile, key);
+      const before = fs.statSync(keyFile).mtimeMs;
+      assert.throws(() => loadSavedSession(root));
+      assert.deepEqual(fs.readFileSync(keyFile), key);
+      assert.equal(fs.statSync(keyFile).mtimeMs, before);
+    }
+    assert.deepEqual(fs.readFileSync(configFile), configBefore);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test("legacy cache remains supported and multiple platform accounts are refused", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-session-cache-"));
+  try {
+    const session = { token: "test-token", rriot: { u: "test-user" } };
+    fs.writeFileSync(path.join(root, "roborock.UserData"), JSON.stringify({ val: JSON.stringify(session) }));
+    assert.deepEqual(loadSavedSession(root), { rriot: session.rriot, source: "cachedUserData" });
+    assert.equal(fs.existsSync(path.join(root, "roborock.token.key")), false);
+    assert.equal(fs.existsSync(path.join(root, "config.json")), false);
+    fs.writeFileSync(path.join(root, "config.json"), JSON.stringify({ platforms: [
+      { platform: "RoborockVacuumPlatform", encryptedToken: "one" },
+      { platform: "RoborockVacuumPlatform", encryptedToken: "two" },
+    ] }));
+    assert.throws(() => loadSavedSession(root), { code: "MULTIPLE_ROBOROCK_CONFIGS_REQUIRE_SELECTION" });
+  } finally { fs.rmSync(root, { recursive: true }); }
 });

@@ -92,8 +92,13 @@ python3 -B -m unittest discover -s tests -p 'test_inspect_schedule_times.py'
 ## One-job time-change trial
 
 `scripts/test-schedule-time.cjs` is a developer command, not a background
-scheduler. It uses the saved `roborock.UserData` session and this repository's
-existing Hawk signer to make HTTPS calls to Roborock. It does not log in, open
+scheduler. It uses the configured encrypted session in `config.json` with the
+existing `roborock.token.key`, or the legacy `roborock.UserData` cache when no
+encrypted session is configured. The configured session takes precedence, as it
+does in the plugin. Decryption uses the plugin's AES-GCM format but never creates
+or replaces a key, changes configuration, or writes decrypted login material.
+Multiple Roborock platform entries are refused instead of guessing an account.
+It uses this repository's existing Hawk signer for HTTPS. It does not log in, open
 MQTT, modify the installed plugin or its configuration, or restart a service.
 No additional npm packages are required. It runs from the Git checkout and
 does not require a plugin reinstall. It fails without writes if the saved

@@ -5,7 +5,7 @@
 // same Hawk signer as the plugin; never logs in or creates an MQTT client.
 const fs = require("node:fs");
 const path = require("node:path");
-const { createHash } = require("node:crypto");
+const { createHash, createDecipheriv } = require("node:crypto");
 const { buildHawkAuthorization } = require("../roborockLib/lib/hawkSignature");
 const { runTimeTrial, TrialError } = require("../roborockLib/lib/cloudJobTimeTrial");
 
@@ -15,6 +15,44 @@ function readState(storage, name) {
     const value = wrapped.val ?? wrapped;
     return typeof value === "string" ? JSON.parse(value) : value;
   } catch { throw new TrialError(name === "UserData" ? "SAVED_SESSION_UNAVAILABLE" : "DEVICE_INVENTORY_UNAVAILABLE"); }
+}
+
+function loadSavedSession(storage) {
+  let config;
+  try { config = JSON.parse(fs.readFileSync(path.join(storage, "config.json"), "utf8")); }
+  catch (error) {
+    if (error.code !== "ENOENT") throw new TrialError("HOMEBRIDGE_CONFIG_UNREADABLE");
+  }
+  const platforms = Array.isArray(config?.platforms)
+    ? config.platforms.filter((p) => p?.platform === "RoborockVacuumPlatform") : [];
+  if (platforms.length > 1) throw new TrialError("MULTIPLE_ROBOROCK_CONFIGS_REQUIRE_SELECTION");
+  const encrypted = platforms[0]?.encryptedToken;
+  if (encrypted) {
+    // Same AES-GCM envelope as src/crypto.ts. Read-only on purpose: its
+    // decryptSession currently calls loadOrCreateKey, which could replace a
+    // missing or damaged key. A diagnostic must never repair login material.
+    let key;
+    try { key = fs.readFileSync(path.join(storage, "roborock.token.key")); }
+    catch { throw new TrialError("EXISTING_SESSION_KEY_UNAVAILABLE"); }
+    if (key.length !== 32) throw new TrialError("EXISTING_SESSION_KEY_INVALID");
+    try {
+      if (typeof encrypted !== "string") throw Error("invalid envelope");
+      const payload = JSON.parse(Buffer.from(encrypted, "base64").toString("utf8"));
+      const iv = Buffer.from(payload.iv, "base64");
+      const tag = Buffer.from(payload.tag, "base64");
+      if (iv.length !== 12 || tag.length !== 16) throw Error("invalid envelope");
+      const decipher = createDecipheriv("aes-256-gcm", key, iv);
+      decipher.setAuthTag(tag);
+      const session = JSON.parse(Buffer.concat([
+        decipher.update(Buffer.from(payload.data, "base64")), decipher.final(),
+      ]).toString("utf8"));
+      if (!session?.token || !session?.rriot) throw Error("invalid session");
+      return { rriot: session.rriot, source: "encryptedConfig" };
+    } catch { throw new TrialError("ENCRYPTED_SESSION_UNREADABLE"); }
+  }
+  const session = readState(storage, "UserData");
+  if (!session?.token || !session?.rriot) throw new TrialError("SAVED_SESSION_UNAVAILABLE");
+  return { rriot: session.rriot, source: "cachedUserData" };
 }
 
 function writePrivate(file, data) {
@@ -91,7 +129,7 @@ async function main(argv) {
     const device = devices[0];
     const product = (home.products ?? []).find((p) => String(p.id) === String(device.productId));
     if ((device.model ?? product?.model) !== options.model || typeof device.duid !== "string" || !device.duid) throw new TrialError("ROBOT_MODEL_OR_ID_MISMATCH");
-    const rriot = readState(storage, "UserData")?.rriot;
+    const { rriot, source } = loadSavedSession(storage);
     const collectionPath = `/user/devices/${encodeURIComponent(device.duid)}/jobs`;
     const request = makeRequester(rriot, collectionPath, options["job-id"]);
     lockPath = path.join(storage, "roborock.ScheduleTimeTrial.lock");
@@ -108,6 +146,7 @@ async function main(argv) {
       },
     });
     report.robot = options.robot;
+    report.authenticationSource = source;
     report.model = options.model;
     report.robotRef = createHash("sha256").update(device.duid).digest("hex").slice(0, 12);
     report.robotPauseStateChecked = false;
@@ -140,4 +179,4 @@ if (require.main === module) main(process.argv.slice(2)).catch(() => {
   process.exitCode = 1;
 });
 
-module.exports = { makeRequester, argumentsFrom, writePrivate };
+module.exports = { makeRequester, argumentsFrom, writePrivate, loadSavedSession };
