@@ -20,6 +20,7 @@ const RRMapParser = require("./lib/RRMapParser");
 const messageQueueHandler =
   require("./lib/messageQueueHandler").messageQueueHandler;
 const hawkSignature = require("./lib/hawkSignature");
+const { inspectCloudJobs } = require("./lib/inspectCloudJobs");
 const { METHOD_REFUSED_CODE } = require("./lib/describeReplyRefusal");
 const {
   summariseCloudSceneSchedules,
@@ -5326,6 +5327,24 @@ class Roborock {
 
     for (const route of routes) {
       await this.probeOneCloudScheduleRoute(duid, route, results);
+    }
+
+    // Decode complete cloud job definitions before generic diagnostics cut
+    // nested JSON strings at 500 characters. Keep the existing debug-only,
+    // once-per-robot guard and the current authenticated connection.
+    try {
+      const inspection = await inspectCloudJobs(
+        this.api,
+        duid,
+        results.schedules?.response
+      );
+      if (inspection) {
+        this.log.debug(
+          `Schedule time inspection for ${duid}: value=${JSON.stringify(inspection)}`
+        );
+      }
+    } catch {
+      this.log.debug("Schedule time inspection unavailable; normal discovery continues.");
     }
 
     // A HomeKit switch over these schedules has to WRITE, and the only write

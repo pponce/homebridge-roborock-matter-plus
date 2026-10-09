@@ -53,6 +53,42 @@ reading through the plugin's normal diagnostics, not guessing a write payload.
 Do not blindly reuse the on/off operation's payload as a time-edit command.
 Do not delete and recreate schedules to work around an unverified edit API.
 
+## Expanded cloud-job inspection
+
+When plugin debug logging and child bridge Debug Mode are enabled, the existing
+once-per-robot startup probe now also emits `Schedule time inspection` records.
+The probe uses its existing authenticated cloud client. It decodes nested JSON
+before ordinary diagnostics truncate strings at 500 characters or arrays at
+eight entries. Unknown strings and credential fields are masked. Task parameter
+fingerprints allow comparisons without printing raw private strings. These
+sanitized records describe settings; they are **not restoration snapshots**.
+
+For the first valid job, three additional OPTIONS requests inspect the collection,
+the existing job, and a deliberately absent subresource as a control. Each request
+has a 10-second timeout. No PUT, POST, PATCH, DELETE, login, or robot action is
+performed by the added diagnostic. A job endpoint advertising PUT identifies a
+candidate route; it does not prove a particular time-edit payload will work.
+An absent control returning the same Allow header would weaken that evidence.
+
+The collector includes the embedded capture timestamp and allowed methods. An
+expanded reading replaces the older compacted cloud-job log in the report; check
+the capture timestamp to establish freshness. Other readings can still be older.
+The robot-side on/off state and the cloud-job `enabled` field are reported
+separately. Do not assume those fields mean the same thing or enable jobs based
+on their disagreement.
+
+The candidate job update route is used for enabling/disabling jobs by
+[`roborock-q10-cli`](https://github.com/andrewlyeats/roborock-q10-cli/blob/main/vac.py):
+`PUT /user/devices/{duid}/jobs/{jobId}`. That is evidence on another model, not
+validation for the S7 models or a license to reuse its full write body unchanged.
+
+Verification commands:
+
+```bash
+node --test tests/inspect-cloud-jobs.test.cjs
+python3 -B -m unittest discover -s tests -p 'test_inspect_schedule_times.py'
+```
+
 ## Installation convention
 
 For any later runtime update, commit matching compiled `dist` files to this
@@ -62,3 +98,8 @@ then `sudo hb-service start`. Ensure start is attempted even if installation
 fails. No npm publication is required. The first diagnostic changes no runtime
 source, so the base branch's existing `dist` remains unchanged and no installation
 is needed.
+
+The expanded diagnostic requires installation. Its runtime changes are in the
+JavaScript `roborockLib` loaded directly by `dist/platform.js`; no TypeScript or
+generated output changes are required. The existing matching `dist` remains
+committed on this branch for GitHub installation.

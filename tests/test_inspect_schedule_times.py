@@ -13,6 +13,28 @@ spec.loader.exec_module(inspector)
 
 
 class InspectionTests(unittest.TestCase):
+    def test_native_inspection_preserves_timestamp_methods_and_nested_settings(self):
+        payload = {"schemaVersion": 1, "observedAt": "2026-10-09T20:45:00.000Z",
+                   "jobs": [{"definition": {"id": 12, "cron": "15 9 ? * 1,2,4",
+                                              "param": {"method": "do_timer", "params": {"jsonString": ["off", {"fan_power": 102}]}}},
+                             "paramFingerprint": "a" * 64}],
+                   "methodChecks": [{"target": "existingJob", "jobId": 12, "ok": True, "status": 200, "allow": ["PUT", "OPTIONS"]}]}
+        line = "Schedule time inspection for robot: value=" + json.dumps(payload)
+        duid, kind, record = inspector.parse_line(line, "homebridge.log")
+        self.assertEqual(kind, "cloudJobsInspection")
+        self.assertEqual(record["observedAt"], "2026-10-09T20:45:00+00:00")
+        self.assertFalse(record["upstreamMayHaveCompactedPayload"])
+        with tempfile.TemporaryDirectory() as root, patch.object(inspector, "journal_records", return_value=iter([(duid, kind, record)])):
+            report = inspector.collect(Path(root), "homebridge", "10 minutes ago")
+        reading = report["robots"][0]["readings"][0]
+        self.assertEqual(reading["methodChecks"], payload["methodChecks"])
+        self.assertEqual(reading["entries"][0]["structure"]["definition"]["param"]["method"], "do_timer")
+        self.assertEqual(reading["entries"][0]["structure"]["paramFingerprint"], "a" * 64)
+
+    def test_invalid_native_inspection_is_ignored(self):
+        for payload in ([], {}, {"schemaVersion": 1, "jobs": []}, {"schemaVersion": 1, "jobs": [], "observedAt": "bad"}):
+            self.assertIsNone(inspector.parse_line("Schedule time inspection for robot: value=" + json.dumps(payload), "test"))
+
     def test_server_payload_survives_and_unrelated_text_is_ignored(self):
         payload = [["timer-123", "on", ["5 8 * * *", ["start_clean", {"segments": [16], "fan_power": 102}]]]]
         line = "\x1b[32m[Roborock] Schedule discovery for robot-secret-id: type=array, value=" + json.dumps(payload) + "\x1b[0m"

@@ -17,6 +17,7 @@ from pathlib import Path
 
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 DISCOVERY = re.compile(r"Schedule discovery for ([^\s:]+): type=array, value=")
+INSPECTION = re.compile(r"Schedule time inspection for ([^\s:]+): value=")
 PROBE = re.compile(r"GET user/(scene/device|devices)/([^/\s]+)(/jobs)? answered: ")
 SECRET = re.compile(r"password|token|secret|local.?key|authorization|cookie|rriot|client.?id|serial|mac|ssid|bssid|email|url|host|^ip$", re.I)
 CRON = re.compile(r"[\d*/?,\-]+(?:\s+[\d*/?,\-]+){4,6}")
@@ -30,16 +31,22 @@ def alias(value):
     return hashlib.sha256(str(value).encode()).hexdigest()[:12]
 
 
-def safe_shape(value, depth=0):
+def safe_shape(value, depth=0, field=""):
     """Keep numeric task settings, cron, timezone and method; mask other strings."""
     if depth > 20:
         return "<depth limit>"
     if isinstance(value, dict):
-        return {str(k): ("<redacted>" if SECRET.search(str(k)) else safe_shape(v, depth + 1))
+        return {str(k): ("<redacted>" if SECRET.search(str(k)) else safe_shape(v, depth + 1, str(k)))
                 for k, v in value.items()}
     if isinstance(value, list):
         return [safe_shape(v, depth + 1) for v in value]
     if not isinstance(value, str):
+        return value
+    if field == "method" and re.fullmatch(r"[a-z_][a-z_0-9]{0,79}", value):
+        return value
+    if field == "paramFingerprint" and re.fullmatch(r"[0-9a-f]{64}", value):
+        return value
+    if value in {"<redacted>", "<string>", "<depth limit>", "<unparseable JSON string>"}:
         return value
     if value[:1] in ("{", "["):
         try:
@@ -81,6 +88,24 @@ def devices_from(home):
 
 def parse_line(message, source, observed_at=None):
     message = ANSI.sub("", message)
+    inspection = INSPECTION.search(message)
+    if inspection:
+        try:
+            data, _ = json.JSONDecoder().raw_decode(message[inspection.end():].lstrip())
+            if data.get("schemaVersion") != 1 or not isinstance(data.get("jobs"), list):
+                return None
+            stamp = dt.datetime.fromisoformat(data["observedAt"].replace("Z", "+00:00"))
+            if stamp.tzinfo is None:
+                return None
+            return inspection.group(1), "cloudJobsInspection", {
+                "source": source.replace("(timestamp not interpreted)", "(embedded capture timestamp)"),
+                "observedAt": stamp.astimezone(dt.timezone.utc).isoformat(),
+                "payload": data["jobs"],
+                "methodChecks": data.get("methodChecks", []),
+                "upstreamMayHaveCompactedPayload": False,
+            }
+        except (ValueError, TypeError, KeyError, AttributeError):
+            return None
     match = DISCOVERY.search(message)
     kind = "serverTimer"
     if match:
@@ -163,11 +188,18 @@ def collect(storage, service, since):
         notes.append("No readable device inventory at the selected Homebridge storage path.")
 
     observations = {}
-    for duid, kind, record in file_records(storage, notes):
+    def remember(duid, kind, record):
+        previous = observations.get((duid, kind))
+        if previous and previous.get("observedAt") and record.get("observedAt"):
+            if previous["observedAt"] > record["observedAt"]:
+                return
         observations[(duid, kind)] = record
+
+    for duid, kind, record in file_records(storage, notes):
+        remember(duid, kind, record)
     # Prefer timestamped journal evidence over file tails of unknown age.
     for duid, kind, record in journal_records(service, since, notes):
-        observations[(duid, kind)] = record
+        remember(duid, kind, record)
 
     if not observations:
         notes.append("No complete schedule reading found. This does NOT mean the robots have no schedules. Debug discovery may not have been logged or retained.")
@@ -183,7 +215,9 @@ def collect(storage, service, since):
     for duid in sorted(set(devices) | {key[0] for key in observations}):
         device = devices.get(duid, {"robot": "Unmatched robot", "model": "unknown", "robotRef": alias(duid)})
         robot = {**device, "readings": []}
-        for kind in ("serverTimer", "cloudScene", "cloudJobs"):
+        for kind in ("serverTimer", "cloudScene", "cloudJobs", "cloudJobsInspection"):
+            if kind == "cloudJobs" and (duid, "cloudJobsInspection") in observations:
+                continue
             record = observations.get((duid, kind))
             if record is None:
                 continue
@@ -202,6 +236,17 @@ def collect(storage, service, since):
                 "upstreamMayHaveCompactedPayload": record["upstreamMayHaveCompactedPayload"],
                 "entryCount": len(entries), "entries": entries,
             })
+            if kind == "cloudJobsInspection":
+                robot["readings"][-1]["methodChecks"] = [
+                    {"target": check.get("target") if check.get("target") in
+                         {"collection", "existingJob", "absentControl"} else "unknown",
+                     "jobId": safe_shape(check.get("jobId")),
+                     "ok": check.get("ok") is True,
+                     "status": check.get("status") if isinstance(check.get("status"), int) else None,
+                     "allow": [verb for verb in check.get("allow", [])
+                               if verb in {"GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"}]}
+                    for check in record.get("methodChecks", []) if isinstance(check, dict)
+                ]
         if not robot["readings"]:
             robot["note"] = "No captured schedule definition for this robot; absence is not an empty schedule list."
         report["robots"].append(robot)
