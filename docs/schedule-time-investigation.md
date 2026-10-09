@@ -3,9 +3,34 @@
 Branch: `SCHEDULE_TIME_INVESTIGATION`, based on
 `MQTT_ACCOUNT_SESSION_RECOVERY` at `42f0cc4c862d8e0307d9907f6405c71c53271417`.
 
-First identify the schedule representation returned for each robot. A cloud
-connection does not establish whether its schedules are server timers, cloud
-scene timer triggers, or cloud jobs. No time-edit support is assumed.
+The investigation distinguishes server timers, cloud scene timer triggers and
+cloud jobs. A cloud connection alone does not identify the representation.
+
+## Live result: model a15
+
+On 2026-10-09, the one-job trial using commit
+`691c5043036df9065c526155b5dd6d3b9da92141` succeeded on
+`roborock.vacuum.a15`. The existing disabled cloud job was changed from 08:10
+to 08:11 and restored to 08:10, with its ID, America/Los_Angeles timezone,
+weekdays, repetition flag and complete task parameters preserved. The cloud
+enabled flag was false before, during and after the test. The task was
+`server_scheduled_start`.
+
+Two PUT attempts completed, one for the edit and one for restoration. Read-back
+verified the original definition, excluding the server-calculated next-fire
+timestamp, and confirmed the other six jobs on that robot were unchanged.
+The body retained the original fields other than `id` and `nextFireTime`.
+Authentication used the encrypted configuration session without another login
+or MQTT connection. No schedule was deleted or recreated.
+
+This establishes an in-place cloud time-edit API on this model. App confirmation
+of the robot-side pause switch remains separate: the trial reports
+`robotPauseStateChecked: false`. Model a27, execution at a delayed time, and
+automatic next-day restoration have not yet been verified by this test.
+
+The preceding manual app experiment kept the job ID but also changed the cloud
+enabled flag after disabling and removed a `clean_order_mode: 0` task field.
+The API trial therefore used a fresh original read, not the earlier log payload.
 
 ## First diagnostic
 
@@ -79,8 +104,9 @@ on their disagreement.
 
 The candidate job update route is used for enabling/disabling jobs by
 [`roborock-q10-cli`](https://github.com/andrewlyeats/roborock-q10-cli/blob/main/vac.py):
-`PUT /user/devices/{duid}/jobs/{jobId}`. That is evidence on another model, not
-validation for the S7 models or a license to reuse its full write body unchanged.
+`PUT /user/devices/{duid}/jobs/{jobId}`. That client is evidence on another model,
+not a reason to reuse its full write body unchanged. The model a15 result above
+is the separate live verification.
 
 Verification commands:
 
