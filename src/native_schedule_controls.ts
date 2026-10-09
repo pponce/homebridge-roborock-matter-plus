@@ -28,6 +28,9 @@ export class NativeScheduleControls {
   private devices = new Map<string, string>();
   private bindings = new Map<string, PlatformAccessory>();
   private resetTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private commandTail: Promise<void> = Promise.resolve();
+  private pending = new Map<string, { token: object; value: boolean }>();
+  private failedValues = new Map<string, boolean>();
 
   constructor(private readonly platform: RoborockPlatform, private readonly accessories: PlatformAccessory[], coordinator: ScheduleAccountCoordinator, storagePath: string) {
     const config = platform.platformConfig;
@@ -117,9 +120,18 @@ export class NativeScheduleControls {
   }
   private value(context: Context): boolean {
     if (!this.controller || context.control === "delay") return false;
-    const ids = context.duid === null ? Object.keys(this.controller.state.robots) : [context.duid];
+    const ids = context.duid === null ? [...new Set([...this.devices.keys(), ...Object.keys(this.controller.state.robots)])] : [context.duid];
     return ids.some((id: string) => {
+      const key = JSON.stringify([id, context.control]);
+      const pending = this.pending.get(key);
+      if (pending) return pending.value;
       const status = this.controller.status(id);
+      // A failed pause can leave a tentative journal flag while recovery restores
+      // partially changed schedules. Do not display that flag as a successful ON.
+      if (this.failedValues.has(key)) {
+        if (status.recovering) return this.failedValues.get(key)!;
+        this.failedValues.delete(key);
+      }
       return context.control === "pause" ? status.paused : status.delayed;
     });
   }
@@ -127,6 +139,13 @@ export class NativeScheduleControls {
     if (this.disposed || !this.controller || (context.control === "delay" && !value)) return;
     const pressedAt = Date.now();
     const action = context.control === "pause" ? (value ? "pause" : "resume") : context.control === "delay" ? "delay" : value ? "startDelay" : "cancelDelay";
+    const ids = context.duid === null
+      ? [...new Set([...this.devices.keys(), ...Object.keys(this.controller.state.robots)])]
+      : [context.duid];
+    const token = {};
+    if (context.control !== "delay") {
+      for (const id of ids) this.pending.set(JSON.stringify([id, context.control]), { token, value });
+    }
     clearTimeout(this.resetTimers.get(accessory.UUID));
     const timer = setTimeout(() => {
       this.resetTimers.delete(accessory.UUID);
@@ -134,18 +153,38 @@ export class NativeScheduleControls {
       else this.refresh();
     }, context.control === "delay" ? 1500 : 0);
     timer.unref(); this.resetTimers.set(accessory.UUID, timer);
-    // Acknowledge the Home command promptly. The cloud operation may exceed
-    // HAP's write timeout, so confirmed state is published when it finishes.
-    void this.ready.then(async () => {
+    // GETs and refreshes use the requested state immediately, including the
+    // aggregate tile. Serialize whole requests so all-vacuum and individual
+    // presses execute in order; older completions cannot clear newer intent.
+    this.commandTail = this.commandTail.then(() => this.ready).then(async () => {
       if (this.disposed) return;
-      const ids = context.duid === null
-        ? [...new Set([...this.devices.keys(), ...(["resume", "cancelDelay"].includes(action) ? Object.keys(this.controller.state.robots) : [])])]
-        : [context.duid];
       for (const id of ids) {
-        try { await this.controller.execute(id, action, pressedAt); }
-        catch (error) { this.platform.log.error(`${this.name(id)} schedule control failed: ${this.describeError(error)}`); }
+        if (this.disposed) break;
+        const key = JSON.stringify([id, context.control]);
+        const status = this.controller.status(id);
+        const previous = status.recovering && this.failedValues.has(key) ? this.failedValues.get(key)!
+          : Boolean(context.control === "pause" ? status.paused : status.delayed);
+        try {
+          await this.controller.execute(id, action, pressedAt);
+          this.failedValues.delete(key);
+        } catch (error) {
+          if (context.control !== "delay") this.failedValues.set(key, previous);
+          const newer = this.pending.get(key)?.token !== token;
+          this.platform.log.error(`[SCHEDULE CONTROL FAILED] ${this.name(id)}: ${action}: ${this.describeError(error)}. ` +
+            (context.control === "delay" ? "Delay request failed." : newer ? "A newer switch request is still pending." : `Switch reverted to ${previous ? "ON" : "OFF"}.`) +
+            (this.controller.status(id).recovering ? " Schedule restoration is still pending; saved originals will be retried." : ""));
+        } finally {
+          if (this.pending.get(key)?.token === token) this.pending.delete(key);
+          this.refresh();
+        }
       }
-    }).catch((error) => this.platform.log.error(`Schedule control failed: ${this.describeError(error)}`)).finally(() => this.refresh());
+    }).catch((error) => {
+      for (const id of ids) {
+        const key = JSON.stringify([id, context.control]);
+        if (this.pending.get(key)?.token === token) this.pending.delete(key);
+      }
+      this.platform.log.error(`[SCHEDULE CONTROL FAILED] ${this.name(context.duid)}: ${action}: ${this.describeError(error)}. Switches refreshed from saved state.`);
+    }).finally(() => this.refresh());
   }
   private refresh(): void {
     if (this.disposed) return;
@@ -158,5 +197,6 @@ export class NativeScheduleControls {
     this.disposed = true; this.controller?.dispose();
     for (const timer of this.resetTimers.values()) clearTimeout(timer);
     this.resetTimers.clear();
+    this.pending.clear(); this.failedValues.clear();
   }
 }
