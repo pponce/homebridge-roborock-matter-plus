@@ -22,14 +22,21 @@ Status: design discussion. These controls are not implemented by this document.
 - Docking applies whether cleaning was started manually or by a schedule. Include
   the eligible schedule that just ran/started when postponing today's schedules;
   an already-past original start time must not by itself exclude that occurrence.
+- Manual runs started in the Roborock app or Home app remain independent of
+  schedule management. Do not create, shift, automatically resume or replay a
+  manual cleaning job. An explicit Pause ON or delay command still docks any
+  active cleaning, regardless of origin. Manual runs started afterward are
+  allowed to proceed; pause state is not a continuous ban on cleaning.
 - Calculate the new time from the original scheduled time plus accumulated
   configured intervals, rather than automatically using that interval from the
   time of the press.
 - Affect schedules that run on the current day only. Schedules with no occurrence
   that day must not have their times changed.
-- A vacuum with an active ordinary pause must be skipped by the timed-pause action.
+- A vacuum with an active ordinary pause receives no additional schedule delay.
   The all-vacuum action evaluates each vacuum separately, so a paused vacuum
-  does not prevent an eligible vacuum from being postponed.
+  does not prevent an eligible vacuum from being postponed. The latest explicit
+  docking rule is separate: a pause/delay command still sends active cleaning
+  home, while already-paused schedules remain unchanged.
 - Only schedules that were active are eligible. Already-disabled schedules must
   remain disabled. The cloud job's enabled field alone does not establish this:
   Uptown's enabled cloud definitions were observed alongside disabled robot timers.
@@ -108,8 +115,9 @@ Proposed boundary and scope details for this requirement:
   unrelated vacuums' pause policies.
   A global timed-pause press makes this decision separately for each vacuum.
 - The ordinary Pause tile shows paused after conversion, so subsequent timed-pause
-  presses are ignored under the already-paused rule. Explicit ordinary unpause
-  can still end this pause before its expiry.
+  presses do not alter its schedules under the already-paused rule. Their explicit
+  docking action still applies to active cleaning. Ordinary unpause can end this
+  pause before its expiry.
 - Midnight is not itself the cutoff. With a `00:05` reset, a 23:00 occurrence
   shifted to 00:00 can still run before reset; 23:30 shifted to 00:30 converts
   to a pause until reset. A postponed occurrence keeps its original occurrence
@@ -156,8 +164,10 @@ whether started manually or by a schedule. Include the eligible schedule that
 just ran, even if its original start time has passed. Manual cleaning does not
 automatically identify a corresponding cloud schedule: reliable association
 remains an implementation investigation, not a reason to ignore docking or the
-day's eligible schedules. The feature edits existing jobs rather than creating
-a replacement cloud job for a manual cleaning command.
+day's eligible schedules. Manual jobs are not candidates for an automatic restart
+and must not be treated as proof that an earlier scheduled occurrence ran.
+The feature edits existing jobs rather than creating a replacement cloud job
+for a manual cleaning command.
 The midnight question was resolved by using the configurable next reset as the
 cutoff and converting an overflowing postponement to a pause until that reset.
 The new cloud trigger may start the interrupted schedule again from its beginning;
@@ -167,7 +177,11 @@ identity solely from whichever schedule most recently became due.
 
 ## Proposed defaults, subject to the design discussion
 
-- No remaining eligible runs: do nothing; do not pre-delay tomorrow's schedules.
+- No remaining eligible runs: leave schedule times unchanged; do not pre-delay
+  tomorrow's schedules. The explicit command still docks any active cleaning.
+- Docking belongs to the explicit Pause ON/delay action. Do not continuously
+  enforce docking while schedules are paused, and do not let a background retry
+  stop a new manual run started after the original command.
 - Accumulate deliberate presses, including global then individual presses,
   without applying retries as additional increments.
 - Ordinary Pause ON takes precedence: cancel remaining postponement, restore
