@@ -89,6 +89,59 @@ node --test tests/inspect-cloud-jobs.test.cjs
 python3 -B -m unittest discover -s tests -p 'test_inspect_schedule_times.py'
 ```
 
+## One-job time-change trial
+
+`scripts/test-schedule-time.cjs` is a developer command, not a background
+scheduler. It uses the saved `roborock.UserData` session and this repository's
+existing Hawk signer to make HTTPS calls to Roborock. It does not log in, open
+MQTT, modify the installed plugin or its configuration, or restart a service.
+No additional npm packages are required. It runs from the Git checkout and
+does not require a plugin reinstall. It fails without writes if the saved
+session or matching owned-device inventory is unavailable.
+
+The command requires `--execute` and explicit storage, robot name, model, job ID,
+expected cron, timezone, and a new output directory. It will only test a disabled
+cloud job whose current cron and timezone match those expectations. The supported
+test is exactly one minute later in the same hour, with neither the original nor
+the changed schedule due in the next six hours. Existing-job OPTIONS must name
+PUT. It will not create, delete, enable, or execute a job.
+
+Before writing, it saves the complete original and proposed job definitions in
+`original-job.private.json` (0600 inside a new 0700 directory), without account
+credentials. This is an unredacted local backup, unlike the shareable inspection
+reports. The write body retains timezone, repeated/enabled flags, and the entire
+task parameter object; only `id` and the server's calculated `nextFireTime` are
+omitted. Changing a time in the app can also rewrite task fields, so rebuilding
+the body from a log or assuming only cron changes is not acceptable.
+
+The test checks the current definition again before writing, sends one PUT,
+reads the result, and restores the original when the current job matches the
+proposed test definition. It reads back restoration and checks the other jobs
+for changes, excluding calculated next-fire timestamps. An ambiguous timeout
+is resolved with bounded reads, not by repeating the time-changing PUT.
+
+Run the test without editing schedules from another app or automation during
+the brief trial. There is no demonstrated atomic compare-and-set API. Unexpected
+definition changes stop automatic restoration to avoid overwriting a concurrent
+edit; a connectivity failure can also prevent verification. Those outcomes print
+an explicit instruction to restore the original time and disable it in the app.
+The private snapshot remains available. An exclusive local trial lock prevents
+two instances of this command; SIGINT/SIGTERM allow restoration checks to finish.
+An uncatchable termination can leave the lock and requires checking its recorded
+PID before removing it.
+
+This verifies cloud job definitions only. The robot-side pause switch is a
+separate reading and must be checked in the app after the trial. Success on one
+robot is not proof of support on another model or of next-day restoration after
+a Homebridge outage. The eventual plugin implementation must read and preserve
+both cloud-job and robot-timer state through its normal account queue.
+
+Additional verification:
+
+```bash
+node --test tests/cloud-job-time-trial.test.cjs
+```
+
 ## Installation convention
 
 For any later runtime update, commit matching compiled `dist` files to this
