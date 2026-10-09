@@ -6,6 +6,11 @@ Branch: `SCHEDULE_TIME_INVESTIGATION`, based on
 The investigation distinguishes server timers, cloud scene timer triggers and
 cloud jobs. A cloud connection alone does not identify the representation.
 
+An in-place time change and restoration have now been verified on one existing
+cloud job on each of models a15 and a27. These results establish the cloud edit
+mechanism; they do not yet verify execution at a postponed time or automatic
+next-day restoration.
+
 ## Live result: model a15
 
 On 2026-10-09, the one-job trial using commit
@@ -25,12 +30,39 @@ or MQTT connection. No schedule was deleted or recreated.
 
 This establishes an in-place cloud time-edit API on this model. App confirmation
 of the robot-side pause switch remains separate: the trial reports
-`robotPauseStateChecked: false`. Model a27, execution at a delayed time, and
-automatic next-day restoration have not yet been verified by this test.
+`robotPauseStateChecked: false`. Execution at a delayed time and automatic
+next-day restoration have not yet been verified by this test.
 
 The preceding manual app experiment kept the job ID but also changed the cloud
 enabled flag after disabling and removed a `clean_order_mode: 0` task field.
 The API trial therefore used a fresh original read, not the earlier log payload.
+
+## Live result: model a27
+
+On 2026-10-09 at 21:22:06-21:22:07 UTC, the one-job trial using commit
+`28b18b7d435f8060273d39781fe1b4f0712c012b` succeeded on
+`roborock.vacuum.a27`. The selected Monday/Tuesday/Thursday cloud job was changed
+from 09:15 to 09:16 and restored to 09:15. Its ID, America/Los_Angeles timezone,
+weekdays, repetition flag and complete task parameters were preserved. With
+`--expect-enabled true`, the cloud enabled flag remained true throughout.
+
+Two PUT attempts completed. Cloud reads verified both the time change and full
+original definition restoration, excluding the calculated next-fire timestamp.
+The other jobs on that robot were unchanged. Authentication used the existing
+encrypted configuration session without a new login or MQTT connection.
+
+The earlier `CLOUD_JOB_MUST_BE_DISABLED` refusals came from the trial's local
+guard, not a rejected cloud time update. This result verifies the same existing
+job update route on a27 as on a15. It does not establish what the cloud enabled
+flag means relative to the robot's pause switch. The report still marks
+`robotPauseStateChecked: false`; app confirmation of the original time and
+intended pause state remains separate.
+
+The next implementation work is persistent original-state tracking and native
+pause/postpone controls in this fork. Delayed execution, midnight/day-of-week
+boundaries, timezone/DST handling, manual edits, and recovery after restart or
+cloud unavailability need to be addressed before relying on next-day resets.
+An edited recurring cloud job remains edited until restoration succeeds.
 
 ## First diagnostic
 
@@ -145,12 +177,11 @@ Monday/Tuesday/Thursday cron and task fingerprint. Each job matched an older
 robot-timer observation reporting off. Those historical timer observations do
 not prove current pause state or explain the two controls' execution semantics.
 
-The next trial explicitly expects the freshly observed cloud enabled value and
-preserves it in both PUTs. This is a test of editing an enabled cloud definition,
-with the same six-hour exclusion window; it does not rely on log evidence to
-claim that the job is disabled. The user has permitted testing with schedules
-unpaused. Time-edit support on a27 remains unverified until a successful live
-read-back and restoration. No additional app toggles are required to prepare it.
+The subsequent successful trial explicitly expected the freshly observed cloud
+enabled value and preserved it in both PUTs. It tested editing an enabled cloud
+definition with the same six-hour exclusion window, without relying on log
+evidence to claim that the job was disabled. The user had permitted testing
+with schedules unpaused. See the a27 live result above.
 
 ### Executing a time-change trial
 
