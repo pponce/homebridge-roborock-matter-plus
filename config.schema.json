@@ -155,6 +155,33 @@
         "type": "boolean",
         "default": false
       },
+      "enableSchedulePauseUntilTomorrow": {
+        "title": "Pause Until Tomorrow",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a pause switch per vacuum and one for all vacuums. Pauses cloud schedules until the daily reset and docks active cleaning. Turn off to restore early."
+      },
+      "enableScheduleDelay": {
+        "title": "Delay Schedules",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds momentary delay and stateful Delay Active switches per vacuum and for all vacuums. Turn Delay Active off to restore original times."
+      },
+      "scheduleDelayMinutes": {
+        "title": "Delay interval (minutes)",
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1440,
+        "default": 60,
+        "description": "One interval shared by every delay switch. Each press re-evaluates today's eligible schedules."
+      },
+      "scheduleResetTime": {
+        "title": "Daily reset time",
+        "type": "string",
+        "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+        "default": "00:05",
+        "description": "Homebridge local time, shared by Pause Until Tomorrow and schedule-time restoration."
+      },
       "homeKitActionSwitches": {
         "title": "Which Switches to Add",
         "description": "Which Home app action switches to add. Return to Dock is the one Apple Home cannot automate, and Empty Bin provides the dock action Apple Home does not show while a compatible robot is docked. Start Cleaning starts the same clean as the Home tile's play button, including any rooms selected there; Pause and Find expose their corresponding commands. Schedules are controlled separately by the \"Add Home app schedule switches\" setting above. Only used when the action-switch setting is on.",

@@ -39,6 +39,12 @@ const elements = {
     "homekit-state-cleaning-fluid-empty"
   ),
   homeKitActionSchedules: document.getElementById("homekit-action-schedules"),
+  schedulePause: document.getElementById("enable-schedule-pause"),
+  scheduleDelay: document.getElementById("enable-schedule-delay"),
+  scheduleDelayMinutes: document.getElementById("schedule-delay-minutes"),
+  scheduleResetTime: document.getElementById("schedule-reset-time"),
+  scheduleDelayOptions: document.getElementById("schedule-delay-options"),
+  scheduleResetOptions: document.getElementById("schedule-reset-options"),
   homeKitActionRoutines: document.getElementById("homekit-action-routines"),
   matterChargedBatteryThreshold: document.getElementById(
     "matter-charged-battery-threshold"
@@ -226,6 +232,11 @@ async function loadConfig() {
     }
     syncActionSwitchAvailability();
     syncFeatureDependencies();
+    if (elements.schedulePause) elements.schedulePause.checked = config.enableSchedulePauseUntilTomorrow === true;
+    if (elements.scheduleDelay) elements.scheduleDelay.checked = config.enableScheduleDelay === true;
+    if (elements.scheduleDelayMinutes) elements.scheduleDelayMinutes.value = String(config.scheduleDelayMinutes ?? 60);
+    if (elements.scheduleResetTime) elements.scheduleResetTime.value = config.scheduleResetTime ?? "00:05";
+    syncScheduleControlOptions();
     if (elements.matterChargedBatteryThreshold) {
       elements.matterChargedBatteryThreshold.value =
         config.matterChargedBatteryThreshold != null
@@ -559,6 +570,23 @@ function applyStateSensorSelection(selection) {
  */
 function syncFeatureDependencies() {}
 
+function syncScheduleControlOptions() {
+  elements.scheduleDelayOptions?.classList.toggle("hidden", !elements.scheduleDelay?.checked);
+  elements.scheduleResetOptions?.classList.toggle("hidden", !(elements.schedulePause?.checked || elements.scheduleDelay?.checked));
+}
+
+function getScheduleDelayMinutes() {
+  const value = Number(elements.scheduleDelayMinutes?.value || 60);
+  if (!Number.isInteger(value) || value < 1 || value > 1440) throw new Error("Delay interval must be a whole number from 1 to 1440 minutes.");
+  return value;
+}
+
+function getScheduleResetTime() {
+  const value = elements.scheduleResetTime?.value || "00:05";
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new Error("Daily reset time must be HH:mm.");
+  return value;
+}
+
 /** Grey out the per-action and per-state boxes while their feature is off. */
 function syncActionSwitchAvailability() {
   const on = Boolean(elements.enableHomeKitActionSwitches?.checked);
@@ -691,6 +719,10 @@ function pickFields(source, keys) {
 
 function getFormValues() {
   return {
+    enableSchedulePauseUntilTomorrow: Boolean(elements.schedulePause?.checked),
+    enableScheduleDelay: Boolean(elements.scheduleDelay?.checked),
+    scheduleDelayMinutes: getScheduleDelayMinutes(),
+    scheduleResetTime: getScheduleResetTime(),
     email: getEmail(),
     password: getPassword(),
     baseURL: getBaseUrl(),
@@ -1922,6 +1954,8 @@ function init() {
     });
   }
   elements.login.addEventListener("click", login);
+  elements.schedulePause?.addEventListener("change", syncScheduleControlOptions);
+  elements.scheduleDelay?.addEventListener("change", syncScheduleControlOptions);
   elements.send2fa.addEventListener("click", sendTwoFactorEmail);
   elements.verify2fa.addEventListener("click", verifyTwoFactorCode);
   elements.logout.addEventListener("click", logout);

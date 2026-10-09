@@ -27,6 +27,10 @@
 
 ---
 
+## Native schedule controls in this fork
+
+Pause cloud schedules until the daily reset, delay today's eligible runs by a configurable interval, and cancel delays from stateful **Delay Active** switches. Controls are available per vacuum and for all vacuums, with saved originals and restart recovery built into the plugin. [Setup and behavior](docs/schedule-controls.md).
+
 Sign in with the same account you already use in the Roborock app — that's the whole setup. Every robot on your account then appears in Apple Home as a real vacuum: start and stop cleans, send it to specific rooms, pick the suction power, check the battery — and watch the Home app tell you **which room it's cleaning right now**. No token extraction, no network tricks, no command line.
 
 This is the most feature-packed, most thoroughly engineered Roborock plugin for Homebridge — and the only one that speaks every generation of Roborock, including the newest.
@@ -279,3 +283,4 @@ A Matter-only fork of [`homebridge-roborock-vacuum2`](https://github.com/applema
 <p align="center">
   <sub>Not affiliated with or endorsed by Roborock, Apple, or the Connectivity Standards Alliance. Roborock is a trademark of Beijing Roborock Technology Co., Ltd.</sub>
 </p>
+

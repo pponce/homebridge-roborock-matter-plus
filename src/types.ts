@@ -92,4 +92,8 @@ export interface RoborockPlatformConfig extends PlatformConfig {
   homeKitStateSensors?: string[];
   enableHomeKitScheduleSwitches?: boolean;
   enableHomeKitRoutineSwitches?: boolean;
+  enableSchedulePauseUntilTomorrow?: boolean;
+  enableScheduleDelay?: boolean;
+  scheduleDelayMinutes?: number;
+  scheduleResetTime?: string;
 }

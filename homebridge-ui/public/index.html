@@ -302,6 +302,35 @@
       </label>
     </div>
 
+    <h3>Schedule controls</h3>
+    <label class="checkbox">
+      <input id="enable-schedule-pause" type="checkbox" />
+      <span>Pause Until Tomorrow
+        <small>Adds a pause switch per vacuum and one for all vacuums. Pausing stops active cleaning and returns the robot to its dock. Turn off to restore schedules early.</small>
+      </span>
+    </label>
+    <label class="checkbox">
+      <input id="enable-schedule-delay" type="checkbox" />
+      <span>Delay Schedules
+        <small>Adds a momentary delay switch and a Delay Active switch per vacuum and for all vacuums. Each delay press adds the selected interval to eligible schedules for today and docks active cleaning. Turn Delay Active off to restore original times.</small>
+      </span>
+    </label>
+    <div id="schedule-delay-options" class="checkbox-group hidden">
+      <label class="field">
+        <span>Delay interval (minutes)</span>
+        <input id="schedule-delay-minutes" type="number" min="1" max="1440" step="1" value="60" />
+        <small>One interval applies to every delay switch. While cleaning, the most recent schedule within the last 10 minutes is also eligible. Each press checks again using the current delayed times.</small>
+      </label>
+    </div>
+    <div id="schedule-reset-options" class="hidden">
+      <label class="field">
+        <span>Daily reset time</span>
+        <input id="schedule-reset-time" type="time" value="00:05" />
+        <small>Homebridge's local time. Restores original schedule times and ends pauses for all vacuums. A delay reaching this time becomes a pause until reset. Homebridge must be running and connected to restore on time.</small>
+        <small>Supports existing cloud schedules; Routines are not delayed. Before enabling, restore any pauses in an external controller and disable its schedule automations.</small>
+      </label>
+    </div>
+
     <label class="checkbox">
       <input id="enable-homekit-state-sensors" type="checkbox" />
       <span>
