@@ -93,7 +93,8 @@ function makeRequester(rriot, collectionPath, jobId, fetchImpl = globalThis.fetc
 
 function argumentsFrom(argv) {
   const options = {};
-  const names = new Set(["storage", "robot", "model", "job-id", "expect-cron", "timezone", "output"]);
+  const required = ["storage", "robot", "model", "job-id", "expect-cron", "timezone", "output"];
+  const names = new Set([...required, "expect-enabled"]);
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--execute") { options.execute = true; continue; }
     const name = argv[i].slice(2);
@@ -102,7 +103,10 @@ function argumentsFrom(argv) {
     }
     options[name] = argv[++i];
   }
-  if (!options.execute || [...names].some((n) => !options[n]) || !/^\d{1,18}$/.test(options["job-id"])) throw new TrialError("EXECUTE_AND_ALL_ARGUMENTS_REQUIRED");
+  if (!options.execute || required.some((n) => !options[n]) || !/^\d{1,18}$/.test(options["job-id"])) throw new TrialError("EXECUTE_AND_ALL_ARGUMENTS_REQUIRED");
+  if (options["expect-enabled"] !== undefined && !["true", "false"].includes(options["expect-enabled"])) {
+    throw new TrialError("EXPECT_ENABLED_MUST_BE_TRUE_OR_FALSE");
+  }
   return options;
 }
 
@@ -139,6 +143,7 @@ async function main(argv) {
     fs.writeFileSync(lock, JSON.stringify({ pid: process.pid, output, startedAt: new Date().toISOString() }));
     report = await runTimeTrial({ request, collectionPath, jobId: options["job-id"],
       expectedCron: options["expect-cron"], timeZone: options.timezone,
+      expectedEnabled: options["expect-enabled"] === "true",
       cancelled: () => interrupted, progress: (message) => process.stdout.write(message + "\n"),
       saveOriginal: async (snapshot) => {
         writePrivate(path.join(output, "original-job.private.json"), { ...snapshot, deviceId: device.duid });
@@ -168,7 +173,7 @@ async function main(argv) {
   }
   process.stdout.write("\n===== START: SCHEDULE TIME TRIAL REPORT =====\n" + JSON.stringify(report, null, 2) + "\n===== STOP: SCHEDULE TIME TRIAL REPORT =====\n");
   if (output) process.stdout.write(`Report directory: ${output}\n`);
-  if (report.success) process.stdout.write(`Cloud time change and restoration verified. Check that the app still shows ${originalTime} and disabled.\n`);
+  if (report.success) process.stdout.write(`Cloud time change and restoration verified; cloud enabled=${report.final.cloudEnabled} preserved. Check the app shows ${originalTime} and the intended pause state; robot pause state was not checked.\n`);
   else if (report.writeAttempts > 0 && !report.originalDefinitionRestored) process.stdout.write(`Restoration was NOT verified. In the Roborock app, restore this schedule to ${originalTime} and disable it. Keep the private original locally.\n`);
   else if (report.writeAttempts === 0) process.stdout.write("No schedule writes were attempted.\n");
   else process.stdout.write("The original cloud definition is restored, but the complete test did not pass.\n");
@@ -176,7 +181,7 @@ async function main(argv) {
 }
 
 if (require.main === module) main(process.argv.slice(2)).catch(() => {
-  process.stderr.write("Unexpected diagnostic failure. Check the app and restore the original time and disabled state if needed.\n");
+  process.stderr.write("Unexpected diagnostic failure. Check the app, restore the original time if needed, and leave the schedule disabled while investigating.\n");
   process.exitCode = 1;
 });
 

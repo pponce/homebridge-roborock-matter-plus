@@ -24,9 +24,12 @@ function summary(job) {
     cloudEnabled: job.enabled, repeated: job.repeated, paramFingerprint: fingerprint(job.param) };
 }
 
-function validate(original, expectedCron, timeZone, now) {
+function validate(original, expectedCron, timeZone, now, expectedEnabled = false) {
+  if (typeof expectedEnabled !== "boolean") fail("INVALID_EXPECTED_CLOUD_STATE");
   if (original.cron !== expectedCron) fail("ORIGINAL_TIME_DOES_NOT_MATCH");
-  if (original.enabled !== false) fail("CLOUD_JOB_MUST_BE_DISABLED");
+  if (original.enabled !== expectedEnabled) {
+    fail(expectedEnabled ? "CLOUD_ENABLED_STATE_DOES_NOT_MATCH" : "CLOUD_JOB_MUST_BE_DISABLED");
+  }
   if (original.repeated !== true || original.timeZoneId !== timeZone) fail("UNEXPECTED_SCHEDULE_SETTINGS");
   if (Object.keys(original).some((k) => !["id", "cron", "timeZoneId", "repeated", "enabled", "param", "nextFireTime"].includes(k))) {
     fail("UNKNOWN_JOB_FIELDS");
@@ -52,10 +55,10 @@ function validate(original, expectedCron, timeZone, now) {
   return changed;
 }
 
-async function runTimeTrial({ request, collectionPath, jobId, expectedCron, timeZone,
+async function runTimeTrial({ request, collectionPath, jobId, expectedCron, timeZone, expectedEnabled = false,
   saveOriginal, progress = () => {}, cancelled = () => false, now = new Date(),
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) }) {
-  const report = { formatVersion: 1, startedAt: now.toISOString(), jobId,
+  const report = { formatVersion: 1, startedAt: now.toISOString(), jobId, expectedCloudEnabled: expectedEnabled,
     timeEditVerified: false, originalDefinitionRestored: false, writeAttempts: 0,
     otherJobsUnchanged: null, events: [] };
   let original, changed, initialJobs;
@@ -94,7 +97,7 @@ async function runTimeTrial({ request, collectionPath, jobId, expectedCron, time
     ({ jobs: initialJobs, selected: original } = await read());
     original = clone(original);
     report.before = summary(original);
-    changed = validate(original, expectedCron, timeZone, now);
+    changed = validate(original, expectedCron, timeZone, now, expectedEnabled);
     report.proposed = summary(changed);
     const methods = await request("OPTIONS", itemPath);
     const allow = String(methods.allow ?? "").split(",").map((v) => v.trim().toUpperCase());
@@ -103,7 +106,7 @@ async function runTimeTrial({ request, collectionPath, jobId, expectedCron, time
     // The raw snapshot contains the complete job but no account credentials.
     // Persistence must finish successfully before the first write is attempted.
     await saveOriginal({ formatVersion: 1, savedAt: new Date().toISOString(), original, proposed: changed });
-    progress("Original definition saved. Testing a one-minute change with cloud enabled=false.");
+    progress(`Original definition saved. Testing a one-minute change while preserving cloud enabled=${original.enabled}.`);
     if (!same((await read()).selected, original)) fail("SCHEDULE_CHANGED_BEFORE_WRITE");
     if (cancelled()) fail("CANCELLED_BEFORE_WRITE");
     await write(changed, "attemptedTimeChange");

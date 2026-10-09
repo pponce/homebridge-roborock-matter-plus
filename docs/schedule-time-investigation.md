@@ -139,6 +139,19 @@ time-edit API works on that model. Inspect current values and job identity befor
 choosing another experiment; do not repeat app edits or remove the guard based
 on these reports alone. Trial refusals now include the observed job summary.
 
+The fresh a27 preflight at 2026-10-09T21:16:48Z found all eight cloud jobs with
+boolean `enabled: true`. The selected job retained its expected 09:15
+Monday/Tuesday/Thursday cron and task fingerprint. Each job matched an older
+robot-timer observation reporting off. Those historical timer observations do
+not prove current pause state or explain the two controls' execution semantics.
+
+The next trial explicitly expects the freshly observed cloud enabled value and
+preserves it in both PUTs. This is a test of editing an enabled cloud definition,
+with the same six-hour exclusion window; it does not rely on log evidence to
+claim that the job is disabled. The user has permitted testing with schedules
+unpaused. Time-edit support on a27 remains unverified until a successful live
+read-back and restoration. No additional app toggles are required to prepare it.
+
 ### Executing a time-change trial
 
 `scripts/test-schedule-time.cjs` is a developer command, not a background
@@ -155,8 +168,12 @@ does not require a plugin reinstall. It fails without writes if the saved
 session or matching owned-device inventory is unavailable.
 
 The command requires `--execute` and explicit storage, robot name, model, job ID,
-expected cron, timezone, and a new output directory. It will only test a disabled
-cloud job whose current cron and timezone match those expectations. The supported
+expected cron, timezone, and a new output directory. By default it requires a
+disabled cloud job. An explicit `--expect-enabled true` instead requires boolean
+true and preserves that flag; `--expect-enabled false` retains the default.
+Missing, string-valued or mismatching cloud flags are refused. This flag is an
+expectation, not an instruction to enable or disable a schedule. The current cron
+and timezone must also match the supplied expectations. The supported
 test is exactly one minute later in the same hour, with neither the original nor
 the changed schedule due in the next six hours. Existing-job OPTIONS must name
 PUT. It will not create, delete, enable, or execute a job.

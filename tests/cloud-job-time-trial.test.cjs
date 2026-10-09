@@ -34,7 +34,7 @@ function fixture({ selected = original, mutatePut, mutateGet, saveFailure = fals
       assert.equal(method, "PUT");
       assert.equal(p, "/user/devices/test-robot/jobs/123");
       assert.equal(saved.length, 1, "original must be saved before every write");
-      assert.equal(payload.enabled, false);
+      assert.equal(payload.enabled, selected.enabled, "time edits must preserve the original cloud enabled flag");
       writes++;
       if (mutatePut) return mutatePut(jobs, payload, writes);
       jobs[0] = { ...clone(payload), id: 123, nextFireTime: "recalculated" };
@@ -61,7 +61,7 @@ test("changes one existing disabled job and restores every original field", asyn
   assert.deepEqual(f.saved[0].original, original);
 });
 
-test("enabled jobs, unexpected times and near-term runs are refused", async () => {
+test("enabled jobs without explicit expectation, unexpected times and near-term runs are refused", async () => {
   for (const setup of [
     { selected: { ...original, enabled: true } },
     { selected: { ...original, cron: "11 8 ? * 1,2,3,4,5" } },
@@ -80,6 +80,72 @@ test("enabled jobs, unexpected times and near-term runs are refused", async () =
   assert.equal(r.writeAttempts, 0);
 });
 
+test("explicitly expected enabled job is edited and restored without changing its flag or task", async () => {
+  const selected = { ...clone(original), enabled: true, cron: "15 9 ? * 1,2,4" };
+  const f = fixture({ selected });
+  const r = await runTimeTrial({ ...f.options, expectedCron: selected.cron, expectedEnabled: true });
+  assert.equal(r.success, true);
+  assert.equal(r.expectedCloudEnabled, true);
+  assert.equal(r.otherJobsUnchanged, true);
+  const writes = f.calls.filter((c) => c.method === "PUT");
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes.map((c) => c.payload.cron), ["16 9 ? * 1,2,4", selected.cron]);
+  for (const write of writes) {
+    assert.equal(write.payload.enabled, true);
+    assert.deepEqual(write.payload.param, selected.param);
+    assert.equal(write.payload.timeZoneId, selected.timeZoneId);
+    assert.equal(write.payload.repeated, selected.repeated);
+  }
+  for (const reading of [r.before, r.proposed, r.afterChange, r.final]) {
+    assert.equal(reading.cloudEnabled, true);
+    assert.equal(reading.paramFingerprint, r.before.paramFingerprint);
+  }
+  assert.deepEqual(f.saved[0].original, selected);
+  assert.deepEqual(f.jobs[0], { ...selected, nextFireTime: "recalculated" });
+});
+
+test("explicit enabled expectation rejects false, string, missing and invalid expected values", async () => {
+  for (const enabled of [false, "true", undefined]) {
+    const f = fixture({ selected: { ...original, enabled } });
+    const r = await runTimeTrial({ ...f.options, expectedEnabled: true });
+    assert.equal(r.error, "CLOUD_ENABLED_STATE_DOES_NOT_MATCH");
+    assert.equal(r.writeAttempts, 0);
+    assert.equal(f.saved.length, 0);
+  }
+  const f = fixture({ selected: { ...original, enabled: true } });
+  const r = await runTimeTrial({ ...f.options, expectedEnabled: "true" });
+  assert.equal(r.error, "INVALID_EXPECTED_CLOUD_STATE");
+  assert.equal(r.writeAttempts, 0);
+});
+
+test("enabled trials retain the six-hour guard for both original and proposed times", async () => {
+  for (const now of ["2026-10-12T09:10:00Z", "2026-10-12T15:11:00Z"]) {
+    const f = fixture({ selected: { ...original, enabled: true } });
+    const r = await runTimeTrial({ ...f.options, expectedEnabled: true, now: new Date(now) });
+    assert.equal(r.error, "SCHEDULE_OCCURS_WITHIN_SIX_HOURS");
+    assert.equal(r.writeAttempts, 0);
+    assert.equal(f.saved.length, 0);
+  }
+});
+
+test("cloud flag changes before or during an enabled trial are never overwritten", async () => {
+  const before = fixture({ selected: { ...original, enabled: true },
+    mutateGet: (jobs, count) => { if (count === 2) jobs[0].enabled = false; } });
+  const beforeReport = await runTimeTrial({ ...before.options, expectedEnabled: true });
+  assert.equal(beforeReport.error, "SCHEDULE_CHANGED_BEFORE_WRITE");
+  assert.equal(beforeReport.writeAttempts, 0);
+  const during = fixture({ selected: { ...original, enabled: true },
+    mutatePut: (jobs, payload) => {
+      jobs[0] = { ...clone(payload), id: 123, enabled: false };
+      return { status: 200, data: { success: true } };
+    } });
+  const duringReport = await runTimeTrial({ ...during.options, expectedEnabled: true });
+  assert.equal(duringReport.success, false);
+  assert.equal(duringReport.writeAttempts, 1);
+  assert.equal(duringReport.restorationError, "UNEXPECTED_CURRENT_DEFINITION_MANUAL_RESTORE_REQUIRED");
+  assert.equal(during.jobs[0].enabled, false);
+});
+
 test("snapshot failure and concurrent change before write never mutate schedules", async () => {
   for (const setup of [
     { saveFailure: true },
@@ -93,15 +159,18 @@ test("snapshot failure and concurrent change before write never mutate schedules
 });
 
 test("a lost change acknowledgement is resolved by reads then restoration", async () => {
-  const f = fixture({ mutatePut: (jobs, payload, count) => {
-    jobs[0] = { ...clone(payload), id: 123 };
-    if (count === 1) throw Error("timeout");
-    return { status: 200, data: { success: true } };
-  } });
-  const r = await runTimeTrial(f.options);
-  assert.equal(r.success, true);
-  assert.equal(r.writeAttempts, 2);
-  assert.equal(r.afterChange.cron, "11 8 ? * 1,2,3,4,5");
+  for (const enabled of [false, true]) {
+    const f = fixture({ selected: { ...original, enabled }, mutatePut: (jobs, payload, count) => {
+      jobs[0] = { ...clone(payload), id: 123 };
+      if (count === 1) throw Error("timeout");
+      return { status: 200, data: { success: true } };
+    } });
+    const r = await runTimeTrial({ ...f.options, expectedEnabled: enabled });
+    assert.equal(r.success, true);
+    assert.equal(r.writeAttempts, 2);
+    assert.equal(r.afterChange.cron, "11 8 ? * 1,2,3,4,5");
+    assert.equal(r.final.cloudEnabled, enabled);
+  }
 });
 
 test("a lost restoration acknowledgement is checked rather than retried blindly", async () => {
@@ -190,6 +259,19 @@ test("private originals cannot be overwritten and the execute flag is required",
   } finally { fs.rmSync(root, { recursive: true }); }
   assert.throws(() => argumentsFrom([]));
   assert.throws(() => argumentsFrom(["--execute", "--unknown", "yes"]));
+});
+
+test("CLI defaults to disabled and accepts only explicit boolean enabled expectations", () => {
+  const args = ["--execute", "--storage", "/example", "--robot", "Test Robot", "--model", "test.model",
+    "--job-id", "123", "--expect-cron", original.cron, "--timezone", original.timeZoneId, "--output", "/example/report"];
+  assert.equal(argumentsFrom(args)["expect-enabled"], undefined);
+  for (const value of ["true", "false"]) {
+    assert.equal(argumentsFrom([...args, "--expect-enabled", value])["expect-enabled"], value);
+  }
+  for (const value of ["yes", "1", "TRUE", "--execute"]) {
+    assert.throws(() => argumentsFrom([...args, "--expect-enabled", value]));
+  }
+  assert.throws(() => argumentsFrom([...args, "--expect-enabled", "true", "--expect-enabled", "false"]));
 });
 
 test("UI encrypted login works without UserData and takes precedence over a stale cache", () => {
