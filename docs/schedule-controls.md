@@ -11,7 +11,7 @@ Pair the plugin's Homebridge child bridge with HomeKit to see these switches.
 | Control | What it does |
 | --- | --- |
 | Pause Until Tomorrow | ON pauses schedules and docks active cleaning. OFF restores the schedules that this pause disabled. It expires at the daily reset. |
-| Delay X Minutes | A momentary switch. Each press docks active cleaning and adds the configured interval to today's eligible schedules. |
+| Delay X Minutes | A momentary switch that resets OFF after 1.5 seconds, independently of cloud success. Each press docks active cleaning and adds the configured interval to today's eligible schedules. |
 | Delay Active | ON reflects an active delay. OFF cancels it and restores original times. Manually turning it ON while inactive applies one interval; use the momentary switch to add further intervals. |
 
 Each control is available per vacuum and for all vacuums. An all-vacuum stateful

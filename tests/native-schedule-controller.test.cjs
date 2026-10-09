@@ -8,7 +8,7 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 process.env.TZ = "America/Los_Angeles";
 const time = (clock, date = "2026-10-09") => Date.parse(`${date}T${clock}:00-07:00`);
 function job(id, cron, enabled = true) {
-  return { id, cron, timezone: "America/Los_Angeles", enabled, repeated: true, nextFireTime: 123,
+  return { id, cron, timeZoneId: "America/Los_Angeles", enabled, repeated: true, nextFireTime: 123,
     param: { id: 1, method: "server_scheduled_start", params: [{ name: `timer-${id}`, segments: "1,2", fan_power: 104 }] } };
 }
 function harness(t, { now = time("09:05"), jobs = [job(1, "0 9 ? * 1,2,3,4,5"), job(2, "30 9 ? * 1,2,3,4,5")], minutes = 60 } = {}) {
@@ -219,4 +219,45 @@ test("hiding the ordinary pause feature restores its mask even if Delay remains 
   await changed.initialize();
   assert.equal(changed.status("robot").paused, false);
   assert.equal(h.timers.every((timer) => timer.enabled), true);
+});
+
+test("the three evening schedules shift using the wire timeZoneId and restore their exact payloads", async (t) => {
+  const h = harness(t, { now: time("16:17"), jobs: [
+    job(1, "10 18 ? * 1,2,3,4,5"), job(2, "28 18 ? * 1,2,3,4,5"), job(3, "49 18 ? * 1,2,3,4,5"),
+  ] });
+  h.cleaning = false;
+  const original = clone(h.jobs);
+  await h.controller.execute("robot", "delay");
+  assert.deepEqual(h.jobs.map((j) => j.cron), ["10 19 ? * 1,2,3,4,5", "28 19 ? * 1,2,3,4,5", "49 19 ? * 1,2,3,4,5"]);
+  assert.equal(h.controller.status("robot").delayed, true);
+  for (const [, , body] of h.calls.filter((c) => c[0] === "job")) {
+    assert.equal(body.timeZoneId, "America/Los_Angeles");
+    assert.equal(Object.hasOwn(body, "timezone"), false);
+    assert.deepEqual(Object.keys(body).sort(), ["cron", "enabled", "param", "repeated", "timeZoneId"]);
+  }
+  await h.controller.execute("robot", "cancelDelay");
+  const definition = (j) => { const result = clone(j); delete result.nextFireTime; return result; };
+  assert.deepEqual(h.jobs.map(definition), original.map(definition));
+  assert.equal(h.controller.status("robot").delayed, false);
+});
+
+test("invalid recurrence or timeZoneId is rejected before any schedule writes", async (t) => {
+  for (const override of [{ repeated: false }, { timeZoneId: undefined }, { timeZoneId: "" }, { timeZoneId: "invalid-zone" }]) {
+    const h = harness(t, { jobs: [{ ...job(1, "30 9 ? * 5"), ...override }] });
+    h.cleaning = false;
+    await assert.rejects(h.controller.execute("robot", "delay"), /repeated|timeZoneId|time zone/i);
+    assert.equal(h.calls.length, 0);
+  }
+});
+
+test("calendar uses the cloud timezone even when the host timezone differs", () => {
+  const { occurrenceToday } = require("../roborockLib/lib/scheduleCalendar");
+  const originalZone = process.env.TZ;
+  process.env.TZ = "UTC";
+  try {
+    const schedule = job(1, "50 23 ? * 5");
+    const occurrence = occurrenceToday(schedule, time("23:20"));
+    assert.equal(occurrence.timestamp, time("23:50"));
+    assert.equal(shiftedCron(schedule, occurrence.timestamp, time("00:50", "2026-10-10")), "50 0 ? * 6");
+  } finally { process.env.TZ = originalZone; }
 });

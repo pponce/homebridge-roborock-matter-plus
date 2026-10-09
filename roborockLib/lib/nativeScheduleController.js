@@ -253,7 +253,8 @@ class NativeScheduleController {
         if (id) supportedTimers.add(id);
         const timer = id && current.timers.get(id);
         if (!timer?.enabled) continue;
-        if (job.repeated !== true || typeof job.timezone !== "string") throw new Error("Delay requires repeated cloud schedules with a timezone");
+        if (job.repeated !== true) throw new Error("Delay requires a repeated cloud schedule (repeated must be true)");
+        if (typeof job.timeZoneId !== "string" || !job.timeZoneId.trim()) throw new Error("Delay requires the cloud schedule timeZoneId");
         const saved = s?.jobs[String(job.id)];
         if (saved && !sameDefinition(job, saved.expected)) throw new Error("A delayed schedule was edited externally; cancel its delay before extending it");
         const occurrence = saved ? { timestamp: saved.currentOccurrenceAt } : occurrenceToday(job, pressedAt);

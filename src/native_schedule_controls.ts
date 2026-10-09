@@ -28,6 +28,7 @@ export class NativeScheduleControls {
   private devices = new Map<string, string>();
   private bindings = new Map<string, PlatformAccessory>();
   private resetTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private delayPulses = new Set<string | null>();
   private commandTail: Promise<void> = Promise.resolve();
   private pending = new Map<string, { token: object; value: boolean }>();
   private failedValues = new Map<string, boolean>();
@@ -83,6 +84,7 @@ export class NativeScheduleControls {
       this.accessories.splice(this.accessories.indexOf(accessory), 1);
       this.bindings.delete(accessory.UUID);
       clearTimeout(this.resetTimers.get(accessory.UUID)); this.resetTimers.delete(accessory.UUID);
+      if (context.control === "delay") this.delayPulses.delete(context.duid);
     }
     if (!this.controller) return;
     for (const [uuid, context] of wanted) {
@@ -119,7 +121,8 @@ export class NativeScheduleControls {
     this.refresh();
   }
   private value(context: Context): boolean {
-    if (!this.controller || context.control === "delay") return false;
+    if (!this.controller) return false;
+    if (context.control === "delay") return this.delayPulses.has(context.duid);
     const ids = context.duid === null ? [...new Set([...this.devices.keys(), ...Object.keys(this.controller.state.robots)])] : [context.duid];
     return ids.some((id: string) => {
       const key = JSON.stringify([id, context.control]);
@@ -147,10 +150,15 @@ export class NativeScheduleControls {
       for (const id of ids) this.pending.set(JSON.stringify([id, context.control]), { token, value });
     }
     clearTimeout(this.resetTimers.get(accessory.UUID));
+    if (context.control === "delay") this.delayPulses.add(context.duid);
     const timer = setTimeout(() => {
       this.resetTimers.delete(accessory.UUID);
-      if (context.control === "delay") accessory.getService(this.platform.Service.Switch)?.updateCharacteristic(this.platform.Characteristic.On, false);
-      else this.refresh();
+      if (context.control === "delay") {
+        this.delayPulses.delete(context.duid);
+        // A GET may already have cached OFF. Force a notification so Home's
+        // optimistic ON is reset even when the cached value is unchanged.
+        accessory.getService(this.platform.Service.Switch)?.getCharacteristic(this.platform.Characteristic.On).sendEventNotification(false);
+      } else this.refresh();
     }, context.control === "delay" ? 1500 : 0);
     timer.unref(); this.resetTimers.set(accessory.UUID, timer);
     // GETs and refreshes use the requested state immediately, including the
@@ -197,6 +205,7 @@ export class NativeScheduleControls {
     this.disposed = true; this.controller?.dispose();
     for (const timer of this.resetTimers.values()) clearTimeout(timer);
     this.resetTimers.clear();
+    this.delayPulses.clear();
     this.pending.clear(); this.failedValues.clear();
   }
 }

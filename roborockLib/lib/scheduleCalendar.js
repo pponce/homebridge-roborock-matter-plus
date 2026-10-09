@@ -43,16 +43,16 @@ function atLocal(date, hour, minute, timezone) {
 
 function occurrenceToday(job, now) {
   const cron = parseCron(job.cron);
-  const date = localParts(now, job.timezone).date;
+  const date = localParts(now, job.timeZoneId).date;
   if (!cron.days.includes(new Date(`${date}T00:00:00Z`).getUTCDay())) return null;
-  return { date, timestamp: atLocal(date, cron.hour, cron.minute, job.timezone) };
+  return { date, timestamp: atLocal(date, cron.hour, cron.minute, job.timeZoneId) };
 }
 
 function shiftedCron(original, originalOccurrenceAt, targetAt) {
   const parsed = parseCron(original.cron);
-  const start = localParts(originalOccurrenceAt, original.timezone);
-  const target = localParts(targetAt, original.timezone);
-  if (atLocal(target.date, target.hour, target.minute, original.timezone) !== targetAt) {
+  const start = localParts(originalOccurrenceAt, original.timeZoneId);
+  const target = localParts(targetAt, original.timeZoneId);
+  if (atLocal(target.date, target.hour, target.minute, original.timeZoneId) !== targetAt) {
     throw new Error("The delayed time cannot be represented by this schedule");
   }
   const delta = (Date.parse(`${target.date}T00:00Z`) - Date.parse(`${start.date}T00:00Z`)) / DAY;

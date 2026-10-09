@@ -19,9 +19,11 @@ function compile(source) {
   }
 }
 class Characteristic {
+  constructor() { this.notifications = []; }
   removeAllListeners() { return this; }
   onGet(fn) { this.get = fn; return this; }
   onSet(fn) { this.set = fn; return this; }
+  sendEventNotification(value) { this.notifications.push(value); return this; }
 }
 class Service {
   constructor() { this.on = new Characteristic(); this.history = []; }
@@ -34,7 +36,7 @@ class Accessory {
   getService(key) { return this.services.get(key); }
   addService(key) { const s = new Service(); this.services.set(key, s); return s; }
 }
-function harness(t, config = {}) {
+function harness(t, config = {}, hap) {
   const h = { calls: [], registered: [], removed: [], engines: [], errors: [] };
   class Controller {
     constructor(options) { this.options = options; this.state = { robots: {} }; h.engines.push(this); }
@@ -68,17 +70,17 @@ function harness(t, config = {}) {
   h.accessories = [];
   h.platform = {
     platformConfig: { email: "test@example.invalid", ...config }, roborockAPI: {},
-    Service: { AccessoryInformation: "info", Switch: "switch" },
-    Characteristic: { Manufacturer: "manufacturer", Model: "model", SerialNumber: "serial", Name: "name", On: "on" },
-    api: { hap: { uuid: { generate: (s) => s } }, platformAccessory: Accessory,
+    Service: hap?.Service || { AccessoryInformation: "info", Switch: "switch" },
+    Characteristic: hap?.Characteristic || { Manufacturer: "manufacturer", Model: "model", SerialNumber: "serial", Name: "name", On: "on" },
+    api: { hap: hap || { uuid: { generate: (s) => s } }, platformAccessory: hap?.Accessory || Accessory,
       registerPlatformAccessories: (_p, _n, values) => h.registered.push(...values),
       unregisterPlatformAccessories: (_p, _n, values) => h.removed.push(...values) },
     log: { info() {}, error: (s) => h.errors.push(s) },
   };
   h.manager = new module.exports.NativeScheduleControls(h.platform, h.accessories, {}, "/unused");
   h.sync = () => h.manager.sync([{ duid: "a", name: "Uptown" }, { duid: "b", name: "Downtown" }]);
-  h.characteristic = (duid, control) => h.accessories.find((a) => a.context.duid === duid && a.context.control === control).getService("switch").on;
-  h.service = (duid, control) => h.accessories.find((a) => a.context.duid === duid && a.context.control === control).getService("switch");
+  h.service = (duid, control) => h.accessories.find((a) => a.context.duid === duid && a.context.control === control).getService(h.platform.Service.Switch);
+  h.characteristic = (duid, control) => h.service(duid, control).getCharacteristic(h.platform.Characteristic.On);
   t.after(() => h.manager.dispose()); return h;
 }
 
@@ -226,4 +228,51 @@ test("stateful ON requests one delay and disabling exposure removes only these c
   h.platform.platformConfig.enableScheduleDelay = false; h.sync();
   assert.equal(h.removed.length, 6);
   assert.deepEqual(h.accessories, [unrelated]);
+});
+
+for (const result of ["pending", "success", "failure"]) {
+  test(`delay pulse ends after 1.5 seconds with a ${result} cloud request`, async (t) => {
+    const h = harness(t, { enableScheduleDelay: true }); h.sync();
+    const write = deferred();
+    h.execute = async () => {
+      if (result === "pending") await write.promise;
+      if (result === "failure") throw new Error("cloud refused delay");
+    };
+    const button = h.characteristic("b", "delay");
+    assert.equal(button.set(true), undefined);
+    assert.equal(button.get(), true);
+    h.sync(); h.engines[0].options.changed();
+    assert.equal(button.get(), true);
+    assert.equal(h.characteristic(null, "delay").get(), false);
+    await new Promise((resolve) => setTimeout(resolve, 1600));
+    assert.equal(button.get(), false);
+    assert.deepEqual(button.notifications, [false]);
+    write.resolve(); await h.manager.commandTail;
+    if (result === "failure") assert.match(h.errors[0], /SCHEDULE CONTROL FAILED.*cloud refused delay/);
+  });
+}
+
+// Exercise HAP's real cache and notification behavior in the installed toolchain.
+// The dependency-free diagnostic runner can still run the other tests locally.
+let realHap;
+try { realHap = require("hap-nodejs"); } catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error; }
+if (process.env.CI && !realHap) throw new Error("CI must install hap-nodejs to validate real HomeKit notifications");
+test("real HAP emits OFF after intervening reads and an already-OFF cached value", { skip: !realHap }, async (t) => {
+  const h = harness(t, { enableScheduleDelay: true }, realHap); h.sync();
+  const write = deferred(); h.execute = async () => write.promise;
+  const accessory = h.accessories.find((a) => a.context.duid === "b" && a.context.control === "delay");
+  const button = accessory.getService(realHap.Service.Switch).getCharacteristic(realHap.Characteristic.On);
+  const changes = []; button.on("change", (event) => changes.push(event));
+  await button.handleSetRequest(true);
+  assert.equal(await button.handleGetRequest(), true);
+  h.sync(); h.engines[0].options.changed();
+  assert.equal(await button.handleGetRequest(), true);
+  // Reproduce a cache that has already been read/refreshed OFF; normal updates
+  // alone must not decide whether the client receives the reset event.
+  button.updateValue(false);
+  const mark = changes.length;
+  await new Promise((resolve) => setTimeout(resolve, 1600));
+  assert.ok(changes.slice(mark).some((event) => event.newValue === false && event.reason === "event"));
+  assert.equal(await button.handleGetRequest(), false);
+  write.resolve(); await h.manager.commandTail;
 });
