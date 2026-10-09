@@ -71,6 +71,8 @@ test("enabled jobs, unexpected times and near-term runs are refused", async () =
     const r = await runTimeTrial(f.options);
     assert.equal(r.writeAttempts, 0);
     assert.equal(f.saved.length, 0);
+    assert.equal(r.before.cloudEnabled, setup.selected.enabled);
+    assert.equal(r.before.cron, setup.selected.cron);
   }
   const f = fixture();
   const r = await runTimeTrial({ ...f.options, now: new Date("2026-10-12T14:59:00Z") });

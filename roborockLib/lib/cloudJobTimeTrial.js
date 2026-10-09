@@ -93,8 +93,8 @@ async function runTimeTrial({ request, collectionPath, jobId, expectedCron, time
   try {
     ({ jobs: initialJobs, selected: original } = await read());
     original = clone(original);
-    changed = validate(original, expectedCron, timeZone, now);
     report.before = summary(original);
+    changed = validate(original, expectedCron, timeZone, now);
     report.proposed = summary(changed);
     const methods = await request("OPTIONS", itemPath);
     const allow = String(methods.allow ?? "").split(",").map((v) => v.trim().toUpperCase());

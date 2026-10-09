@@ -63,7 +63,7 @@ function writePrivate(file, data) {
   } finally { fs.closeSync(fd); }
 }
 
-function makeRequester(rriot, collectionPath, jobId, fetchImpl = globalThis.fetch) {
+function makeRequester(rriot, collectionPath, jobId, fetchImpl = globalThis.fetch, policy = {}) {
   let base;
   try { base = new URL(rriot.r.a); } catch { throw new TrialError("INVALID_SAVED_API_ADDRESS"); }
   if (base.protocol !== "https:" || !base.hostname.endsWith(".roborock.com") ||
@@ -72,6 +72,7 @@ function makeRequester(rriot, collectionPath, jobId, fetchImpl = globalThis.fetc
   if (![rriot.u, rriot.s, rriot.h].every((v) => typeof v === "string" && v.length > 0)) throw new TrialError("INVALID_SAVED_SESSION");
   const itemPath = `${collectionPath}/${jobId}`;
   return async (method, requestPath, payload) => {
+    if (policy.readOnly && method !== "GET") throw new TrialError("READ_ONLY_REQUEST_REQUIRED");
     const permitted = (method === "GET" && requestPath === collectionPath) ||
       (["OPTIONS", "PUT"].includes(method) && requestPath === itemPath);
     if (!permitted) throw new TrialError("REQUEST_OUTSIDE_SELECTED_JOB");
@@ -179,4 +180,4 @@ if (require.main === module) main(process.argv.slice(2)).catch(() => {
   process.exitCode = 1;
 });
 
-module.exports = { makeRequester, argumentsFrom, writePrivate, loadSavedSession };
+module.exports = { makeRequester, argumentsFrom, writePrivate, loadSavedSession, readState };

@@ -117,6 +117,30 @@ python3 -B -m unittest discover -s tests -p 'test_inspect_schedule_times.py'
 
 ## One-job time-change trial
 
+### Read-only preflight after a refused trial
+
+`scripts/inspect-schedule-preflight.cjs` uses the same saved-session reader with
+a GET-only transport. It performs one fresh cloud job-list request and describes
+every job, marking the selected ID. Cloud enabled values retain their types, so
+boolean false and the string "false" cannot be confused. Complete task structure
+is sanitized with the existing diagnostic sanitizer.
+
+It also checks bounded existing Homebridge log tails and joins jobs to robot
+timers using the task's timer identifier. These log observations are explicitly
+historical, without interpreted timestamps; they are not current robot state
+and cannot justify relaxing a write guard. Missing or malformed observations
+remain unknown. There are no schedule writes, login attempts, MQTT connections,
+OPTIONS requests, or service changes. No plugin reinstall is needed.
+
+On model a27, two 2026-10-09 trial attempts were refused by the local
+`CLOUD_JOB_MUST_BE_DISABLED` guard after app on/off and time-edit preparation.
+Both reported zero writes. Those refusals do not establish whether the cloud
+time-edit API works on that model. Inspect current values and job identity before
+choosing another experiment; do not repeat app edits or remove the guard based
+on these reports alone. Trial refusals now include the observed job summary.
+
+### Executing a time-change trial
+
 `scripts/test-schedule-time.cjs` is a developer command, not a background
 scheduler. It uses the configured encrypted session in `config.json` with the
 existing `roborock.token.key`, or the legacy `roborock.UserData` cache when no
