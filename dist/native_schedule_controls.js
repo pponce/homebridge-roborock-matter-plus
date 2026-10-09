@@ -13,7 +13,8 @@ const { redactSecrets } = require("../roborockLib/lib/redactSecrets");
 const KIND = "nativeScheduleControl";
 function isNativeScheduleControl(accessory) {
     const context = accessory.context;
-    return (context === null || context === void 0 ? void 0 : context.kind) === KIND && ["pause", "delay", "delayActive"].includes(context.control || "") &&
+    return (context === null || context === void 0 ? void 0 : context.kind) === KIND && ["pause", "pauseUntilTomorrow", "delay", "delayActive"].includes(context.control || "") &&
+        (context.control !== "pauseUntilTomorrow" || context.duid === null) &&
         (context.duid === null || typeof context.duid === "string");
 }
 class NativeScheduleControls {
@@ -75,10 +76,14 @@ class NativeScheduleControls {
             enabled.push("pause");
         if (config.enableScheduleDelay === true)
             enabled.push("delay", "delayActive");
+        if (enabled.length)
+            enabled.push("pauseUntilTomorrow");
         const wanted = new Map();
         const ids = [null, ...this.devices.keys()];
         for (const duid of ids)
             for (const control of enabled) {
+                if (control === "pauseUntilTomorrow" && duid !== null)
+                    continue;
                 const uuid = this.platform.api.hap.uuid.generate(`hap:roborock:native-schedule:${duid === null ? "all" : `robot:${duid}`}:${control}`);
                 wanted.set(uuid, { kind: KIND, control, duid });
             }
@@ -102,8 +107,9 @@ class NativeScheduleControls {
         for (const [uuid, context] of wanted) {
             let accessory = this.accessories.find((item) => item.UUID === uuid);
             const isNew = !accessory;
-            const suffix = context.control === "pause" ? "Pause Until Tomorrow" : context.control === "delayActive" ? "Delay Active" : `Delay ${(_a = config.scheduleDelayMinutes) !== null && _a !== void 0 ? _a : 60} Minutes`;
-            const name = !devices.length && accessory ? accessory.displayName : `${this.name(context.duid)} ${suffix}`;
+            const suffix = context.control === "pause" ? "Pause Active" : context.control === "delayActive" ? "Delay Active" : `Delay ${(_a = config.scheduleDelayMinutes) !== null && _a !== void 0 ? _a : 60} Minutes`;
+            const name = context.control === "pauseUntilTomorrow" ? "Pause Until Tomorrow"
+                : !devices.length && accessory ? accessory.displayName : `${this.name(context.duid)} ${suffix}`;
             if (!accessory) {
                 accessory = new this.platform.api.platformAccessory(name, uuid);
                 this.accessories.push(accessory);
@@ -113,6 +119,7 @@ class NativeScheduleControls {
             const { Service, Characteristic } = this.platform;
             const info = accessory.getService(Service.AccessoryInformation) || accessory.addService(Service.AccessoryInformation);
             info.setCharacteristic(Characteristic.Manufacturer, "Roborock")
+                .setCharacteristic(Characteristic.Name, name)
                 .setCharacteristic(Characteristic.Model, "Schedule Controls")
                 .setCharacteristic(Characteristic.SerialNumber, uuid);
             const service = accessory.getService(Service.Switch) || accessory.addService(Service.Switch, name);
@@ -137,8 +144,11 @@ class NativeScheduleControls {
         this.refresh();
     }
     value(context) {
+        var _a, _b;
         if (!this.controller)
             return false;
+        if (context.control === "pauseUntilTomorrow")
+            return (_b = (_a = this.pendingPausePreference) === null || _a === void 0 ? void 0 : _a.value) !== null && _b !== void 0 ? _b : this.controller.pauseUntilTomorrow;
         if (context.control === "delay")
             return this.delayPulses.has(context.duid);
         const ids = context.duid === null ? [...new Set([...this.devices.keys(), ...Object.keys(this.controller.state.robots)])] : [context.duid];
@@ -161,6 +171,10 @@ class NativeScheduleControls {
     accept(accessory, context, value) {
         if (this.disposed || !this.controller || (context.control === "delay" && !value))
             return;
+        if (context.control === "pauseUntilTomorrow") {
+            this.acceptPausePreference(value);
+            return;
+        }
         const pressedAt = Date.now();
         const action = context.control === "pause" ? (value ? "pause" : "resume") : context.control === "delay" ? "delay" : value ? "startDelay" : "cancelDelay";
         const ids = context.duid === null
@@ -207,12 +221,17 @@ class NativeScheduleControls {
                     this.failedValues.delete(key);
                 }
                 catch (error) {
+                    const status = this.controller.status(id);
+                    // An unsuccessful ON can still leave edited times or stopped timers.
+                    // Keep Delay Active visible until rollback has actually completed.
+                    const unresolvedDelay = context.control === "delayActive" && status.recovering && status.delayed;
+                    const fallback = Boolean(previous || unresolvedDelay);
                     if (context.control !== "delay")
-                        this.failedValues.set(key, previous);
+                        this.failedValues.set(key, fallback);
                     const newer = ((_a = this.pending.get(key)) === null || _a === void 0 ? void 0 : _a.token) !== token;
                     this.platform.log.error(`[SCHEDULE CONTROL FAILED] ${this.name(id)}: ${action}: ${this.describeError(error)}. ` +
-                        (context.control === "delay" ? "Delay request failed." : newer ? "A newer switch request is still pending." : `Switch reverted to ${previous ? "ON" : "OFF"}.`) +
-                        (this.controller.status(id).recovering ? " Schedule restoration is still pending; saved originals will be retried." : ""));
+                        (context.control === "delay" ? "Delay request failed." : newer ? "A newer switch request is still pending." : unresolvedDelay ? "Delay Active remains ON until schedule restoration finishes." : `Switch reverted to ${fallback ? "ON" : "OFF"}.`) +
+                        (status.recovering ? " Schedule restoration is still pending; saved originals will be retried." : ""));
                 }
                 finally {
                     if (((_b = this.pending.get(key)) === null || _b === void 0 ? void 0 : _b.token) === token)
@@ -229,6 +248,25 @@ class NativeScheduleControls {
             }
             this.platform.log.error(`[SCHEDULE CONTROL FAILED] ${this.name(context.duid)}: ${action}: ${this.describeError(error)}. Switches refreshed from saved state.`);
         }).finally(() => this.refresh());
+    }
+    acceptPausePreference(value) {
+        const token = {};
+        this.pendingPausePreference = { token, value };
+        // Keep preference changes ordered with presses, but do not contact the cloud
+        // for a local setting. Failed persistence restores its previous saved value.
+        this.commandTail = this.commandTail.then(() => this.ready).then(async () => {
+            if (!this.disposed)
+                await this.controller.setPauseUntilTomorrow(value);
+        }).catch((error) => {
+            var _a;
+            this.platform.log.error(`[SCHEDULE CONTROL FAILED] Pause Until Tomorrow: ${this.describeError(error)}. ` +
+                (((_a = this.pendingPausePreference) === null || _a === void 0 ? void 0 : _a.token) !== token ? "A newer switch request is still pending." : `Switch reverted to ${this.controller.pauseUntilTomorrow ? "ON" : "OFF"}.`));
+        }).finally(() => {
+            var _a;
+            if (((_a = this.pendingPausePreference) === null || _a === void 0 ? void 0 : _a.token) === token)
+                this.pendingPausePreference = undefined;
+            this.refresh();
+        });
     }
     refresh() {
         var _a;
@@ -250,6 +288,7 @@ class NativeScheduleControls {
         this.delayPulses.clear();
         this.pending.clear();
         this.failedValues.clear();
+        this.pendingPausePreference = undefined;
     }
 }
 exports.NativeScheduleControls = NativeScheduleControls;
