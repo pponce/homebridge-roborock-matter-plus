@@ -255,7 +255,8 @@ for (const result of ["pending", "success", "failure"]) {
 // Exercise HAP's real cache and notification behavior in the installed toolchain.
 // The dependency-free diagnostic runner can still run the other tests locally.
 let realHap;
-try { realHap = require("hap-nodejs"); } catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error; }
+try { realHap = require("node:module").createRequire(require.resolve("homebridge"))("hap-nodejs"); }
+catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error; }
 if (process.env.CI && !realHap) throw new Error("CI must install hap-nodejs to validate real HomeKit notifications");
 test("real HAP emits OFF after intervening reads and an already-OFF cached value", { skip: !realHap }, async (t) => {
   const h = harness(t, { enableScheduleDelay: true }, realHap); h.sync();
