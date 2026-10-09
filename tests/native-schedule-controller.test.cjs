@@ -386,3 +386,21 @@ test("queued expiration rechecks a preference switched OFF before it can run", a
   assert.equal(h.controller.status("robot").paused, true);
   assert.deepEqual(h.timers.map((t) => t.enabled), [false, false]);
 });
+
+test("changing the shared preference preserves an existing stacked delay across restart", async (t) => {
+  const h = harness(t);
+  await h.controller.execute("robot", "delay");
+  await h.controller.execute("robot", "delay");
+  const jobs = clone(h.jobs), saved = clone(h.saved.robots.robot.jobs), calls = h.calls.length;
+  await h.controller.setPauseUntilTomorrow(false);
+  h.controller.dispose();
+  const restarted = h.newController();
+  await restarted.initialize();
+  await restarted.setPauseUntilTomorrow(true);
+  assert.equal(restarted.status("robot").delayed, true);
+  assert.deepEqual(h.jobs, jobs);
+  assert.deepEqual(h.saved.robots.robot.jobs, saved);
+  assert.equal(h.calls.length, calls);
+  await restarted.execute("robot", "cancelDelay");
+  assert.deepEqual(h.jobs.map((j) => j.cron), ["0 9 ? * 1,2,3,4,5", "30 9 ? * 1,2,3,4,5"]);
+});
