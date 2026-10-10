@@ -58,6 +58,58 @@ test("stacks by current times, re-evaluates after completion, and restores exact
   assert.equal(h.controller.status("robot").delayed, false);
 });
 
+for (const [action, config] of [
+  ["pause", { schedulePauseAll: false, schedulePausePerVacuum: true }],
+  ["pause", { schedulePauseAll: true, schedulePausePerVacuum: false }],
+  ["delay", { scheduleDelayAll: false, scheduleDelayPerVacuum: true }],
+  ["delay", { scheduleDelayAll: true, scheduleDelayPerVacuum: false }],
+]) {
+  test(`${action} survives restart with only ${Object.values(config)[0] ? "all-vacuum" : "per-vacuum"} controls selected`, async (t) => {
+    const h = harness(t);
+    await h.controller.execute("robot", action);
+    h.controller.dispose();
+    const calls = h.calls.length, jobs = clone(h.jobs), timers = clone(h.timers);
+    const restarted = h.newController(config); await restarted.initialize();
+    assert.equal(h.calls.length, calls);
+    assert.deepEqual(h.jobs, jobs);
+    assert.deepEqual(h.timers, timers);
+    assert.equal(restarted.status("robot")[action === "pause" ? "paused" : "delayed"], true);
+  });
+}
+
+test("hiding the last pause control restores an indefinite pause while leaving the preference OFF", async (t) => {
+  const h = harness(t); h.timers[1].enabled = false;
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.execute("robot", "pause"); h.controller.dispose();
+  const restarted = h.newController({ schedulePauseAll: false, schedulePausePerVacuum: false });
+  await restarted.initialize();
+  assert.equal(restarted.status("robot").paused, false);
+  assert.deepEqual(h.timers.map((v) => v.enabled), [true, false]);
+  assert.equal(restarted.pauseUntilTomorrow, false);
+});
+
+test("hiding the last delay control restores stacked times before the daily reset", async (t) => {
+  const h = harness(t), originals = clone(h.jobs);
+  await h.controller.execute("robot", "delay");
+  await h.controller.execute("robot", "delay"); h.controller.dispose();
+  const restarted = h.newController({ scheduleDelayAll: false, scheduleDelayPerVacuum: false });
+  await restarted.initialize();
+  assert.deepEqual(h.jobs.map((j) => j.cron), originals.map((j) => j.cron));
+  assert.equal(restarted.status("robot").delayed, false);
+});
+
+test("hiding the last delay control also restores an indefinite cutoff pause", async (t) => {
+  const h = harness(t, { now: time("23:10"), jobs: [job(1, "30 23 ? * 5")] });
+  await h.controller.setPauseUntilTomorrow(false);
+  await h.controller.execute("robot", "delay"); h.controller.dispose();
+  assert.equal(h.controller.status("robot").paused, true);
+  const restarted = h.newController({ scheduleDelayAll: false, scheduleDelayPerVacuum: false });
+  await restarted.initialize();
+  assert.equal(restarted.status("robot").paused, false);
+  assert.equal(restarted.status("robot").delayed, false);
+  assert.equal(h.timers[0].enabled, true);
+});
+
 test("a paused vacuum receives no time edit; a new manual clean is docked only on an explicit press", async (t) => {
   const h = harness(t);
   h.timers[1].enabled = false;

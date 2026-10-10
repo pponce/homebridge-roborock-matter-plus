@@ -159,13 +159,37 @@
         "title": "Pause Schedules",
         "type": "boolean",
         "default": false,
-        "description": "Adds Pause Active switches per vacuum and for all vacuums. ON pauses schedules and docks active cleaning; OFF restores them. A shared Pause Until Tomorrow switch defaults to ON; turn it OFF to keep pauses indefinite."
+        "description": "Adds Pause Active switches per vacuum and for all vacuums. ON pauses schedules and docks active cleaning; OFF restores them."
+      },
+      "schedulePauseAll": {
+        "title": "Pause all vacuums switch",
+        "type": "boolean",
+        "default": true,
+        "description": "Adds one Pause Active switch for all vacuums when Pause Schedules is enabled."
+      },
+      "schedulePausePerVacuum": {
+        "title": "Per vacuum pause switches",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a Pause Active switch for each vacuum when Pause Schedules is enabled."
       },
       "enableScheduleDelay": {
         "title": "Delay Schedules",
         "type": "boolean",
         "default": false,
-        "description": "Adds momentary delay and stateful Delay Active switches per vacuum and for all vacuums. Turn Delay Active off to restore original times."
+        "description": "Adds a momentary delay switch and a Delay Active switch per vacuum and for all vacuums. Each delay press adds the selected interval to eligible schedules for today and docks active cleaning. Turn Delay Active off to restore original times."
+      },
+      "scheduleDelayAll": {
+        "title": "Delay all vacuums switch",
+        "type": "boolean",
+        "default": true,
+        "description": "Adds a momentary delay switch and a Delay Active switch for all vacuums when Delay Schedules is enabled."
+      },
+      "scheduleDelayPerVacuum": {
+        "title": "Per vacuum Delay switches",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a momentary delay switch and a Delay Active switch for each vacuum when Delay Schedules is enabled."
       },
       "scheduleDelayMinutes": {
         "title": "Delay interval (minutes)",
@@ -173,14 +197,14 @@
         "minimum": 1,
         "maximum": 1440,
         "default": 60,
-        "description": "One interval shared by every delay switch. Each press re-evaluates today's eligible schedules."
+        "description": "One interval applies to every delay switch. While cleaning, the most recent schedule within the last 10 minutes is also eligible. Each press checks again using the current delayed times."
       },
       "scheduleResetTime": {
         "title": "Daily reset time",
         "type": "string",
         "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
         "default": "00:05",
-        "description": "Homebridge local time. Restores delayed times daily and ends pauses when Pause Until Tomorrow is ON."
+        "description": "Homebridge's local time. Delayed times are restored daily. The shared Pause Until Tomorrow switch defaults to ON and allows pauses to end at this time; turn it OFF to keep pauses indefinite. Turning it back ON allows resume at the next reset. Homebridge must be running and connected to restore on time. Supports existing cloud schedules; Routines are not delayed. Before enabling, restore any pauses in an external controller and disable its schedule automations."
       },
       "homeKitActionSwitches": {
         "title": "Which Switches to Add",

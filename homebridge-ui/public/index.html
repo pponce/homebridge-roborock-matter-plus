@@ -302,13 +302,23 @@
       </label>
     </div>
 
-    <h3>Schedule controls</h3>
+    <h3>Extra Schedule controls</h3>
     <label class="checkbox">
       <input id="enable-schedule-pause" type="checkbox" />
       <span>Pause Schedules
         <small>Adds Pause Active switches per vacuum and for all vacuums. ON pauses schedules and docks active cleaning; OFF restores them.</small>
       </span>
     </label>
+    <div id="schedule-pause-options" class="checkbox-group hidden">
+      <label class="checkbox">
+        <input id="schedule-pause-all" type="checkbox" checked />
+        <span>Pause all vacuums switch</span>
+      </label>
+      <label class="checkbox">
+        <input id="schedule-pause-per-vacuum" type="checkbox" />
+        <span>Per vacuum pause switches</span>
+      </label>
+    </div>
     <label class="checkbox">
       <input id="enable-schedule-delay" type="checkbox" />
       <span>Delay Schedules
@@ -316,6 +326,14 @@
       </span>
     </label>
     <div id="schedule-delay-options" class="checkbox-group hidden">
+      <label class="checkbox">
+        <input id="schedule-delay-all" type="checkbox" checked />
+        <span>Delay all vacuums switch</span>
+      </label>
+      <label class="checkbox">
+        <input id="schedule-delay-per-vacuum" type="checkbox" />
+        <span>Per vacuum Delay switches</span>
+      </label>
       <label class="field">
         <span>Delay interval (minutes)</span>
         <input id="schedule-delay-minutes" type="number" min="1" max="1440" step="1" value="60" />

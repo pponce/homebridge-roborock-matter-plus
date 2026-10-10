@@ -40,7 +40,12 @@ const elements = {
   ),
   homeKitActionSchedules: document.getElementById("homekit-action-schedules"),
   schedulePause: document.getElementById("enable-schedule-pause"),
+  schedulePauseAll: document.getElementById("schedule-pause-all"),
+  schedulePausePerVacuum: document.getElementById("schedule-pause-per-vacuum"),
+  schedulePauseOptions: document.getElementById("schedule-pause-options"),
   scheduleDelay: document.getElementById("enable-schedule-delay"),
+  scheduleDelayAll: document.getElementById("schedule-delay-all"),
+  scheduleDelayPerVacuum: document.getElementById("schedule-delay-per-vacuum"),
   scheduleDelayMinutes: document.getElementById("schedule-delay-minutes"),
   scheduleResetTime: document.getElementById("schedule-reset-time"),
   scheduleDelayOptions: document.getElementById("schedule-delay-options"),
@@ -233,7 +238,11 @@ async function loadConfig() {
     syncActionSwitchAvailability();
     syncFeatureDependencies();
     if (elements.schedulePause) elements.schedulePause.checked = config.enableSchedulePauseUntilTomorrow === true;
+    if (elements.schedulePauseAll) elements.schedulePauseAll.checked = config.schedulePauseAll !== false;
+    if (elements.schedulePausePerVacuum) elements.schedulePausePerVacuum.checked = config.schedulePausePerVacuum === true;
     if (elements.scheduleDelay) elements.scheduleDelay.checked = config.enableScheduleDelay === true;
+    if (elements.scheduleDelayAll) elements.scheduleDelayAll.checked = config.scheduleDelayAll !== false;
+    if (elements.scheduleDelayPerVacuum) elements.scheduleDelayPerVacuum.checked = config.scheduleDelayPerVacuum === true;
     if (elements.scheduleDelayMinutes) elements.scheduleDelayMinutes.value = String(config.scheduleDelayMinutes ?? 60);
     if (elements.scheduleResetTime) elements.scheduleResetTime.value = config.scheduleResetTime ?? "00:05";
     syncScheduleControlOptions();
@@ -571,6 +580,7 @@ function applyStateSensorSelection(selection) {
 function syncFeatureDependencies() {}
 
 function syncScheduleControlOptions() {
+  elements.schedulePauseOptions?.classList.toggle("hidden", !elements.schedulePause?.checked);
   elements.scheduleDelayOptions?.classList.toggle("hidden", !elements.scheduleDelay?.checked);
   elements.scheduleResetOptions?.classList.toggle("hidden", !(elements.schedulePause?.checked || elements.scheduleDelay?.checked));
 }
@@ -720,7 +730,11 @@ function pickFields(source, keys) {
 function getFormValues() {
   return {
     enableSchedulePauseUntilTomorrow: Boolean(elements.schedulePause?.checked),
+    schedulePauseAll: elements.schedulePauseAll?.checked ?? true,
+    schedulePausePerVacuum: Boolean(elements.schedulePausePerVacuum?.checked),
     enableScheduleDelay: Boolean(elements.scheduleDelay?.checked),
+    scheduleDelayAll: elements.scheduleDelayAll?.checked ?? true,
+    scheduleDelayPerVacuum: Boolean(elements.scheduleDelayPerVacuum?.checked),
     scheduleDelayMinutes: getScheduleDelayMinutes(),
     scheduleResetTime: getScheduleResetTime(),
     email: getEmail(),
@@ -1899,6 +1913,7 @@ function init() {
   // callout for a feature that is switched off.
   syncActionSwitchAvailability();
   syncFeatureDependencies();
+  syncScheduleControlOptions();
   loadManagedDevices().catch(() => {});
   if (elements.refreshDevices) {
     elements.refreshDevices.addEventListener("click", () =>

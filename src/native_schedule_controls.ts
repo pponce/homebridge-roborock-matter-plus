@@ -9,6 +9,7 @@ import { join } from "node:path";
 const { NativeScheduleController } = require("../roborockLib/lib/nativeScheduleController");
 const { ScheduleControlStore } = require("../roborockLib/lib/scheduleControlStore");
 const { createNativeScheduleApi } = require("../roborockLib/lib/nativeScheduleApi");
+const { scheduleControlOptions } = require("../roborockLib/lib/scheduleControlOptions");
 const { redactSecrets } = require("../roborockLib/lib/redactSecrets");
 const KIND = "nativeScheduleControl";
 type Control = "pause" | "pauseUntilTomorrow" | "delay" | "delayActive";
@@ -40,7 +41,8 @@ export class NativeScheduleControls {
     if (typeof storagePath !== "string") return;
     const identity = createHash("sha256").update(`${config.email || ""}\n${config.baseURL || ""}\n${config.name || PLATFORM_NAME}`).digest("hex").slice(0, 16);
     const filename = join(storagePath, `roborock-schedule-controls-${identity}.json`);
-    if (!config.enableSchedulePauseUntilTomorrow && !config.enableScheduleDelay && !existsSync(filename)) return;
+    const options = scheduleControlOptions(config);
+    if (!options.pauseEnabled && !options.delayEnabled && !existsSync(filename)) return;
     try {
       this.controller = new NativeScheduleController({
         api: createNativeScheduleApi(platform.roborockAPI, coordinator),
@@ -68,14 +70,17 @@ export class NativeScheduleControls {
       }
     }
     const config = this.platform.platformConfig;
-    const enabled: Control[] = [];
-    if (config.enableSchedulePauseUntilTomorrow === true) enabled.push("pause");
-    if (config.enableScheduleDelay === true) enabled.push("delay", "delayActive");
-    if (enabled.length) enabled.push("pauseUntilTomorrow");
+    const options = scheduleControlOptions(config);
+    const selected = ({ control, duid }: Pick<Context, "control" | "duid">): boolean => {
+      if (control === "pauseUntilTomorrow") return duid === null && (options.pauseEnabled || options.delayEnabled);
+      if (control === "pause") return duid === null ? options.pauseAll : options.pausePerVacuum;
+      return duid === null ? options.delayAll : options.delayPerVacuum;
+    };
+    const controls: Control[] = ["pause", "delay", "delayActive", "pauseUntilTomorrow"];
     const wanted = new Map<string, Context>();
     const ids: Array<string | null> = [null, ...this.devices.keys()];
-    for (const duid of ids) for (const control of enabled) {
-      if (control === "pauseUntilTomorrow" && duid !== null) continue;
+    for (const duid of ids) for (const control of controls) {
+      if (!selected({ control, duid })) continue;
       const uuid = this.platform.api.hap.uuid.generate(`hap:roborock:native-schedule:${duid === null ? "all" : `robot:${duid}`}:${control}`);
       wanted.set(uuid, { kind: KIND, control, duid });
     }
@@ -83,7 +88,7 @@ export class NativeScheduleControls {
       if (!isNativeScheduleControl(accessory) || wanted.has(accessory.UUID)) continue;
       // Empty discovery is not evidence that a robot disappeared.
       const context = accessory.context as Context;
-      if (!devices.length && enabled.includes(context.control)) continue;
+      if (!devices.length && selected(context)) continue;
       this.platform.api.unregisterPlatformAccessories(HAP_PLUGIN_IDENTIFIER, PLATFORM_NAME, [accessory]);
       this.accessories.splice(this.accessories.indexOf(accessory), 1);
       this.bindings.delete(accessory.UUID);

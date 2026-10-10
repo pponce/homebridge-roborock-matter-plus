@@ -2,6 +2,7 @@
 
 const { selectScheduleDelayOccurrences } = require("./selectScheduleDelayOccurrences");
 const { MINUTE, occurrenceToday, shiftedCron, nextReset, validateSettings } = require("./scheduleCalendar");
+const { scheduleControlOptions } = require("./scheduleControlOptions");
 const copy = (value) => JSON.parse(JSON.stringify(value));
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -217,8 +218,9 @@ class NativeScheduleController {
   }
   needsRecovery(s) {
     if (!s || (!s.paused && !s.recovering && !Object.keys(s.jobs).length && !Object.keys(s.timers).length)) return false;
-    const featureHidden = (s.paused && (s.pauseSource === "delay" ? this.config.enableScheduleDelay !== true : this.config.enableSchedulePauseUntilTomorrow !== true)) ||
-      (Object.keys(s.jobs).length && this.config.enableScheduleDelay !== true);
+    const options = scheduleControlOptions(this.config);
+    const featureHidden = (s.paused && (s.pauseSource === "delay" ? !options.delayEnabled : !options.pauseEnabled)) ||
+      (Object.keys(s.jobs).length && !options.delayEnabled);
     if (featureHidden) return true;
     if (!s.recovering && (!this.expiryEnabled(s) || s.expiresAt > this.clock())) return false;
     return !s.retryAt || s.retryAt <= this.clock();

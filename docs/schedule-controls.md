@@ -4,7 +4,7 @@ This fork can pause or temporarily delay existing Roborock cloud schedules from
 Apple Home. Everything runs inside the plugin using its existing Roborock
 connection. Script2, external scripts and operating-system timers are not needed.
 
-In plugin settings, enable either or both options under **Schedule controls**.
+In plugin settings, enable either or both options under **Extra Schedule controls**.
 They are off by default and are independent of the other Home app action switches.
 Pair the plugin's Homebridge child bridge with HomeKit to see these switches.
 
@@ -15,10 +15,21 @@ Pair the plugin's Homebridge child bridge with HomeKit to see these switches.
 | Delay X Minutes | A momentary switch that resets OFF after 1.5 seconds, independently of cloud success. Each press docks active cleaning and adds the configured interval to today's eligible schedules. |
 | Delay Active | ON reflects an active delay. OFF cancels it and restores original times. Manually turning it ON while inactive applies one interval; use the momentary switch to add further intervals. |
 
-Pause Active, Delay X Minutes and Delay Active are available per vacuum and for
-all vacuums. Pause Until Tomorrow appears once when either feature is enabled.
-An all-vacuum stateful
-switch is ON when at least one vacuum has the corresponding active state. Its
+Under each feature, choose the all-vacuums controls, per-vacuum controls, or both.
+Only the all-vacuums option is selected by default. The per-vacuum delay option
+adds both Delay X Minutes and Delay Active for each vacuum; the all-vacuums delay
+option adds the corresponding pair for all vacuums. These selections are
+independent for Pause and Delay. Both features with their default selections
+add four switches total, including the shared Pause Until Tomorrow preference.
+Configurations without these new selections also use the all-vacuums defaults;
+enable the per-vacuum options to keep individual controls visible.
+
+Pause Until Tomorrow appears once whenever at least one pause or delay control
+is selected. Hiding individual controls while keeping an all-vacuums control,
+or the reverse, preserves active pauses and delays. Deselecting every control
+for a feature restores its saved changes on restart, just like disabling that
+feature, including indefinite pauses. Existing selected controls keep their UUIDs.
+An all-vacuum stateful switch is ON when at least one vacuum has the corresponding active state. Its
 OFF action restores all affected vacuums. A failure for one vacuum does not stop
 the operation for the others; check the Homebridge log for the result.
 

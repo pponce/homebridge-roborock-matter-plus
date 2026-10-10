@@ -92,9 +92,69 @@ function harness(t, config = {}, hap) {
 
 test("new controls are opt-in and independent of the legacy action-switch master", (t) => {
   const off = harness(t); off.sync(); assert.equal(off.registered.length, 0);
-  const on = harness(t, { enableSchedulePauseUntilTomorrow: true, enableScheduleDelay: true, enableHomeKitActionSwitches: false });
+  const on = harness(t, { enableSchedulePauseUntilTomorrow: true, schedulePausePerVacuum: true, enableScheduleDelay: true, scheduleDelayPerVacuum: true, enableHomeKitActionSwitches: false });
   on.sync(); on.sync(); assert.equal(on.registered.length, 10);
   assert.equal(new Set(on.registered.map((a) => a.UUID)).size, 10);
+});
+
+test("missing scope settings default to all-vacuum controls and still operate every vacuum", async (t) => {
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, enableScheduleDelay: true }); h.sync();
+  assert.equal(h.registered.length, 4);
+  assert.ok(h.accessories.every((a) => a.context.duid === null));
+  assert.deepEqual(h.accessories.map((a) => a.context.control).sort(), ["delay", "delayActive", "pause", "pauseUntilTomorrow"]);
+  h.characteristic(null, "pause").set(true); await h.manager.commandTail;
+  assert.deepEqual(h.calls, [["a", "pause"], ["b", "pause"]]);
+  h.characteristic(null, "pause").set(false); await h.manager.commandTail;
+  h.characteristic(null, "delay").set(true); await h.manager.commandTail;
+  assert.deepEqual(h.calls.slice(-2), [["a", "delay"], ["b", "delay"]]);
+  assert.equal(h.characteristic(null, "delayActive").get(), true);
+  h.characteristic(null, "delayActive").set(false); await h.manager.commandTail;
+  assert.deepEqual(h.calls.slice(-2), [["a", "cancelDelay"], ["b", "cancelDelay"]]);
+});
+
+for (const [name, options, expected] of [
+  ["individual pause only", { schedulePauseAll: false, schedulePausePerVacuum: true, enableScheduleDelay: false }, ["a:pause", "b:pause", "all:pauseUntilTomorrow"]],
+  ["individual delay only", { enableSchedulePauseUntilTomorrow: false, scheduleDelayAll: false, scheduleDelayPerVacuum: true }, ["a:delay", "a:delayActive", "b:delay", "b:delayActive", "all:pauseUntilTomorrow"]],
+  ["all pause and individual delay", { scheduleDelayAll: false, scheduleDelayPerVacuum: true }, ["all:pause", "a:delay", "a:delayActive", "b:delay", "b:delayActive", "all:pauseUntilTomorrow"]],
+  ["individual pause and all delay", { schedulePauseAll: false, schedulePausePerVacuum: true }, ["a:pause", "b:pause", "all:delay", "all:delayActive", "all:pauseUntilTomorrow"]],
+  ["all pause hidden but delay remains", { schedulePauseAll: false }, ["all:delay", "all:delayActive", "all:pauseUntilTomorrow"]],
+  ["no scope selected", { schedulePauseAll: false, scheduleDelayAll: false }, []],
+  ["masters off override selected scopes", { enableSchedulePauseUntilTomorrow: false, enableScheduleDelay: false, schedulePausePerVacuum: true, scheduleDelayPerVacuum: true }, []],
+]) {
+  test(`control exposure supports ${name}`, (t) => {
+    const h = harness(t, { enableSchedulePauseUntilTomorrow: true, enableScheduleDelay: true, ...options }); h.sync();
+    const actual = h.accessories.map((a) => `${a.context.duid ?? "all"}:${a.context.control}`).sort();
+    assert.deepEqual(actual, [...expected].sort());
+  });
+}
+
+test("deselecting per-vacuum controls removes cached copies even during empty discovery and preserves all controls", (t) => {
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, enableScheduleDelay: true, schedulePausePerVacuum: true, scheduleDelayPerVacuum: true }); h.sync();
+  const all = h.accessories.filter((a) => a.context.duid === null);
+  h.engines[0].state.robots.a = { paused: true, delayed: false };
+  h.engines[0].state.robots.b = { paused: false, delayed: true };
+  h.platform.platformConfig.schedulePausePerVacuum = false;
+  h.platform.platformConfig.scheduleDelayPerVacuum = false;
+  h.manager.sync([]);
+  assert.deepEqual(h.accessories, all);
+  assert.equal(h.removed.length, 6);
+  assert.equal(h.characteristic(null, "pause").get(), true);
+  assert.equal(h.characteristic(null, "delayActive").get(), true);
+  assert.deepEqual(h.calls, []);
+});
+
+test("deselecting all-vacuum controls preserves selected individual controls and the shared preference", (t) => {
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, enableScheduleDelay: true, schedulePausePerVacuum: true, scheduleDelayPerVacuum: true }); h.sync();
+  const individual = h.accessories.filter((a) => a.context.duid !== null);
+  const preference = h.accessories.find((a) => a.context.control === "pauseUntilTomorrow");
+  h.platform.platformConfig.schedulePauseAll = false;
+  h.platform.platformConfig.scheduleDelayAll = false;
+  h.sync();
+  assert.equal(h.accessories.length, 7);
+  assert.ok(individual.every((a) => h.accessories.includes(a)));
+  assert.ok(h.accessories.includes(preference));
+  assert.equal(h.removed.length, 3);
+  assert.deepEqual(h.calls, []);
 });
 
 function deferred() {
@@ -104,7 +164,7 @@ function deferred() {
 }
 
 test("pause stays optimistic through initialization, GETs and refreshes; aggregate follows any robot", async (t) => {
-  const h = harness(t, { enableSchedulePauseUntilTomorrow: true });
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, schedulePausePerVacuum: true });
   const startup = deferred(), write = deferred(); h.initializing = startup.promise; h.sync();
   h.execute = async (id, action, engine) => {
     await write.promise;
@@ -127,7 +187,7 @@ test("pause stays optimistic through initialization, GETs and refreshes; aggrega
 });
 
 test("resume stays OFF while restoring; failure reverts ON and logs an error", async (t) => {
-  const h = harness(t, { enableSchedulePauseUntilTomorrow: true }); h.sync();
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, schedulePausePerVacuum: true }); h.sync();
   h.engines[0].state.robots.a = { paused: true, delayed: false };
   const write = deferred();
   h.execute = async () => { await write.promise; throw new Error("restore refused"); };
@@ -142,7 +202,7 @@ test("resume stays OFF while restoring; failure reverts ON and logs an error", a
 });
 
 test("failed partial pause reverts OFF despite tentative journal flags until recovery completes", async (t) => {
-  const h = harness(t, { enableSchedulePauseUntilTomorrow: true }); h.sync();
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, schedulePausePerVacuum: true }); h.sync();
   h.execute = async (id, action, engine) => {
     engine.state.robots[id] = { paused: true, delayed: false, recovering: true };
     engine.options.changed(); throw new Error("timer confirmation failed");
@@ -159,7 +219,7 @@ test("failed partial pause reverts OFF despite tentative journal flags until rec
 });
 
 test("newer individual OFF survives an older all-vacuum ON and executes after the whole batch", async (t) => {
-  const h = harness(t, { enableSchedulePauseUntilTomorrow: true }); h.sync();
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, schedulePausePerVacuum: true }); h.sync();
   const write = deferred();
   h.execute = async (id, action, engine) => {
     if (id === "a" && action === "pause") await write.promise;
@@ -179,7 +239,7 @@ test("newer individual OFF survives an older all-vacuum ON and executes after th
 });
 
 test("all-vacuum partial failure rolls back only the failed robot and keeps aggregate any-paused semantics", async (t) => {
-  const h = harness(t, { enableSchedulePauseUntilTomorrow: true }); h.sync(); h.fail = "a";
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, schedulePausePerVacuum: true }); h.sync(); h.fail = "a";
   h.characteristic(null, "pause").set(true);
   assert.equal(h.characteristic("a", "pause").get(), true);
   assert.equal(h.characteristic("b", "pause").get(), true);
@@ -191,7 +251,7 @@ test("all-vacuum partial failure rolls back only the failed robot and keeps aggr
 });
 
 test("Delay Active is optimistic but the Delay button remains momentary", async (t) => {
-  const h = harness(t, { enableScheduleDelay: true }); h.sync();
+  const h = harness(t, { enableScheduleDelay: true, scheduleDelayPerVacuum: true }); h.sync();
   const write = deferred();
   h.execute = async (id, action, engine) => {
     await write.promise; engine.state.robots[id] = { delayed: true, paused: false };
@@ -205,7 +265,7 @@ test("Delay Active is optimistic but the Delay button remains momentary", async 
 });
 
 test("Delay Active reflects any delayed robot and OFF cancels both without resuming ordinary pauses", async (t) => {
-  const h = harness(t, { enableScheduleDelay: true }); h.sync();
+  const h = harness(t, { enableScheduleDelay: true, scheduleDelayPerVacuum: true }); h.sync();
   h.engines[0].state.robots.a = { delayed: true, paused: true };
   assert.equal(h.characteristic(null, "delayActive").get(), true);
   h.characteristic(null, "delayActive").set(false);
@@ -216,7 +276,7 @@ test("Delay Active reflects any delayed robot and OFF cancels both without resum
 });
 
 test("momentary OFF sends no command; all-vacuum actions continue after one failure", async (t) => {
-  const h = harness(t, { enableScheduleDelay: true }); h.sync(); h.fail = "a";
+  const h = harness(t, { enableScheduleDelay: true, scheduleDelayPerVacuum: true }); h.sync(); h.fail = "a";
   h.characteristic(null, "delay").set(false); assert.equal(h.calls.length, 0);
   h.characteristic(null, "delay").set(true);
   await tick(); await tick();
@@ -226,7 +286,7 @@ test("momentary OFF sends no command; all-vacuum actions continue after one fail
 });
 
 test("stateful ON requests one delay and disabling exposure removes only these controls", async (t) => {
-  const h = harness(t, { enableScheduleDelay: true }); h.sync();
+  const h = harness(t, { enableScheduleDelay: true, scheduleDelayPerVacuum: true }); h.sync();
   h.characteristic("a", "delayActive").set(true); await tick(); await tick();
   assert.deepEqual(h.calls, [["a", "startDelay"]]);
   const unrelated = new Accessory("Existing schedule", "existing");
@@ -238,7 +298,7 @@ test("stateful ON requests one delay and disabling exposure removes only these c
 
 for (const result of ["pending", "success", "failure"]) {
   test(`delay pulse ends after 1.5 seconds with a ${result} cloud request`, async (t) => {
-    const h = harness(t, { enableScheduleDelay: true }); h.sync();
+    const h = harness(t, { enableScheduleDelay: true, scheduleDelayPerVacuum: true }); h.sync();
     const write = deferred();
     h.execute = async () => {
       if (result === "pending") await write.promise;
@@ -265,7 +325,7 @@ try { realHap = require("node:module").createRequire(require.resolve("homebridge
 catch (error) { if (error.code !== "MODULE_NOT_FOUND") throw error; }
 if (process.env.CI && !realHap) throw new Error("CI must install hap-nodejs to validate real HomeKit notifications");
 test("real HAP emits OFF after intervening reads and an already-OFF cached value", { skip: !realHap }, async (t) => {
-  const h = harness(t, { enableScheduleDelay: true }, realHap); h.sync();
+  const h = harness(t, { enableScheduleDelay: true, scheduleDelayPerVacuum: true }, realHap); h.sync();
   const write = deferred(); h.execute = async () => write.promise;
   const accessory = h.accessories.find((a) => a.context.duid === "b" && a.context.control === "delay");
   const button = accessory.getService(realHap.Service.Switch).getCharacteristic(realHap.Characteristic.On);
@@ -286,7 +346,7 @@ test("real HAP emits OFF after intervening reads and an already-OFF cached value
 
 
 test("Pause Active keeps its accessory identity and one shared preference defaults ON", async (t) => {
-  const h = harness(t, { enableSchedulePauseUntilTomorrow: true }); h.sync();
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, schedulePausePerVacuum: true }); h.sync();
   const pauses = h.accessories.filter((a) => a.context.control === "pause");
   assert.equal(pauses.length, 3);
   const downtown = pauses.find((a) => a.context.duid === "b");
@@ -311,7 +371,7 @@ test("Pause Active keeps its accessory identity and one shared preference defaul
 });
 
 test("preference requests retain press order with pauses and revert on persistence failure", async (t) => {
-  const h = harness(t, { enableSchedulePauseUntilTomorrow: true }); h.sync();
+  const h = harness(t, { enableSchedulePauseUntilTomorrow: true, schedulePausePerVacuum: true }); h.sync();
   const seen = [];
   h.execute = async (_id, _action, engine) => { seen.push(engine.pauseUntilTomorrow); };
   h.characteristic(null, "pauseUntilTomorrow").set(false);
@@ -328,7 +388,7 @@ test("preference requests retain press order with pauses and revert on persisten
 });
 
 test("failed Delay Active ON reverts OFF when no schedule changes remain", async (t) => {
-  const h = harness(t, { enableScheduleDelay: true }); h.sync(); h.fail = "b";
+  const h = harness(t, { enableScheduleDelay: true, scheduleDelayPerVacuum: true }); h.sync(); h.fail = "b";
   h.characteristic("b", "delayActive").set(true);
   assert.equal(h.characteristic("b", "delayActive").get(), true);
   await h.manager.commandTail;
@@ -338,7 +398,7 @@ test("failed Delay Active ON reverts OFF when no schedule changes remain", async
 
 for (const action of ["start", "cancel"]) {
   test(`failed delay ${action} keeps Delay Active ON while schedule recovery remains`, async (t) => {
-    const h = harness(t, { enableScheduleDelay: true }); h.sync();
+    const h = harness(t, { enableScheduleDelay: true, scheduleDelayPerVacuum: true }); h.sync();
     if (action === "cancel") h.engines[0].state.robots.b = { paused: false, delayed: true };
     h.execute = async (id, _action, engine) => {
       engine.state.robots[id] = { paused: false, delayed: true, recovering: true };

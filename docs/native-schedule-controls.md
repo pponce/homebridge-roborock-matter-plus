@@ -67,24 +67,31 @@ migration instructions. Both features remain disabled by default.
 
 ## Configuration UI and Home controls
 
-Expose two independent feature options under Schedule controls:
+Expose two independent feature options under Extra Schedule controls:
 
 | Setting | Default | Visibility and effect |
 | --- | --- | --- |
-| Enable Pause Schedules | Off | Adds Pause Active per vacuum and for all vacuums. |
-| Enable Delay Schedules | Off | Adds momentary Delay for X and stateful Delay Active switches per vacuum, plus corresponding all-vacuum switches. |
+| Pause Schedules | Off | Enables the selected Pause Active controls below it. |
+| Pause all vacuums switch | On | Indented beneath Pause Schedules; adds the all-vacuums Pause Active control. |
+| Per vacuum pause switches | Off | Indented beneath Pause Schedules; adds Pause Active for each vacuum. |
+| Delay Schedules | Off | Enables the selected momentary Delay for X and stateful Delay Active controls below it. |
+| Delay all vacuums switch | On | Indented beneath Delay Schedules; adds the all-vacuums delay pair. |
+| Per vacuum Delay switches | Off | Indented beneath Delay Schedules; adds the delay pair for each vacuum. |
 | Delay interval (minutes) | 60 | Shown beneath Enable Delay Schedules when enabled; shared by every delay switch. |
 | Daily reset time | 00:05 | Shown once when either feature is enabled; shared by both features and their individual/all-vacuum controls. |
 
-The options are independent; users may enable either one or both. Both options
-enabled for two vacuums add ten control switches, including the shared preference. Keep the shared reset setting
+The options are independent; users may enable either one or both. Enabling both
+features with their default selections adds four switches, including the shared
+preference. Selecting both scopes for both features adds ten switches for two
+vacuums. Missing scope settings use the new all-vacuums defaults on existing
+installations too. Keep the shared reset setting
 outside either feature's dependent fields so it is not duplicated or hidden
 when only the other feature is enabled.
 
 Pause Active ON pauses the chosen vacuum(s); OFF restores owned schedule states.
 Keep the existing pause accessory UUIDs when renaming them, preserving automations.
-A separate global Pause Until Tomorrow switch is shown whenever either feature is
-enabled. It defaults to ON, persists across restarts, and never initiates a pause.
+A separate global Pause Until Tomorrow switch is shown whenever either feature
+has at least one selected scope. It defaults to ON, persists across restarts, and never initiates a pause.
 ON allows automatic resume at the daily reset; OFF makes pauses indefinite.
 Switching it back ON schedules existing pauses for the next reset, without an
 immediate resume or replay of an old expired deadline. Its ON state remains after
@@ -95,7 +102,10 @@ The Delay feature works independently of whether Pause Active controls are shown
 Crossing the cutoff creates a per-vacuum pause governed by the shared preference.
 Temporary time edits always restore at reset, including when the pause preference
 is OFF. Hiding a feature restores its owned changes regardless of the preference;
-it must not discard saved originals. Recovery from an unfinished or failed write
+it must not discard saved originals. Hiding the last scope of a feature has the
+same restoration behavior as disabling that feature. Switching between all-vacuum
+and per-vacuum controls preserves active state while at least one scope remains.
+Recovery from an unfinished or failed write
 continues independently of automatic pause expiration.
 
 These are requirements for the eventual working UI. Do not publish selectable
