@@ -71,11 +71,12 @@ function probeTcp(host, port, timeoutMs) {
 }
 
 describe("UI Server Local Probe - TCP Connection Testing", () => {
-  test("server startup rejects promptly when its port is already in use", async () => {
+  test("server startup rejects when its port is already in use", async () => {
     const server = await createTestServer();
 
     try {
-      await expect(createTestServer(server.address().port)).rejects.toMatchObject({
+      const occupiedPort = server.address().port;
+      await expect(createTestServer(occupiedPort)).rejects.toMatchObject({
         code: "EADDRINUSE",
       });
     } finally {
