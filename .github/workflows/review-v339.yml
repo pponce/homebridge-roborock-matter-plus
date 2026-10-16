@@ -1,69 +1,41 @@
-name: Review v3.39.0 validation
+name: Build isolated v3.39.0 live-test installs
 on:
   push:
     branches: ["review-v339/validation"]
 permissions:
   contents: write
 jobs:
-  verify:
+  install:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        pr: [38]
+        include:
+          - pr: 37
+            sha: b4e9342fcfff73c7ca3897bf48509fdfbd241d6f
+            branch: test-pr37-v339
+          - pr: 38
+            sha: 5ae9c12f1e0fdc26e609bfa7a02f47f17bcd58be
+            branch: test-pr38-v339
+          - pr: 39
+            sha: b7986ee090b0b1dc92913f34c8bd4ff34134047f
+            branch: test-pr39-v339
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: review-v339/pr${{ matrix.pr }}
+          ref: ${{ matrix.sha }}
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
           cache: npm
       - run: npm ci
-      - name: Format candidate
+      - run: npm run build
+      - name: Commit installable build output
         run: |
-          npm run lint:fix
+          test -s dist/index.js
           git config user.name pponce
           git config user.email 8853118+pponce@users.noreply.github.com
-          git add -u
-          if ! git diff --cached --quiet; then
-            git commit -m "Format v3.39.0 review revisions"
-            git push origin HEAD:review-v339/pr${{ matrix.pr }}
-          fi
-      - name: Validate
-        id: validate
-        run: |
-          set +e
-          npm run lint > /tmp/review-lint.log 2>&1
-          lint_status=$?
-          npm run typecheck > /tmp/review-types.log 2>&1
-          types_status=$?
-          npm run build > /tmp/review-build.log 2>&1
-          build_status=$?
-          npm test -- --runInBand --json --outputFile=/tmp/review-tests.json > /tmp/review-tests.log 2>&1
-          tests_status=$?
-          export lint_status types_status build_status tests_status
-          mkdir -p validation-evidence
-          node <<'NODE'
-          const fs = require('fs');
-          const cp = require('child_process');
-          const read = p => fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
-          const result = JSON.parse(read('/tmp/review-tests.json') || '{}');
-          const summary = {
-            sourceSha: cp.execSync('git rev-parse HEAD').toString().trim(),
-            statuses: Object.fromEntries(['lint','types','build','tests'].map(k => [k, Number(process.env[k+'_status'])])),
-            suites: result.numTotalTestSuites, tests: result.numTotalTests,
-            passed: result.numPassedTests, failed: result.numFailedTests,
-            failures: (result.testResults || []).filter(t => t.status !== 'passed').map(t => ({name:t.name, message:t.message.slice(0,12000)})),
-            lint: read('/tmp/review-lint.log').slice(-4000),
-            types: read('/tmp/review-types.log').slice(-12000),
-            build: read('/tmp/review-build.log').slice(-4000),
-            testLog: read('/tmp/review-tests.log').slice(-4000)
-          };
-          fs.writeFileSync('validation-evidence/review.json', JSON.stringify(summary,null,2)+'\n');
-          NODE
-          git add validation-evidence/review.json
-          git commit -m "Record v3.39.0 review validation"
-          git push origin HEAD:review-v339/pr${{ matrix.pr }}
-          cat validation-evidence/review.json
-          test "$lint_status$types_status$build_status$tests_status" = "0000"
+          git add -f dist
+          git commit -m "Build isolated PR #${{ matrix.pr }} for live Homebridge checks"
+          git diff --name-only HEAD^ HEAD | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{if(s.trim().split("\n").some(p=>!p.startsWith("dist/")))process.exit(1)})'
+          git push origin HEAD:${{ matrix.branch }}
