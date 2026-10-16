@@ -1,0 +1,69 @@
+name: Review v3.39.0 validation
+on:
+  push:
+    branches: ["review-v339/validation"]
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: [30, 36, 37]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: review-v339/pr${{ matrix.pr }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Format candidate
+        run: |
+          npm run lint:fix
+          git config user.name pponce
+          git config user.email 8853118+pponce@users.noreply.github.com
+          git add -u
+          if ! git diff --cached --quiet; then
+            git commit -m "Format v3.39.0 review revisions"
+            git push origin HEAD:review-v339/pr${{ matrix.pr }}
+          fi
+      - name: Validate
+        id: validate
+        run: |
+          set +e
+          npm run lint > /tmp/review-lint.log 2>&1
+          lint_status=$?
+          npm run typecheck > /tmp/review-types.log 2>&1
+          types_status=$?
+          npm run build > /tmp/review-build.log 2>&1
+          build_status=$?
+          npm test -- --runInBand --json --outputFile=/tmp/review-tests.json > /tmp/review-tests.log 2>&1
+          tests_status=$?
+          export lint_status types_status build_status tests_status
+          mkdir -p validation-evidence
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+          const read = p => fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+          const result = JSON.parse(read('/tmp/review-tests.json') || '{}');
+          const summary = {
+            sourceSha: cp.execSync('git rev-parse HEAD').toString().trim(),
+            statuses: Object.fromEntries(['lint','types','build','tests'].map(k => [k, Number(process.env[k+'_status'])])),
+            suites: result.numTotalTestSuites, tests: result.numTotalTests,
+            passed: result.numPassedTests, failed: result.numFailedTests,
+            failures: (result.testResults || []).filter(t => t.status !== 'passed').map(t => ({name:t.name, message:t.message.slice(0,12000)})),
+            lint: read('/tmp/review-lint.log').slice(-4000),
+            types: read('/tmp/review-types.log').slice(-12000),
+            build: read('/tmp/review-build.log').slice(-4000),
+            testLog: read('/tmp/review-tests.log').slice(-4000)
+          };
+          fs.writeFileSync('validation-evidence/review.json', JSON.stringify(summary,null,2)+'\n');
+          NODE
+          git add validation-evidence/review.json
+          git commit -m "Record v3.39.0 review validation"
+          git push origin HEAD:review-v339/pr${{ matrix.pr }}
+          cat validation-evidence/review.json
+          test "$lint_status$types_status$build_status$tests_status" = "0000"
