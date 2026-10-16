@@ -39,6 +39,17 @@ const elements = {
     "homekit-state-cleaning-fluid-empty"
   ),
   homeKitActionSchedules: document.getElementById("homekit-action-schedules"),
+  schedulePause: document.getElementById("enable-schedule-pause"),
+  schedulePauseAll: document.getElementById("schedule-pause-all"),
+  schedulePausePerVacuum: document.getElementById("schedule-pause-per-vacuum"),
+  schedulePauseOptions: document.getElementById("schedule-pause-options"),
+  scheduleDelay: document.getElementById("enable-schedule-delay"),
+  scheduleDelayAll: document.getElementById("schedule-delay-all"),
+  scheduleDelayPerVacuum: document.getElementById("schedule-delay-per-vacuum"),
+  scheduleDelayMinutes: document.getElementById("schedule-delay-minutes"),
+  scheduleResetTime: document.getElementById("schedule-reset-time"),
+  scheduleDelayOptions: document.getElementById("schedule-delay-options"),
+  scheduleResetOptions: document.getElementById("schedule-reset-options"),
   homeKitActionRoutines: document.getElementById("homekit-action-routines"),
   matterChargedBatteryThreshold: document.getElementById(
     "matter-charged-battery-threshold"
@@ -46,6 +57,12 @@ const elements = {
   advancedSettings: document.getElementById("advanced-settings"),
   preferCloudForMatterCommands: document.getElementById(
     "prefer-cloud-for-matter-commands"
+  ),
+  enableMqttSessionRecovery: document.getElementById(
+    "enableMqttSessionRecovery"
+  ),
+  enableMqttPreventiveRefresh: document.getElementById(
+    "enableMqttPreventiveRefresh"
   ),
   cloudOnlyMode: document.getElementById("cloud-only-mode"),
   transientWarningThrottleHours: document.getElementById(
@@ -220,6 +237,28 @@ async function loadConfig() {
     }
     syncActionSwitchAvailability();
     syncFeatureDependencies();
+    if (elements.schedulePause)
+      elements.schedulePause.checked =
+        config.enableSchedulePauseUntilTomorrow === true;
+    if (elements.schedulePauseAll)
+      elements.schedulePauseAll.checked = config.schedulePauseAll !== false;
+    if (elements.schedulePausePerVacuum)
+      elements.schedulePausePerVacuum.checked =
+        config.schedulePausePerVacuum === true;
+    if (elements.scheduleDelay)
+      elements.scheduleDelay.checked = config.enableScheduleDelay === true;
+    if (elements.scheduleDelayAll)
+      elements.scheduleDelayAll.checked = config.scheduleDelayAll !== false;
+    if (elements.scheduleDelayPerVacuum)
+      elements.scheduleDelayPerVacuum.checked =
+        config.scheduleDelayPerVacuum === true;
+    if (elements.scheduleDelayMinutes)
+      elements.scheduleDelayMinutes.value = String(
+        config.scheduleDelayMinutes ?? 60
+      );
+    if (elements.scheduleResetTime)
+      elements.scheduleResetTime.value = config.scheduleResetTime ?? "00:05";
+    syncScheduleControlOptions();
     if (elements.matterChargedBatteryThreshold) {
       elements.matterChargedBatteryThreshold.value =
         config.matterChargedBatteryThreshold != null
@@ -229,10 +268,18 @@ async function loadConfig() {
     elements.preferCloudForMatterCommands.checked = Boolean(
       config.preferCloudForMatterCommands
     );
+    if (elements.enableMqttSessionRecovery)
+      elements.enableMqttSessionRecovery.checked =
+        config.enableMqttSessionRecovery === true;
+    if (elements.enableMqttPreventiveRefresh)
+      elements.enableMqttPreventiveRefresh.checked =
+        config.enableMqttPreventiveRefresh === true;
     elements.cloudOnlyMode.checked = Boolean(config.cloudOnlyMode);
     elements.advancedSettings.open = Boolean(
       config.debugMode ||
         config.preferCloudForMatterCommands ||
+        config.enableMqttSessionRecovery ||
+        config.enableMqttPreventiveRefresh ||
         config.cloudOnlyMode
     );
     elements.transientWarningThrottleHours.value =
@@ -545,6 +592,37 @@ function applyStateSensorSelection(selection) {
  */
 function syncFeatureDependencies() {}
 
+function syncScheduleControlOptions() {
+  elements.schedulePauseOptions?.classList.toggle(
+    "hidden",
+    !elements.schedulePause?.checked
+  );
+  elements.scheduleDelayOptions?.classList.toggle(
+    "hidden",
+    !elements.scheduleDelay?.checked
+  );
+  elements.scheduleResetOptions?.classList.toggle(
+    "hidden",
+    !(elements.schedulePause?.checked || elements.scheduleDelay?.checked)
+  );
+}
+
+function getScheduleDelayMinutes() {
+  const value = Number(elements.scheduleDelayMinutes?.value || 60);
+  if (!Number.isInteger(value) || value < 1 || value > 1440)
+    throw new Error(
+      "Delay interval must be a whole number from 1 to 1440 minutes."
+    );
+  return value;
+}
+
+function getScheduleResetTime() {
+  const value = elements.scheduleResetTime?.value || "00:05";
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))
+    throw new Error("Daily reset time must be HH:mm.");
+  return value;
+}
+
 /** Grey out the per-action and per-state boxes while their feature is off. */
 function syncActionSwitchAvailability() {
   const on = Boolean(elements.enableHomeKitActionSwitches?.checked);
@@ -660,6 +738,8 @@ const AUTO_SAVED_FIELDS = [
   "debugMode",
   "matterChargedBatteryThreshold",
   "preferCloudForMatterCommands",
+  "enableMqttSessionRecovery",
+  "enableMqttPreventiveRefresh",
   "cloudOnlyMode",
   "transientWarningThrottleHours",
 ];
@@ -675,6 +755,14 @@ function pickFields(source, keys) {
 
 function getFormValues() {
   return {
+    enableSchedulePauseUntilTomorrow: Boolean(elements.schedulePause?.checked),
+    schedulePauseAll: elements.schedulePauseAll?.checked ?? true,
+    schedulePausePerVacuum: Boolean(elements.schedulePausePerVacuum?.checked),
+    enableScheduleDelay: Boolean(elements.scheduleDelay?.checked),
+    scheduleDelayAll: elements.scheduleDelayAll?.checked ?? true,
+    scheduleDelayPerVacuum: Boolean(elements.scheduleDelayPerVacuum?.checked),
+    scheduleDelayMinutes: getScheduleDelayMinutes(),
+    scheduleResetTime: getScheduleResetTime(),
     email: getEmail(),
     password: getPassword(),
     baseURL: getBaseUrl(),
@@ -696,6 +784,12 @@ function getFormValues() {
     ),
     matterChargedBatteryThreshold: getMatterChargedBatteryThreshold(),
     preferCloudForMatterCommands: getPreferCloudForMatterCommands(),
+    enableMqttSessionRecovery: Boolean(
+      elements.enableMqttSessionRecovery?.checked
+    ),
+    enableMqttPreventiveRefresh: Boolean(
+      elements.enableMqttPreventiveRefresh?.checked
+    ),
     cloudOnlyMode: getCloudOnlyMode(),
     transientWarningThrottleHours: getTransientWarningThrottleHours(),
   };
@@ -1842,6 +1936,7 @@ function init() {
   // callout for a feature that is switched off.
   syncActionSwitchAvailability();
   syncFeatureDependencies();
+  syncScheduleControlOptions();
   loadManagedDevices().catch(() => {});
   if (elements.refreshDevices) {
     elements.refreshDevices.addEventListener("click", () =>
@@ -1897,6 +1992,14 @@ function init() {
     });
   }
   elements.login.addEventListener("click", login);
+  elements.schedulePause?.addEventListener(
+    "change",
+    syncScheduleControlOptions
+  );
+  elements.scheduleDelay?.addEventListener(
+    "change",
+    syncScheduleControlOptions
+  );
   elements.send2fa.addEventListener("click", sendTwoFactorEmail);
   elements.verify2fa.addEventListener("click", verifyTwoFactorCode);
   elements.logout.addEventListener("click", logout);
@@ -1933,6 +2036,12 @@ function init() {
     );
   }
   elements.preferCloudForMatterCommands.addEventListener("change", () =>
+    autoSave()
+  );
+  elements.enableMqttSessionRecovery?.addEventListener("change", () =>
+    autoSave()
+  );
+  elements.enableMqttPreventiveRefresh?.addEventListener("change", () =>
     autoSave()
   );
   elements.cloudOnlyMode.addEventListener("change", () => autoSave());
