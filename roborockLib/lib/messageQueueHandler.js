@@ -525,7 +525,9 @@ class messageQueueHandler {
       (deviceOnline || allowOfflineCloudSend)
     ) {
       // Readiness and response have separate budgets. No pending RPC exists yet.
-      await this.adapter.rr_mqtt_connector.waitUntilReady?.({ timeoutMs: options.cloudGateTimeoutMs || 10000 });
+      await this.adapter.rr_mqtt_connector.waitUntilReady?.({
+        timeoutMs: options.cloudGateTimeoutMs || 10000,
+      });
       mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
       deviceOnline = await this.adapter.onlineChecker(duid);
     }
@@ -766,8 +768,12 @@ class messageQueueHandler {
             secure,
             method,
             duid,
-            operationClass: options.operationClass || (secure ? "secure-map" : /^get_/.test(method) ? "read" : "write"),
-            sessionGeneration: useCloudConnection ? this.adapter.rr_mqtt_connector.getSessionGeneration?.() : undefined,
+            operationClass:
+              options.operationClass ||
+              (secure ? "secure-map" : /^get_/.test(method) ? "read" : "write"),
+            sessionGeneration: useCloudConnection
+              ? this.adapter.rr_mqtt_connector.getSessionGeneration?.()
+              : undefined,
             createdAt: Date.now(),
             publishedAt: /** @type {number | null} */ (null),
             transport: useCloudConnection ? "cloud" : "local",

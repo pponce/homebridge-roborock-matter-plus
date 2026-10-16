@@ -8,12 +8,12 @@ In plugin settings, enable either or both options under **Extra Schedule control
 They are off by default and are independent of the other Home app action switches.
 Pair the plugin's Homebridge child bridge with HomeKit to see these switches.
 
-| Control | What it does |
-| --- | --- |
-| Pause Active | ON pauses schedules and docks active cleaning. OFF restores the schedules owned by that pause. |
-| Pause Until Tomorrow | One shared preference, ON by default. ON allows pauses to end at the daily reset. OFF keeps pauses indefinite. It does not start or immediately end a pause. |
-| Delay X Minutes | A momentary switch that resets OFF after 1.5 seconds, independently of cloud success. Each press docks active cleaning and adds the configured interval to today's eligible schedules. |
-| Delay Active | ON reflects an active delay. OFF cancels it and restores original times. Manually turning it ON while inactive applies one interval; use the momentary switch to add further intervals. |
+| Control              | What it does                                                                                                                                                                            |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pause Active         | ON pauses schedules and docks active cleaning. OFF restores the schedules owned by that pause.                                                                                          |
+| Pause Until Tomorrow | One shared preference, ON by default. ON allows pauses to end at the daily reset. OFF keeps pauses indefinite. It does not start or immediately end a pause.                            |
+| Delay X Minutes      | A momentary switch that resets OFF after 1.5 seconds, independently of cloud success. Each press docks active cleaning and adds the configured interval to today's eligible schedules.  |
+| Delay Active         | ON reflects an active delay. OFF cancels it and restores original times. Manually turning it ON while inactive applies one interval; use the momentary switch to add further intervals. |
 
 Under each feature, choose the all-vacuums controls, per-vacuum controls, or both.
 Only the all-vacuums option is selected by default. The per-vacuum delay option

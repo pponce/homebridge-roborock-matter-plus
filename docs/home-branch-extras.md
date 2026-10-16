@@ -10,7 +10,7 @@ This inventory compares `MQTT_ACCOUNT_SESSION_RECOVERY` with upstream v3.37.0 pl
 | [#30](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/30) | `bb1777a32c98bcca35570023eddb6140aa7cbd59` | Strictly cross-robot breaker exemption                                                       |
 | [#31](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/31) | `a59ba5a96cdcfe3a7994b5d571237cfdf627ae66` | Experimental recreation, optional preventive refresh, recovery diagnostics                   |
 | [#32](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/32) | `3d1a03f3cc519defceaf0a1b8b6219881a967b8d` | Schedule-write reconciliation and duplicate-write suppression                                |
-| [#36](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/36) | `d68690f03f36745e10e2ade5aa03649d6db3cdc4` | Presence-only logging with first live report at info                         |
+| [#36](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/36) | `d68690f03f36745e10e2ade5aa03649d6db3cdc4` | Presence-only logging with first live report at info                                         |
 | [#37](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/37) | `bc469f1cd770e3b4639f773d592a4e655d88d552` | Ordinary MQTT readiness gate, separate publication/response budgets, unsent-request handling |
 | [#38](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/38) | `91c4e05e87151588d5b8d558882fac320f620b8b` | Optimistic schedule display, explicit rollback and newer-intent protection                   |
 
@@ -90,7 +90,6 @@ These are not additional user-facing features. They are preserved so integration
 The home branch keeps the extras while adopting the submitted PR behavior wherever the features overlap. Which of the remaining pieces should become focused upstream follow-ups, and which should stay fork-specific? In particular, should the ordinary fresh-client lifecycle and the metadata it requires be reviewed together? Are the small lifecycle safeguards useful independently of that implementation? Immediate shutdown ordering can remain parked as requested.
 
 The #36 split is implemented: presence-only logging remains in #36, and momentary actions are prepared independently in `momentary-action-acknowledgement`. Retained snapshots stay debug-only; each robot's first live presence is informational once per plugin lifetime. The focused code and integrated home branch have separate automated validation. Physical-robot acknowledgement/failure checks remain pending and must be reported as integration-branch observations when testing this home branch.
-
 
 ## Integration on upstream v3.39.0 (16 October 2026)
 

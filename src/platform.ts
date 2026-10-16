@@ -31,7 +31,10 @@ import RoborockHapScheduleAccessory, {
 } from "./hap_schedule_accessory";
 
 import RoborockPlatformLogger from "./logger";
-import { NativeScheduleControls, isNativeScheduleControl } from "./native_schedule_controls";
+import {
+  NativeScheduleControls,
+  isNativeScheduleControl,
+} from "./native_schedule_controls";
 import {
   HomeKitActionKey,
   HomeKitStateSensorKey,
@@ -195,7 +198,12 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       storagePath: storagePath,
       errorLogThrottleMs: transientWarningThrottleHours * 60 * 60 * 1000,
     });
-    this.nativeScheduleControls = new NativeScheduleControls(this, this.accessories, this.scheduleAccountCoordinator, storagePath);
+    this.nativeScheduleControls = new NativeScheduleControls(
+      this,
+      this.accessories,
+      this.scheduleAccountCoordinator,
+      storagePath
+    );
 
     /**
      * When this event is fired it means Homebridge has restored all cached accessories from disk.
@@ -253,7 +261,9 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       for (const schedule of this.hapScheduleAccessories.values()) {
         step("schedule shutdown", () => schedule.shutdown());
       }
-      step("native schedule controls shutdown", () => this.nativeScheduleControls?.dispose());
+      step("native schedule controls shutdown", () =>
+        this.nativeScheduleControls?.dispose()
+      );
 
       if (this.roborockAPI) {
         step("stopService", () => {
@@ -1625,7 +1635,9 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
   private logHapPairingHint(): void {
     const parts: string[] = [];
     if (this.nativeScheduleControls?.size > 0) {
-      parts.push(`${this.nativeScheduleControls.size} schedule control switches`);
+      parts.push(
+        `${this.nativeScheduleControls.size} schedule control switches`
+      );
     }
     if (this.actionSwitches.size > 0) {
       parts.push(

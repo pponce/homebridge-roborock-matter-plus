@@ -28,7 +28,13 @@ class MqttReadiness {
   }
 
   wait(timeoutMs = 10000, signal) {
-    if (signal?.aborted) return Promise.reject(readinessError("MQTT readiness wait was cancelled; this command was not sent.", "MQTT_READINESS_CANCELLED"));
+    if (signal?.aborted)
+      return Promise.reject(
+        readinessError(
+          "MQTT readiness wait was cancelled; this command was not sent.",
+          "MQTT_READINESS_CANCELLED"
+        )
+      );
     if (this.stopped)
       return Promise.reject(
         readinessError(
@@ -49,7 +55,13 @@ class MqttReadiness {
         if (error) reject(error);
         else resolve(this.generation());
       };
-      const abort = () => finish(readinessError("MQTT readiness wait was cancelled; this command was not sent.", "MQTT_READINESS_CANCELLED"));
+      const abort = () =>
+        finish(
+          readinessError(
+            "MQTT readiness wait was cancelled; this command was not sent.",
+            "MQTT_READINESS_CANCELLED"
+          )
+        );
       const waiter = {
         ready: () => finish(null),
         stop: () =>

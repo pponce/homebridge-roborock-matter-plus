@@ -285,11 +285,17 @@ test("a retried initUser reopens the readiness gate after retiring the previous 
 
 test("native schedule controls can bound readiness to eight seconds without publishing", async () => {
   mockClients[0].handlers.get("close")();
-  const { result } = await startRequest("robot-a", "upd_timer", { cloudGateTimeoutMs: 8000, operationClass: "write" });
+  const { result } = await startRequest("robot-a", "upd_timer", {
+    cloudGateTimeoutMs: 8000,
+    operationClass: "write",
+  });
   await jest.advanceTimersByTimeAsync(7999);
   expect(connector.readiness.waiters.size).toBe(1);
   await jest.advanceTimersByTimeAsync(1);
-  expect(await result).toMatchObject({ code: "MQTT_READINESS_TIMEOUT", requestNotSent: true });
+  expect(await result).toMatchObject({
+    code: "MQTT_READINESS_TIMEOUT",
+    requestNotSent: true,
+  });
   expect(mockClients[0].publish).not.toHaveBeenCalled();
   expect(adapter.pendingRequests.size).toBe(0);
 });
@@ -297,10 +303,15 @@ test("native schedule controls can bound readiness to eight seconds without publ
 test("cancelling one readiness waiter leaves another waiting for SUBACK", async () => {
   mockClients[0].handlers.get("close")();
   const abort = new AbortController();
-  const cancelled = connector.waitUntilReady({ signal: abort.signal }).catch(error => error);
+  const cancelled = connector
+    .waitUntilReady({ signal: abort.signal })
+    .catch((error) => error);
   const ready = connector.waitUntilReady();
   abort.abort();
-  expect(await cancelled).toMatchObject({ code: "MQTT_READINESS_CANCELLED", requestNotSent: true });
+  expect(await cancelled).toMatchObject({
+    code: "MQTT_READINESS_CANCELLED",
+    requestNotSent: true,
+  });
   expect(connector.readiness.waiters.size).toBe(1);
   mockClients[0].handlers.get("connect")({});
   acknowledge();
@@ -310,15 +321,32 @@ test("cancelling one readiness waiter leaves another waiting for SUBACK", async 
 
 test("ordinary recovery replaces the client, rejects an uncertain write and leaves LAN requests alone", async () => {
   expect(connector.recovery).toBeNull();
-  const request = await startRequest("robot-a", "upd_timer", { operationClass: "write" });
+  const request = await startRequest("robot-a", "upd_timer", {
+    operationClass: "write",
+  });
   const metadata = adapter.pendingRequests.get(request.id);
-  expect(metadata).toMatchObject({ duid: "robot-a", operationClass: "write", sessionGeneration: 1, publishedAt: Date.now() });
-  const local = { transport: "local", reject: jest.fn(), timeout: setTimeout(() => {}, 10000) };
+  expect(metadata).toMatchObject({
+    duid: "robot-a",
+    operationClass: "write",
+    sessionGeneration: 1,
+    publishedAt: Date.now(),
+  });
+  const local = {
+    transport: "local",
+    reject: jest.fn(),
+    timeout: setTimeout(() => {}, 10000),
+  };
   adapter.pendingRequests.set(999, local);
   const old = mockClients[0];
   const replacement = connector.reconnectClient(true);
   await jest.advanceTimersByTimeAsync(500);
-  expect(await request.result).toMatchObject({ code: "MQTT_SESSION_REPLACED", ambiguousWrite: true, method: "upd_timer", generation: 1, unansweredRequest: false });
+  expect(await request.result).toMatchObject({
+    code: "MQTT_SESSION_REPLACED",
+    ambiguousWrite: true,
+    method: "upd_timer",
+    generation: 1,
+    unansweredRequest: false,
+  });
   expect(adapter.pendingRequests.get(999)).toBe(local);
   expect(local.reject).not.toHaveBeenCalled();
   expect(old.endAsync).toHaveBeenCalledWith(true);
@@ -368,6 +396,13 @@ test("health diagnostics retain robot-specific activity ages", async () => {
   receive(reply(request.id));
   await request.result;
   await jest.advanceTimersByTimeAsync(1000);
-  expect(connector.getSessionHealthSnapshot("robot-a")).toMatchObject({ state: "ready", lastDecodedInboundAgeMs: 1000, lastCorrelatedReplyAgeMs: 1000 });
-  expect(connector.getSessionHealthSnapshot("robot-b")).toMatchObject({ lastDecodedInboundAgeMs: null, lastCorrelatedReplyAgeMs: null });
+  expect(connector.getSessionHealthSnapshot("robot-a")).toMatchObject({
+    state: "ready",
+    lastDecodedInboundAgeMs: 1000,
+    lastCorrelatedReplyAgeMs: 1000,
+  });
+  expect(connector.getSessionHealthSnapshot("robot-b")).toMatchObject({
+    lastDecodedInboundAgeMs: null,
+    lastCorrelatedReplyAgeMs: null,
+  });
 });

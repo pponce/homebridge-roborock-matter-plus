@@ -227,7 +227,10 @@ class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
     this.lifecycle = new MqttSessionRecovery(this);
-    this.recovery = adapter.config?.enableMqttSessionRecovery === true ? this.lifecycle : null;
+    this.recovery =
+      adapter.config?.enableMqttSessionRecovery === true
+        ? this.lifecycle
+        : null;
     this.activityByDuid = new Map();
     // Last live presence value per robot; log suppression only.
     this.robotPresenceByDuid = new Map();
@@ -270,7 +273,10 @@ class roborock_mqtt_connector {
     this.disconnect();
     this.readiness.start();
     this.lifecycle = new MqttSessionRecovery(this);
-    this.recovery = this.adapter.config?.enableMqttSessionRecovery === true ? this.lifecycle : null;
+    this.recovery =
+      this.adapter.config?.enableMqttSessionRecovery === true
+        ? this.lifecycle
+        : null;
     this.rriot = userdata.rriot;
 
     this.endpoint = roborockCrypto
@@ -943,7 +949,9 @@ class roborock_mqtt_connector {
     return this.readiness.wait(timeoutMs, signal);
   }
 
-  getSessionGeneration() { return this.sessionDiagnostics.generation; }
+  getSessionGeneration() {
+    return this.sessionDiagnostics.generation;
+  }
 
   noteSessionActivity(stage, duid) {
     this.sessionDiagnostics.noteActivity(stage);
@@ -957,17 +965,31 @@ class roborock_mqtt_connector {
   getSessionHealthSnapshot(duid) {
     const snapshot = this.sessionDiagnostics.snapshot();
     const activity = this.activityByDuid.get(duid);
-    const age = value => typeof value === "number" ? Math.max(0, performance.now() - value) : null;
+    const age = (value) =>
+      typeof value === "number" ? Math.max(0, performance.now() - value) : null;
     return {
-      ...snapshot, state: this.readiness.stopped ? "shutting-down" : this.isReady() ? "ready" : "disconnected",
-      socketConnected: snapshot.connected, subscriptionReady: snapshot.subscriptionAcknowledged,
+      ...snapshot,
+      state: this.readiness.stopped
+        ? "shutting-down"
+        : this.isReady()
+          ? "ready"
+          : "disconnected",
+      socketConnected: snapshot.connected,
+      subscriptionReady: snapshot.subscriptionAcknowledged,
       readyAgeMs: age(this.lifecycle.readyAt),
-      ...(duid ? { lastDecodedInboundAgeMs: age(activity?.decoded), lastCorrelatedReplyAgeMs: age(activity?.correlated) } : {}),
+      ...(duid
+        ? {
+            lastDecodedInboundAgeMs: age(activity?.decoded),
+            lastCorrelatedReplyAgeMs: age(activity?.correlated),
+          }
+        : {}),
     };
   }
 
   reconnectAndWaitReady({ reason = "manual", mode } = {}) {
-    return this.lifecycle.recreate(mode === "preventive" ? "preventive" : reason);
+    return this.lifecycle.recreate(
+      mode === "preventive" ? "preventive" : reason
+    );
   }
 
   sendMessage(duid, roborockMessage, onNotSent) {
@@ -1109,7 +1131,6 @@ class roborock_mqtt_connector {
     // The caller's default silence rule has already recorded its own cooldown.
     return this.lifecycle.recreate("connection-unavailable");
   }
-
 }
 
 /**

@@ -69,16 +69,16 @@ migration instructions. Both features remain disabled by default.
 
 Expose two independent feature options under Extra Schedule controls:
 
-| Setting | Default | Visibility and effect |
-| --- | --- | --- |
-| Pause Schedules | Off | Enables the selected Pause Active controls below it. |
-| Pause all vacuums switch | On | Indented beneath Pause Schedules; adds the all-vacuums Pause Active control. |
-| Per vacuum pause switches | Off | Indented beneath Pause Schedules; adds Pause Active for each vacuum. |
-| Delay Schedules | Off | Enables the selected momentary Delay for X and stateful Delay Active controls below it. |
-| Delay all vacuums switch | On | Indented beneath Delay Schedules; adds the all-vacuums delay pair. |
-| Per vacuum Delay switches | Off | Indented beneath Delay Schedules; adds the delay pair for each vacuum. |
-| Delay interval (minutes) | 60 | Shown beneath Enable Delay Schedules when enabled; shared by every delay switch. |
-| Daily reset time | 00:05 | Shown once when either feature is enabled; shared by both features and their individual/all-vacuum controls. |
+| Setting                   | Default | Visibility and effect                                                                                        |
+| ------------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| Pause Schedules           | Off     | Enables the selected Pause Active controls below it.                                                         |
+| Pause all vacuums switch  | On      | Indented beneath Pause Schedules; adds the all-vacuums Pause Active control.                                 |
+| Per vacuum pause switches | Off     | Indented beneath Pause Schedules; adds Pause Active for each vacuum.                                         |
+| Delay Schedules           | Off     | Enables the selected momentary Delay for X and stateful Delay Active controls below it.                      |
+| Delay all vacuums switch  | On      | Indented beneath Delay Schedules; adds the all-vacuums delay pair.                                           |
+| Per vacuum Delay switches | Off     | Indented beneath Delay Schedules; adds the delay pair for each vacuum.                                       |
+| Delay interval (minutes)  | 60      | Shown beneath Enable Delay Schedules when enabled; shared by every delay switch.                             |
+| Daily reset time          | 00:05   | Shown once when either feature is enabled; shared by both features and their individual/all-vacuum controls. |
 
 The options are independent; users may enable either one or both. Enabling both
 features with their default selections adds four switches, including the shared

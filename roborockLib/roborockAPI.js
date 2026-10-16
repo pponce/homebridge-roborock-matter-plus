@@ -2072,8 +2072,13 @@ class Roborock {
           this.reconnectIntervall = this.setInterval(async () => {
             this.log.debug(`Running MQTT health check.`);
 
-            try { await this.rr_mqtt_connector.ensureConnected(); }
-            catch (error) { this.log.warn(`MQTT health check failed: ${error?.message || error}.`); }
+            try {
+              await this.rr_mqtt_connector.ensureConnected();
+            } catch (error) {
+              this.log.warn(
+                `MQTT health check failed: ${error?.message || error}.`
+              );
+            }
           }, 3600 * 1000);
 
           this.homedataInterval = this.setInterval(
@@ -2280,7 +2285,8 @@ class Roborock {
   }
 
   async recoverMqttSession(options = {}) {
-    if (this.stopped) throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
+    if (this.stopped)
+      throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
     return this.rr_mqtt_connector.reconnectAndWaitReady(options);
   }
 
@@ -5026,7 +5032,9 @@ class Roborock {
         );
       }
     } catch {
-      this.log.debug("Schedule time inspection unavailable; normal discovery continues.");
+      this.log.debug(
+        "Schedule time inspection unavailable; normal discovery continues."
+      );
     }
 
     // A HomeKit switch over these schedules has to WRITE, and the only write
@@ -5969,9 +5977,18 @@ class Roborock {
 
     let entry;
     const promise = new Promise((resolve, reject) => {
-      entry = { resolve, reject, timeout: undefined, duid, transport: "cloud",
-        operationClass: "secure-map", sessionGeneration: this.rr_mqtt_connector.getSessionGeneration?.(),
-        method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD, createdAt: Date.now(), publishedAt: null };
+      entry = {
+        resolve,
+        reject,
+        timeout: undefined,
+        duid,
+        transport: "cloud",
+        operationClass: "secure-map",
+        sessionGeneration: this.rr_mqtt_connector.getSessionGeneration?.(),
+        method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD,
+        createdAt: Date.now(),
+        publishedAt: null,
+      };
     });
     entry.promise = promise;
     this.pendingB01MapRequests.set(duid, entry);

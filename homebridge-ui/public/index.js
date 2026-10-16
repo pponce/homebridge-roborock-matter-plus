@@ -237,14 +237,27 @@ async function loadConfig() {
     }
     syncActionSwitchAvailability();
     syncFeatureDependencies();
-    if (elements.schedulePause) elements.schedulePause.checked = config.enableSchedulePauseUntilTomorrow === true;
-    if (elements.schedulePauseAll) elements.schedulePauseAll.checked = config.schedulePauseAll !== false;
-    if (elements.schedulePausePerVacuum) elements.schedulePausePerVacuum.checked = config.schedulePausePerVacuum === true;
-    if (elements.scheduleDelay) elements.scheduleDelay.checked = config.enableScheduleDelay === true;
-    if (elements.scheduleDelayAll) elements.scheduleDelayAll.checked = config.scheduleDelayAll !== false;
-    if (elements.scheduleDelayPerVacuum) elements.scheduleDelayPerVacuum.checked = config.scheduleDelayPerVacuum === true;
-    if (elements.scheduleDelayMinutes) elements.scheduleDelayMinutes.value = String(config.scheduleDelayMinutes ?? 60);
-    if (elements.scheduleResetTime) elements.scheduleResetTime.value = config.scheduleResetTime ?? "00:05";
+    if (elements.schedulePause)
+      elements.schedulePause.checked =
+        config.enableSchedulePauseUntilTomorrow === true;
+    if (elements.schedulePauseAll)
+      elements.schedulePauseAll.checked = config.schedulePauseAll !== false;
+    if (elements.schedulePausePerVacuum)
+      elements.schedulePausePerVacuum.checked =
+        config.schedulePausePerVacuum === true;
+    if (elements.scheduleDelay)
+      elements.scheduleDelay.checked = config.enableScheduleDelay === true;
+    if (elements.scheduleDelayAll)
+      elements.scheduleDelayAll.checked = config.scheduleDelayAll !== false;
+    if (elements.scheduleDelayPerVacuum)
+      elements.scheduleDelayPerVacuum.checked =
+        config.scheduleDelayPerVacuum === true;
+    if (elements.scheduleDelayMinutes)
+      elements.scheduleDelayMinutes.value = String(
+        config.scheduleDelayMinutes ?? 60
+      );
+    if (elements.scheduleResetTime)
+      elements.scheduleResetTime.value = config.scheduleResetTime ?? "00:05";
     syncScheduleControlOptions();
     if (elements.matterChargedBatteryThreshold) {
       elements.matterChargedBatteryThreshold.value =
@@ -580,20 +593,33 @@ function applyStateSensorSelection(selection) {
 function syncFeatureDependencies() {}
 
 function syncScheduleControlOptions() {
-  elements.schedulePauseOptions?.classList.toggle("hidden", !elements.schedulePause?.checked);
-  elements.scheduleDelayOptions?.classList.toggle("hidden", !elements.scheduleDelay?.checked);
-  elements.scheduleResetOptions?.classList.toggle("hidden", !(elements.schedulePause?.checked || elements.scheduleDelay?.checked));
+  elements.schedulePauseOptions?.classList.toggle(
+    "hidden",
+    !elements.schedulePause?.checked
+  );
+  elements.scheduleDelayOptions?.classList.toggle(
+    "hidden",
+    !elements.scheduleDelay?.checked
+  );
+  elements.scheduleResetOptions?.classList.toggle(
+    "hidden",
+    !(elements.schedulePause?.checked || elements.scheduleDelay?.checked)
+  );
 }
 
 function getScheduleDelayMinutes() {
   const value = Number(elements.scheduleDelayMinutes?.value || 60);
-  if (!Number.isInteger(value) || value < 1 || value > 1440) throw new Error("Delay interval must be a whole number from 1 to 1440 minutes.");
+  if (!Number.isInteger(value) || value < 1 || value > 1440)
+    throw new Error(
+      "Delay interval must be a whole number from 1 to 1440 minutes."
+    );
   return value;
 }
 
 function getScheduleResetTime() {
   const value = elements.scheduleResetTime?.value || "00:05";
-  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new Error("Daily reset time must be HH:mm.");
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))
+    throw new Error("Daily reset time must be HH:mm.");
   return value;
 }
 
@@ -1966,8 +1992,14 @@ function init() {
     });
   }
   elements.login.addEventListener("click", login);
-  elements.schedulePause?.addEventListener("change", syncScheduleControlOptions);
-  elements.scheduleDelay?.addEventListener("change", syncScheduleControlOptions);
+  elements.schedulePause?.addEventListener(
+    "change",
+    syncScheduleControlOptions
+  );
+  elements.scheduleDelay?.addEventListener(
+    "change",
+    syncScheduleControlOptions
+  );
   elements.send2fa.addEventListener("click", sendTwoFactorEmail);
   elements.verify2fa.addEventListener("click", verifyTwoFactorCode);
   elements.logout.addEventListener("click", logout);
