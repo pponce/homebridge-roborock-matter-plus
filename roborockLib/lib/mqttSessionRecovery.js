@@ -112,20 +112,19 @@ class MqttSessionRecovery {
 
   rejectPending() {
     for (const { map, key, request } of this.pending()) {
-      if (request.timeout !== undefined)
-        this.adapter.clearTimeout(request.timeout);
+      if (request.timeout !== undefined) this.adapter.clearTimeout(request.timeout);
       map.delete(key);
       // Teardown is not a robot reply; keep upstream silence/breaker evidence.
       (request.abandon ?? request.reject)(
         Object.assign(
           new Error(
-            "The MQTT session was replaced before a reply arrived. The command outcome is unknown; it was not replayed."
+            this.stopped
+              ? "MQTT is shutting down before a reply arrived. The command outcome is unknown; it was not replayed."
+              : "The MQTT session was replaced before a reply arrived. The command outcome is unknown; it was not replayed."
           ),
           {
             code: "MQTT_SESSION_REPLACED",
-            generation:
-              request.sessionGeneration ??
-              this.connector.getSessionGeneration(),
+            generation: request.sessionGeneration ?? this.connector.getSessionGeneration(),
             method: request.method,
             operationClass: request.operationClass,
             ambiguousWrite: request.operationClass === "write",
@@ -198,9 +197,7 @@ class MqttSessionRecovery {
     // New sends wait on the ordinary readiness gate while the old client drains.
     this.lastReason = reason;
     this.lastResult = "in-progress";
-    this.adapter.log.info(
-      `MQTT session recreation starting: reason=${reason}; generation=${this.connector.getSessionGeneration()}.`
-    );
+    this.adapter.log.info(`MQTT session recreation starting: reason=${reason}; generation=${this.connector.getSessionGeneration()}.`);
     this.recovering = true;
     this.sendPaused = true;
     this.nextAllowedAt = performance.now() + COOLDOWN_MS;
