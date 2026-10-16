@@ -283,16 +283,19 @@ test("expired cross-robot evidence allows ordinary counting again", async () => 
   expect(outcomes.at(-1).counted).toBe(true);
 });
 
-test("subscription failure cannot create the signal used to suppress counts", async () => {
+test("an unacknowledged subscription supplies no correlated-silence evidence", async () => {
   govern("robot-a");
   govern("robot-b");
   mockHandlers.get("connect")({ sessionPresent: false });
   mockSubscriptions.at(-1)(null, [{ qos: 128 }]);
   await timeout("robot-a", "get_consumable");
   const error = await timeout("robot-b", "get_consumable");
-  expect(connector.isConnected()).toBe(true);
-  expect(isUnansweredRequest(error)).toBe(true);
-  expect(outcomes.filter((o) => o.counted)).toHaveLength(2);
+  expect(connector.sessionDiagnostics.connected).toBe(true);
+  expect(snapshot().correlatedSilenceObserved).toBe(false);
+  expect(error.accountSessionWasSilent).not.toBe(true);
+  // With the readiness gate, nothing is published or counted. Without it,
+  // published timeouts retain normal breaker accounting, never an exemption.
+  expect(outcomes.filter((o) => o.counted)).toHaveLength(mockClient.publish.mock.calls.length);
 });
 
 test("missing instrumentation keeps the existing timeout classification", async () => {
