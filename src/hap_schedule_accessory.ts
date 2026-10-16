@@ -1374,6 +1374,7 @@ export default class RoborockHapScheduleAccessory {
           : "serverTimer"
       ) === true;
     const fallback: ScheduleWriteRequest[] = [];
+    let primaryConfirmed = 0;
     for (const request of candidates) {
       if (!verified(verification, request)) {
         failures.set(
@@ -1394,6 +1395,7 @@ export default class RoborockHapScheduleAccessory {
           )
         );
       } else if (this.cachedScheduleMatches(request)) {
+        primaryConfirmed++;
         failures.delete(request.scheduleId);
       } else if (
         !isCloudSceneScheduleId(request.scheduleId) ||
@@ -1412,9 +1414,6 @@ export default class RoborockHapScheduleAccessory {
 
     // Only absolute on/off assignments are retried, once, after a successful
     // read demonstrated that the existing schedule still has the other state.
-    const primaryConfirmed = candidates.filter(
-      (request) => !failures.has(request.scheduleId)
-    ).length;
     const finalCandidates: ScheduleWriteRequest[] = [];
     for (let index = 0; index < fallback.length; index++) {
       const request = fallback[index];
