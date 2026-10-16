@@ -894,10 +894,16 @@ class roborock_mqtt_connector {
   }
 
   sendMessage(duid, roborockMessage, onNotSent) {
-    this.readiness.assertReady();
     if (!client) {
       // Shut down between the caller's connection check and this publish.
       onNotSent?.(new Error("The MQTT client is closed"));
+      return;
+    }
+    try {
+      this.readiness.assertReady();
+    } catch (error) {
+      if (!onNotSent) throw error;
+      onNotSent(error);
       return;
     }
     client.publish(

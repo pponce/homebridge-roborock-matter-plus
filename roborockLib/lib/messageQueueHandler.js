@@ -183,6 +183,7 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
  * @typedef {Object} MqttConnector
  * @property {import("./mqttSessionDiagnostics").MqttSessionDiagnostics} [sessionDiagnostics]
  * @property {(options?: {timeoutMs?: number}) => Promise<number>} [waitUntilReady]
+ * @property {() => boolean} [isReady]
  * @property {() => boolean} isConnected
  * @property {(duid: string, message: Buffer, onNotSent?: (error: Error) => void) => void} sendMessage
  */
@@ -777,7 +778,7 @@ class messageQueueHandler {
                   () => {
                     const pending = this.adapter.pendingRequests.get(messageID);
                     if (!pending) return;
-                    this.adapter.clearTimeout(pending.timeout);
+                    if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
                     this.adapter.pendingRequests.delete(messageID);
                     reject(
                       refusal(
