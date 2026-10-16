@@ -166,15 +166,25 @@ describe("routine momentary acknowledgement", () => {
   );
 });
 
-
 test("same Routine presses are ignored while queued and in flight, then allowed again", async () => {
   jest.useFakeTimers();
   const platform = makePlatform();
   const accessory = new FakeAccessory("Routines");
   const c = makeCoordinator(platform, accessory);
   let releaseQueue, finishRun;
-  c.accountCoordinator.enqueue(() => new Promise((resolve) => { releaseQueue = resolve; }), () => {});
-  platform.roborockAPI.executeCloudScene = jest.fn(() => new Promise((resolve) => { finishRun = resolve; }));
+  c.accountCoordinator.enqueue(
+    () =>
+      new Promise((resolve) => {
+        releaseQueue = resolve;
+      }),
+    () => {}
+  );
+  platform.roborockAPI.executeCloudScene = jest.fn(
+    () =>
+      new Promise((resolve) => {
+        finishRun = resolve;
+      })
+  );
   c.routineAccessory = accessory;
   c.exposeRoutines = true;
   c.syncRoutines([{ id: "scene-1", name: "Kitchen routine" }]);
@@ -184,7 +194,9 @@ test("same Routine presses are ignored while queued and in flight, then allowed 
     await jest.advanceTimersByTimeAsync(1501);
     on.setHandler(true);
     expect(platform.roborockAPI.executeCloudScene).not.toHaveBeenCalled();
-    expect(platform.log.info).toHaveBeenCalledWith(expect.stringContaining("Ignoring repeated Home routine"));
+    expect(platform.log.info).toHaveBeenCalledWith(
+      expect.stringContaining("Ignoring repeated Home routine")
+    );
     releaseQueue();
     await jest.advanceTimersByTimeAsync(0);
     expect(platform.roborockAPI.executeCloudScene).toHaveBeenCalledTimes(1);
