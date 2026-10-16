@@ -47,7 +47,21 @@ jobs:
           native_status=$?
           python3 -m unittest discover -s tests -p 'test_*.py' > /tmp/python.log 2>&1
           python_status=$?
-          all_status=$((install_status + format_status + lint_status + types_status + build_status + jest_status + native_status + python_status))
+          npm pack --ignore-scripts --json --pack-destination /tmp > /tmp/pack.json 2> /tmp/pack.log
+          pack_status=$?
+          if [ "$pack_status" -eq 0 ]; then
+            node - <<'JS'
+          const fs = require('fs');
+          const pack = JSON.parse(fs.readFileSync('/tmp/pack.json'))[0];
+          const paths = new Set(pack.files.map(f => f.path));
+          const required = ['package.json', 'config.schema.json', 'dist/index.js', 'dist/native_schedule_controls.js', 'dist/hap_schedule_api.js', 'dist/schedule_write_reconciliation.js', 'homebridge-ui/server.js', 'roborockLib/roborockAPI.js', ...fs.readdirSync('roborockLib/lib').filter(f => f.endsWith('.js')).map(f => 'roborockLib/lib/' + f)];
+          const missing = required.filter(p => !paths.has(p));
+          fs.writeFileSync('/tmp/pack-summary.json', JSON.stringify({name: pack.name, version: pack.version, filename: pack.filename, files: pack.files.length, requiredFiles: required.length, missing}));
+          if (missing.length) { console.error('Missing runtime files:', missing); process.exitCode = 1; }
+          JS
+            pack_status=$?
+          fi
+          all_status=$((install_status + format_status + lint_status + types_status + build_status + jest_status + native_status + python_status + pack_status))
           install_sha=""
           if [ "$all_status" -eq 0 ]; then
             git add -f dist
@@ -56,17 +70,18 @@ jobs:
             fi
             install_sha=$(git rev-parse HEAD)
           fi
-          export source_sha install_sha install_status format_status lint_status types_status build_status jest_status native_status python_status
+          export source_sha install_sha install_status format_status lint_status types_status build_status jest_status native_status python_status pack_status
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          result = {'sourceSha': os.environ['source_sha'], 'installSha': os.environ['install_sha'], 'statuses': {k: int(os.environ[k + '_status']) for k in ['install', 'format', 'lint', 'types', 'build', 'jest', 'native', 'python']}}
+          result = {'sourceSha': os.environ['source_sha'], 'installSha': os.environ['install_sha'], 'statuses': {k: int(os.environ[k + '_status']) for k in ['install', 'format', 'lint', 'types', 'build', 'jest', 'native', 'python', 'pack']}}
+          if Path('/tmp/pack-summary.json').exists(): result['package'] = json.loads(Path('/tmp/pack-summary.json').read_text())
           p = Path('/tmp/jest.json')
           if p.exists():
               j = json.loads(p.read_text())
               result['jest'] = {k: j.get(k) for k in ['numPassedTests', 'numFailedTests', 'numPendingTests', 'numPassedTestSuites', 'numFailedTestSuites', 'success']}
               result['failures'] = [{'file': t['name'].split('/homebridge-roborock-matter-plus/')[-1], 'message': t.get('message', '')[:12000], 'assertions': [{'name': a['fullName'], 'messages': a.get('failureMessages', [])} for a in t.get('assertionResults', []) if a['status'] == 'failed']} for t in j.get('testResults', []) if t['status'] == 'failed']
-          result['logs'] = {k: Path('/tmp/' + k + '.log').read_text()[-35000:] for k in ['install', 'lint', 'types', 'build', 'native', 'python']}
+          result['logs'] = {k: Path('/tmp/' + k + '.log').read_text()[-35000:] for k in ['install', 'lint', 'types', 'build', 'native', 'python', 'pack']}
           Path('delay-validation-result.json').write_text(json.dumps(result, indent=2) + '\n')
           print(json.dumps({k:v for k,v in result.items() if k not in ['logs', 'failures']}))
           PY
