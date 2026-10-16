@@ -173,7 +173,9 @@ describe("a reconnect does not wait for a dead link", () => {
 
     await connector.reconnectClient(true);
     // The hourly retry is outside the shared one-minute recreation cooldown.
-    const clock = jest.spyOn(performance, "now").mockReturnValue(performance.now() + 3600000);
+    const clock = jest
+      .spyOn(performance, "now")
+      .mockReturnValue(performance.now() + 3600000);
     await connector.reconnectClient(true);
     clock.mockRestore();
 
