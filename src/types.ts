@@ -83,6 +83,8 @@ export interface RoborockPlatformConfig extends PlatformConfig {
   enableMatterTankFaultReporting?: boolean;
   matterChargedBatteryThreshold?: number;
   cloudOnlyMode?: boolean;
+  enableMqttSessionRecovery?: boolean;
+  enableMqttPreventiveRefresh?: boolean;
   preferCloudForMatterCommands?: boolean;
   enableHomeKitActionSwitches?: boolean;
   homeKitActionSwitches?: string[];
@@ -90,4 +92,12 @@ export interface RoborockPlatformConfig extends PlatformConfig {
   homeKitStateSensors?: string[];
   enableHomeKitScheduleSwitches?: boolean;
   enableHomeKitRoutineSwitches?: boolean;
+  enableSchedulePauseUntilTomorrow?: boolean;
+  schedulePauseAll?: boolean;
+  schedulePausePerVacuum?: boolean;
+  enableScheduleDelay?: boolean;
+  scheduleDelayAll?: boolean;
+  scheduleDelayPerVacuum?: boolean;
+  scheduleDelayMinutes?: number;
+  scheduleResetTime?: string;
 }

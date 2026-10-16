@@ -23,6 +23,7 @@ describe("HAP schedule API", () => {
       [["timer-1", "on"]],
       {
         requestTimeoutMs: 10000,
+        operationClass: "write",
         preferCloud: true,
         waitForResult: true,
         throwOnError: true,
@@ -52,6 +53,7 @@ describe("HAP schedule API", () => {
       ["timer-1", "off"],
       {
         requestTimeoutMs: 10000,
+        operationClass: "write",
         preferCloud: true,
         waitForResult: true,
         throwOnError: true,
@@ -81,6 +83,7 @@ describe("HAP schedule API", () => {
       [["timer-complex", "on"]],
       {
         requestTimeoutMs: 10000,
+        operationClass: "write",
         preferCloud: true,
         waitForResult: true,
         throwOnError: true,
