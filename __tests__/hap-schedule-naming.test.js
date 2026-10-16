@@ -294,8 +294,12 @@ describe("HAP schedule names and stable group identity", () => {
 
     expect(switchService(accessory, "timer-1")).toBe(service);
     expect(service.getCharacteristic(Characteristic.On).value).toBe(false);
-    expect(accessory.context.scheduleDisplayStates["timer-1"]).toEqual({ confirmed: false });
-    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledWith([accessory]);
+    expect(accessory.context.scheduleDisplayStates["timer-1"]).toEqual({
+      confirmed: false,
+    });
+    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledWith([
+      accessory,
+    ]);
   });
 
   test("an authoritative deleted schedule removes only its own service", () => {
