@@ -1,0 +1,103 @@
+{
+  "base": "v3.39.0",
+  "baseSha": "8689db8690caff3619df406bc1445742bd110dc6",
+  "prs": [
+    {
+      "number": 30,
+      "branch": "mqtt-session-breaker",
+      "oldSha": "8f6e5df1fc9419485739ee1191204f436b05aa73",
+      "sha": "9b44272aa5c15ea8d1bbf4249e9b68c950880618",
+      "validatedSourceSha": "383434889133ab0b4bd324e1aeb02041430d0ee2",
+      "tree": "4f19437a450d6cc6ce5540d959c9ea2a257b3011",
+      "tests": 2272,
+      "suites": 167,
+      "upstreamCI": "https://github.com/mathiashornbek/homebridge-roborock-matter/actions/runs/38833840201",
+      "installSha": null,
+      "replyPosted": false
+    },
+    {
+      "number": 31,
+      "branch": "mqtt-session-recreation",
+      "oldSha": "2295f41773d6591338896ed618d1a5e80647c2ec",
+      "sha": "8cebcfe03f7681d54d837d2ab7550b03ecefc3a7",
+      "validatedSourceSha": "24bc4db0f7f21bd87fa04c8c76c4807193377fb1",
+      "tree": "17d10796ce11a4c2f09d75483213d62b4e1cfee5",
+      "tests": 2315,
+      "suites": 169,
+      "upstreamCI": "https://github.com/mathiashornbek/homebridge-roborock-matter/actions/runs/38833854452",
+      "installSha": null,
+      "replyPosted": false
+    },
+    {
+      "number": 32,
+      "branch": "schedule-write-reconciliation",
+      "oldSha": "0b719c6db9986fb4ca6da7af8323e41a3793a5f5",
+      "sha": "2122b91c0aa0a46dee5557d1373ddb0528736525",
+      "validatedSourceSha": "8d5366c25d564dbdcb4b68121abca4d5e907d59c",
+      "tree": "e29676b6e678a3d6cb133b25f20cd25cdd871395",
+      "tests": 2281,
+      "suites": 168,
+      "upstreamCI": "https://github.com/mathiashornbek/homebridge-roborock-matter/actions/runs/38833861815",
+      "installSha": null,
+      "replyPosted": false
+    },
+    {
+      "number": 36,
+      "branch": "home-extras-pr5-discussion",
+      "oldSha": "ed164628262c781a55d157d5f842ad84f4fe363b",
+      "sha": "39f3dc5470fdc1f7420f9e87406e1f0d49dfc285",
+      "validatedSourceSha": "c2c3624db6f5c46fa4f33da763fb8d02cb619d8e",
+      "tree": "bf952aa4cc4e0f12eac77d5367ba24ecb6f38883",
+      "tests": 2262,
+      "suites": 167,
+      "upstreamCI": "https://github.com/mathiashornbek/homebridge-roborock-matter/actions/runs/38833870794",
+      "installSha": null,
+      "replyPosted": false
+    },
+    {
+      "number": 37,
+      "branch": "mqtt-send-readiness",
+      "oldSha": "8a69af7dea42fa0d6c5e3ac8ca842d325619e344",
+      "sha": "b4e9342fcfff73c7ca3897bf48509fdfbd241d6f",
+      "validatedSourceSha": "ed3d09d59b9e95356ff335dc4753562b33bb4379",
+      "tree": "6636fadcd2392eb092ba44f87e06b806b3c961d7",
+      "tests": 2265,
+      "suites": 167,
+      "upstreamCI": "https://github.com/mathiashornbek/homebridge-roborock-matter/actions/runs/38833846516",
+      "installSha": "371d2e4499210913e2fbc07fa77971b03d523ba2",
+      "replyPosted": false
+    },
+    {
+      "number": 38,
+      "branch": "schedule-optimistic-feedback",
+      "oldSha": "e898d5d05c99638a2c7ad0426ea68ac143883b52",
+      "sha": "5ae9c12f1e0fdc26e609bfa7a02f47f17bcd58be",
+      "validatedSourceSha": "e41f6a9599ef16d26520aabc43fc5ae038934243",
+      "tree": "109ffbf1cbe967fd4fbb308240dddec197dccb09",
+      "tests": 2290,
+      "suites": 168,
+      "upstreamCI": "https://github.com/mathiashornbek/homebridge-roborock-matter/actions/runs/38833877470",
+      "installSha": "cef62f096c1a6c48d1eb68c5fa86f603e5812291",
+      "replyPosted": false
+    },
+    {
+      "number": 39,
+      "branch": "momentary-action-acknowledgement",
+      "oldSha": "784d0925febf6ea1038cbcfe302e3f5270176041",
+      "sha": "b7986ee090b0b1dc92913f34c8bd4ff34134047f",
+      "validatedSourceSha": "26b2de5656313c03e2118f15b9a3468c4bb95b6a",
+      "tree": "32ef1bbf472ccaa75e8647a74f4995a77bb7028d",
+      "tests": 2269,
+      "suites": 167,
+      "upstreamCI": "https://github.com/mathiashornbek/homebridge-roborock-matter/actions/runs/38833883874",
+      "installSha": "7e6e859ab83635faf849df624e2eab1b91139792",
+      "replyPosted": false
+    }
+  ],
+  "splitPR": {
+    "branch": "ui-local-probe-test-ports",
+    "sha": "64a6fa673b30abd2cb5fe9e9aa6d0aa15b966810",
+    "createLink": "https://github.com/mathiashornbek/homebridge-roborock-matter/compare/main...pponce:homebridge-roborock-matter-plus:ui-local-probe-test-ports?expand=1&title=Use%20OS-assigned%20ports%20in%20UI%20local-probe%20tests&body=Split%20from%20the%20existing%20review%20branches%20at%20Mathias's%20request.%0A%0AThe%20local%20TCP-probe%20tests%20use%20fixed%20ports%2C%20which%20can%20collide%20with%20other%20processes.%20This%20test-only%20change%20asks%20the%20OS%20for%20listening%20ports%2C%20rejects%20listener%20startup%20errors%2C%20cleans%20up%20servers%20on%20partial%20setup%20failure%2C%20and%20adds%20an%20occupied-port%20regression.%0A%0AOnly%20__tests__%2Fui-server-local-probe.test.js%20changes.%20No%20plugin%20runtime%20changes.%0A%0ABased%20directly%20on%20v3.39.0.%20Validation%3A%20formatting%2C%20type%20checks%2C%20build%2C%20and%20all%20166%20suites%20%2F%202%2C256%20tests%20pass%20with%20--runInBand.%0A%0AValidation%20run%3A%20https%3A%2F%2Fgithub.com%2Fpponce%2Fhomebridge-roborock-matter-plus%2Factions%2Fruns%2F38833069096"
+  },
+  "homeBranchUnchanged": "42f0cc4c862d8e0307d9907f6405c71c53271417"
+}
