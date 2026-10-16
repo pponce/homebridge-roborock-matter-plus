@@ -30,11 +30,15 @@ The PR has not been created; the link fills its upstream base, fork branch, titl
 
 ## Remaining live checks
 
-[Install commands and observation checklist](LIVE-CHECKS.md)
+Pedro will test on `SCHEDULE_PAUSE_DELAY`, preserving his native pause/delay controls. These are combined-build integration observations. No separate Homebridge installation or isolated-branch replacement is part of this plan.
 
-- **#37:** brief MQTT reconnect and outage over ten seconds, each with a Matter command and a HAP switch, including timestamps. Also verify a working LAN route remains usable with preferCloud enabled.
-- **#38:** success, visible rollback on a definite failure, a retap during reconciliation, restart during a pending change, and unknown-outcome resolution. Record what Apple Home actually shows and how long it takes.
-- **#39:** Find and one Routine, each once succeeding and once failing, on its isolated build, with the corresponding logs. Check duplicate Routine presses while a request is still pending where feasible.
+[Specific combined-build steps and timed Linux commands](LIVE-CHECKS.md)
+
+- **#37:** brief MQTT reconnect and outage over ten seconds, each with a Matter command and a HAP switch, including timestamps. The working-LAN regression check is optional extra live coverage.
+- **#38:** successful confirmation, visible rollback on a definite failure, and retaps. Restart persistence and unknown outcomes already have automated coverage; reproducing those two live is optional additional coverage, not a new maintainer requirement.
+- **#39:** Find and one Routine, each succeeding and failing, with logs. Mathias explicitly requested an isolated branch; the combined-build report will disclose that it does not satisfy that isolation condition, and he can decide whether to accept it.
 - **#36, optional:** note if a continuously connected robot only supplies retained presence and therefore never produces the first-live info line.
 
-The existing `MQTT_ACCOUNT_SESSION_RECOVERY` branch remains at `42f0cc4c862d8e0307d9907f6405c71c53271417`. It was used as a reference and was not updated.
+The updated combined home build is `SCHEDULE_PAUSE_DELAY` at `eeb36fac8bbee9e9ede8fac80aaaaa3e813fc84a`. The older `MQTT_ACCOUNT_SESSION_RECOVERY` branch remains at `42f0cc4c862d8e0307d9907f6405c71c53271417`.
+
+Do not install the isolated test branches over the combined build's accessory cache: their cleanup can unregister the native pause/delay accessories. The previous direct replacement commands have been removed from the live guide. No physical test result is claimed by this documentation.
