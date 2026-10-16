@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pr: [30, 31, 32, 37]
+        pr: [32, 38, 39, "probe"]
     steps:
       - uses: actions/checkout@v5
         with:
