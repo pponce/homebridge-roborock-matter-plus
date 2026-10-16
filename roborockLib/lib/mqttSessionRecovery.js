@@ -33,8 +33,11 @@ class MqttSessionRecovery {
   install() {
     if (!this.timer) {
       this.timer = setInterval(() => {
-        if (this.preventiveRefreshEnabled && this.readyAt !== null &&
-            performance.now() - this.readyAt >= PREVENTIVE_AGE_MS) {
+        if (
+          this.preventiveRefreshEnabled &&
+          this.readyAt !== null &&
+          performance.now() - this.readyAt >= PREVENTIVE_AGE_MS
+        ) {
           void this.recreate("preventive");
         }
       }, 60_000);
@@ -272,8 +275,10 @@ class MqttSessionRecovery {
       clearTimeout(this.retryTimer);
       this.retryTimer = setTimeout(() => {
         this.retryTimer = null;
-        if (!this.stopped && (!connector.client ||
-            (connector.connected && !connector.isReady()))) {
+        if (
+          !this.stopped &&
+          (!connector.client || (connector.connected && !connector.isReady()))
+        ) {
           void this.recreate("connection-unavailable");
         }
       }, backoff);

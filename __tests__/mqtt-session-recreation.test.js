@@ -529,7 +529,6 @@ test("failed recreation persists its result and failure backoff", async () => {
   expect(snapshot().recovery.lastReason).toBe(previous);
 });
 
-
 test("a replacement that misses its deadline reconnects later without another request", async () => {
   await silence();
   const replacement = mockClients[1];
@@ -558,41 +557,58 @@ test("a busy preventive refresh never pauses a concurrent Start", async () => {
   await Promise.all([poll.result, start.result]);
 });
 
-test.each(["preventive", "connection-unavailable"])("%s refresh uses only a short cooldown before a silence recovery", async (reason) => {
-  enableBaselineRule();
-  const attempt = connector.recovery.recreate(reason);
-  await jest.advanceTimersByTimeAsync(0);
-  await replacementReady();
-  expect(await attempt).toBe(true);
-  expect(adapter.cloudSessionHealth.lastRestartAt).toBe(0);
-  await jest.advanceTimersByTimeAsync(60_001);
-  for (let i = 0; i < 3; i++) await timeout("robot-a");
-  expect(mockClients).toHaveLength(3);
-  await replacementReady();
-});
+test.each(["preventive", "connection-unavailable"])(
+  "%s refresh uses only a short cooldown before a silence recovery",
+  async (reason) => {
+    enableBaselineRule();
+    const attempt = connector.recovery.recreate(reason);
+    await jest.advanceTimersByTimeAsync(0);
+    await replacementReady();
+    expect(await attempt).toBe(true);
+    expect(adapter.cloudSessionHealth.lastRestartAt).toBe(0);
+    await jest.advanceTimersByTimeAsync(60_001);
+    for (let i = 0; i < 3; i++) await timeout("robot-a");
+    expect(mockClients).toHaveLength(3);
+    await replacementReady();
+  }
+);
 
 test("recovery preserves startup, error, offline, closed and recovered logs", async () => {
   await restartWith({ enableMqttSessionRecovery: true });
   const client = mockClients[0];
   client.handlers.get("close")();
-  expect(adapter.log.info).toHaveBeenCalledWith("MQTT connection closed; reconnecting.");
+  expect(adapter.log.info).toHaveBeenCalledWith(
+    "MQTT connection closed; reconnecting."
+  );
   client.handlers.get("error")(new Error("fixture outage"));
   client.handlers.get("offline")();
-  expect(adapter.log.warn).toHaveBeenCalledWith(expect.stringContaining("fixture outage"));
-  expect(adapter.log.warn).toHaveBeenCalledWith(expect.stringContaining("is offline"));
+  expect(adapter.log.warn).toHaveBeenCalledWith(
+    expect.stringContaining("fixture outage")
+  );
+  expect(adapter.log.warn).toHaveBeenCalledWith(
+    expect.stringContaining("is offline")
+  );
   connectLatest();
-  expect(adapter.log.info).toHaveBeenCalledWith(expect.stringContaining("recovered after the reported outage"));
-  await connector.initUser({ rriot: { u: "u", k: "k", s: "s", r: { m: "mqtt://fixture.invalid" } } });
+  expect(adapter.log.info).toHaveBeenCalledWith(
+    expect.stringContaining("recovered after the reported outage")
+  );
+  await connector.initUser({
+    rriot: { u: "u", k: "k", s: "s", r: { m: "mqtt://fixture.invalid" } },
+  });
   await connector.initMQTT_Subscribe();
   await jest.advanceTimersByTimeAsync(30_001);
-  expect(adapter.log.warn).toHaveBeenCalledWith(expect.stringContaining("not answered within 30 seconds"));
+  expect(adapter.log.warn).toHaveBeenCalledWith(
+    expect.stringContaining("not answered within 30 seconds")
+  );
 });
-
 
 test("the last eligible timeout remains in diagnostics after recovery disconnects", async () => {
   enableBaselineRule();
   for (let i = 0; i < 3; i++) await timeout("robot-a");
-  expect(snapshot().lastEligibleRead).toMatchObject({ generation: 1, rawSilenceDuringRequest: true });
+  expect(snapshot().lastEligibleRead).toMatchObject({
+    generation: 1,
+    rawSilenceDuringRequest: true,
+  });
   expect(snapshot().correlatedSilenceObserved).toBe(false);
   await replacementReady();
   expect(snapshot().generation).toBe(2);

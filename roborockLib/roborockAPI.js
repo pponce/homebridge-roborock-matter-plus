@@ -5952,10 +5952,12 @@ class Roborock {
         if (this.pendingB01MapRequests.get(duid) !== entry) return;
         this.clearTimeout(entry.timeout);
         this.pendingB01MapRequests.delete(duid);
-        entry.reject(refusal(
-          "cloud unavailable",
-          `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
-        ));
+        entry.reject(
+          refusal(
+            "cloud unavailable",
+            `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
+          )
+        );
       });
       if (this.pendingB01MapRequests.get(duid) !== entry) return promise;
       const timeout = this.setTimeout(() => {

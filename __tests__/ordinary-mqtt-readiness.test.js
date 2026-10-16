@@ -242,26 +242,32 @@ test("a local-unavailable request can wait for a briefly disconnected cloud fall
   expect(await result).toEqual(["cloud"]);
 });
 
-
-test.each([false, true])("preferCloud uses a working LAN while MQTT awaits readiness (connected=%s)", async (connected) => {
-  adapter.config.cloudOnlyMode = false;
-  adapter.localConnector.isConnected.mockReturnValue(true);
-  const client = mockClients[0];
-  client.handlers.get("close")();
-  if (connected) client.handlers.get("connect")({});
-  const { result, id } = await startRequest("robot-a", "load_multi_map", { preferCloud: true });
-  expect(adapter.localConnector.sendMessage).toHaveBeenCalledTimes(1);
-  expect(connector.readiness.waiters.size).toBe(0);
-  expect(client.publish).not.toHaveBeenCalled();
-  const pending = adapter.pendingRequests.get(id);
-  clearTimeout(pending.timeout);
-  adapter.pendingRequests.delete(id);
-  pending.resolve(["local"]);
-  expect(await result).toEqual(["local"]);
-});
+test.each([false, true])(
+  "preferCloud uses a working LAN while MQTT awaits readiness (connected=%s)",
+  async (connected) => {
+    adapter.config.cloudOnlyMode = false;
+    adapter.localConnector.isConnected.mockReturnValue(true);
+    const client = mockClients[0];
+    client.handlers.get("close")();
+    if (connected) client.handlers.get("connect")({});
+    const { result, id } = await startRequest("robot-a", "load_multi_map", {
+      preferCloud: true,
+    });
+    expect(adapter.localConnector.sendMessage).toHaveBeenCalledTimes(1);
+    expect(connector.readiness.waiters.size).toBe(0);
+    expect(client.publish).not.toHaveBeenCalled();
+    const pending = adapter.pendingRequests.get(id);
+    clearTimeout(pending.timeout);
+    adapter.pendingRequests.delete(id);
+    pending.resolve(["local"]);
+    expect(await result).toEqual(["local"]);
+  }
+);
 
 test("a retried initUser reopens the readiness gate after retiring the previous client", async () => {
-  await connector.initUser({ rriot: { u: "u", k: "k", s: "s", r: { m: "mqtt://fixture.invalid" } } });
+  await connector.initUser({
+    rriot: { u: "u", k: "k", s: "s", r: { m: "mqtt://fixture.invalid" } },
+  });
   await connector.initMQTT_Subscribe();
   await connector.initMQTT_Message();
   const request = await startRequest();

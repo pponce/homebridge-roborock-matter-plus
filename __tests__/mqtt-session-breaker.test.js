@@ -295,7 +295,9 @@ test("an unacknowledged subscription supplies no correlated-silence evidence", a
   expect(error.accountSessionWasSilent).not.toBe(true);
   // With the readiness gate, nothing is published or counted. Without it,
   // published timeouts retain normal breaker accounting, never an exemption.
-  expect(outcomes.filter((o) => o.counted)).toHaveLength(mockClient.publish.mock.calls.length);
+  expect(outcomes.filter((o) => o.counted)).toHaveLength(
+    mockClient.publish.mock.calls.length
+  );
 });
 
 test("missing instrumentation keeps the existing timeout classification", async () => {
@@ -331,12 +333,12 @@ test("correlated silence does not reopen an already-open breaker", async () => {
   expect(breaker.shouldSkip("robot-a", "get_consumable")).toBe(true);
 });
 
-
 test.each(["robot-a", "robot-b"])(
   "baseline recovery and breaker classification coexist when the third silence is from %s",
   async (thirdRobot) => {
     adapter.cloudSessionHealth = { consecutiveSilences: 0, lastRestartAt: 0 };
-    adapter.noteCloudSilence = Roborock.prototype.noteCloudSilence.bind(adapter);
+    adapter.noteCloudSilence =
+      Roborock.prototype.noteCloudSilence.bind(adapter);
     adapter.noteCloudReply = Roborock.prototype.noteCloudReply.bind(adapter);
     govern("robot-a");
     govern("robot-b");
@@ -357,7 +359,9 @@ test.each(["robot-a", "robot-b"])(
     expect(outcomes.filter((outcome) => outcome.counted)).toHaveLength(
       thirdRobot === "robot-b" ? 2 : 3
     );
-    expect(error.accountSessionWasSilent === true).toBe(thirdRobot === "robot-b");
+    expect(error.accountSessionWasSilent === true).toBe(
+      thirdRobot === "robot-b"
+    );
 
     mockHandlers.get("connect")({ sessionPresent: false });
     acknowledge();

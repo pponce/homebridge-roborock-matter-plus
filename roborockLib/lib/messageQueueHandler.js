@@ -787,20 +787,28 @@ class messageQueueHandler {
                 `Device ${duid} is marked offline, but sending method ${method} via cloud because the command explicitly allows offline cloud delivery.`
               );
             }
-            if (!publish(() => this.adapter.rr_mqtt_connector.sendMessage(
-              duid,
-              roborockMessage,
-              () => {
-                const pending = this.adapter.pendingRequests.get(messageID);
-                if (!pending) return;
-                if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
-                this.adapter.pendingRequests.delete(messageID);
-                reject(refusal(
-                  "cloud unavailable",
-                  `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
-                ));
-              }
-            ))) return;
+            if (
+              !publish(() =>
+                this.adapter.rr_mqtt_connector.sendMessage(
+                  duid,
+                  roborockMessage,
+                  () => {
+                    const pending = this.adapter.pendingRequests.get(messageID);
+                    if (!pending) return;
+                    if (pending.timeout)
+                      this.adapter.clearTimeout(pending.timeout);
+                    this.adapter.pendingRequests.delete(messageID);
+                    reject(
+                      refusal(
+                        "cloud unavailable",
+                        `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
+                      )
+                    );
+                  }
+                )
+              )
+            )
+              return;
             const lastTransportReason =
               [
                 {
