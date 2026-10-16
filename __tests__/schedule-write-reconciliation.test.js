@@ -363,9 +363,7 @@ test("verification does not adopt a read started before the write completed", as
 test("verification waits for an optional existing recovery without starting one", async () => {
   let finishRecovery;
   connector.recovery = {
-    inFlight: new Promise((resolve) => {
-      finishRecovery = resolve;
-    }),
+    inFlight: new Promise((resolve) => { finishRecovery = resolve; }),
     observeTimeout: jest.fn(),
   };
   const restart = jest.spyOn(connector, "reconnectClient");

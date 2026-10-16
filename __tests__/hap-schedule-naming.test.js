@@ -259,6 +259,7 @@ describe("HAP schedule names and stable group identity", () => {
       .setValue("Weekend Downstairs");
 
     const originalServices = [...accessory.services];
+    platform.api.updatePlatformAccessories.mockClear();
 
     coordinator.shutdown();
 
@@ -293,7 +294,8 @@ describe("HAP schedule names and stable group identity", () => {
 
     expect(switchService(accessory, "timer-1")).toBe(service);
     expect(service.getCharacteristic(Characteristic.On).value).toBe(false);
-    expect(platform.api.updatePlatformAccessories).not.toHaveBeenCalled();
+    expect(accessory.context.scheduleDisplayStates["timer-1"]).toEqual({ confirmed: false });
+    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledWith([accessory]);
   });
 
   test("an authoritative deleted schedule removes only its own service", () => {
@@ -518,26 +520,18 @@ describe("HAP schedule names and stable group identity", () => {
         schedule("timer-2", false),
       ]);
 
-      // A failed write throws back to HAP (3.39.0): resolving left HAP to
-      // store the refused state over the restore.
+      // Acknowledge each tap immediately; the background failure restores
+      // the confirmed display after HAP has accepted the request.
       const first = switchService(accessory, "timer-1")
         .getCharacteristic(Characteristic.On)
-        .setHandler(true)
-        .then(
-          () => "resolved",
-          (error) => error
-        );
+        .setHandler(true);
       const second = switchService(accessory, "timer-2")
         .getCharacteristic(Characteristic.On)
-        .setHandler(true)
-        .then(
-          () => "resolved",
-          (error) => error
-        );
+        .setHandler(true);
 
       await jest.advanceTimersByTimeAsync(500);
-      expect(await first).toBeInstanceOf(Error);
-      expect(await second).toBeInstanceOf(Error);
+      expect(first).toBeUndefined();
+      expect(second).toBeUndefined();
 
       expect(command).toHaveBeenCalledTimes(1);
       expect(platform.roborockAPI.getServerTimers).not.toHaveBeenCalled();
@@ -649,22 +643,14 @@ describe("HAP schedule names and stable group identity", () => {
 
       const first = switchService(accessory, "timer-1")
         .getCharacteristic(Characteristic.On)
-        .setHandler(true)
-        .then(
-          () => "resolved",
-          (error) => error
-        );
+        .setHandler(true);
       const second = switchService(accessory, "timer-2")
         .getCharacteristic(Characteristic.On)
-        .setHandler(true)
-        .then(
-          () => "resolved",
-          (error) => error
-        );
+        .setHandler(true);
 
       await jest.advanceTimersByTimeAsync(4000);
-      expect(await first).toBeInstanceOf(Error);
-      expect(await second).toBe("resolved");
+      expect(first).toBeUndefined();
+      expect(second).toBeUndefined();
 
       expect(command).toHaveBeenCalledTimes(2);
       expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(1);

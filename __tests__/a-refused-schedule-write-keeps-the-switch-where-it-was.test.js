@@ -95,9 +95,7 @@ function setup({ refuse, ambiguous = false }) {
       scenes[0].param = JSON.stringify(param);
       if (ambiguous) {
         failReads = true;
-        throw Object.assign(new Error("write reply lost"), {
-          code: "ECONNRESET",
-        });
+        throw Object.assign(new Error("write reply lost"), { code: "ECONNRESET" });
       }
     }),
     setCloudSceneEnabled: jest.fn(async (sceneId, enabled) => {
@@ -119,14 +117,7 @@ function setup({ refuse, ambiguous = false }) {
   };
   const manager = new Accessory("Rocky Schedules");
   const coordinator = new RoborockHapScheduleAccessory(platform, manager, DUID);
-  return {
-    coordinator,
-    manager,
-    platform,
-    setReadFailure: (value) => {
-      failReads = value;
-    },
-  };
+  return { coordinator, manager, platform, setReadFailure: (value) => { failReads = value; } };
 }
 
 function onOf(manager) {
@@ -157,9 +148,7 @@ test("a refused write leaves HAP's value on the state Roborock still has", async
   expect(changes).toContain(false);
   expect(changes.at(-1)).toBe(true);
   expect(platform.log.warn).toHaveBeenCalledWith(
-    expect.stringMatching(
-      /Schedule display rollback.*Rocky.*Mornings.*not a user change/
-    )
+    expect.stringMatching(/Schedule display rollback.*Rocky.*Mornings.*not a user change/)
   );
 });
 
@@ -197,16 +186,12 @@ test("a cooldown-suppressed retry is corrected after real HAP stores the request
   expect(on.value).toBe(true);
 });
 
+
 test("a cached optimistic characteristic is restored from separately saved confirmation after restart", async () => {
   const { coordinator, manager, platform } = setup({ refuse: false });
   await coordinator.initialize("Rocky");
   let finish;
-  coordinator.enqueueScheduleWrite = jest.fn(
-    () =>
-      new Promise((resolve) => {
-        finish = resolve;
-      })
-  );
+  coordinator.enqueueScheduleWrite = jest.fn(() => new Promise((resolve) => { finish = resolve; }));
   const on = onOf(manager);
   await on.handleSetRequest(false);
   expect(on.value).toBe(false);
@@ -223,72 +208,41 @@ test("a cached optimistic characteristic is restored from separately saved confi
   restarted.vacuumName = "Rocky";
   expect(restarted.restoreScheduleHandlersFromAccessory()).toBe(true);
   expect(on.value).toBe(true);
-  expect(platform.log.warn).toHaveBeenCalledWith(
-    expect.stringMatching(
-      /Schedule display rollback.*Rocky.*Mornings.*before restart/
-    )
-  );
+  expect(platform.log.warn).toHaveBeenCalledWith(expect.stringMatching(/Schedule display rollback.*Rocky.*Mornings.*before restart/));
   restarted.stopRuntime();
   expect(jest.getTimerCount()).toBe(0);
 });
 
-test.each([true, false])(
-  "an unverified applied write stays unknown and one follow-up read resolves it (read recovers=%s)",
-  async (recovers) => {
-    const { coordinator, manager, platform, setReadFailure } = setup({
-      ambiguous: true,
-    });
-    await coordinator.initialize("Rocky");
-    const on = onOf(manager);
-    await on.handleSetRequest(false);
-    await jest.advanceTimersByTimeAsync(5001);
-    expect(on.value).toBe(false);
-    expect(manager.context.scheduleDisplayStates["scene:1"].confirmed).toBe(
-      true
-    );
-    expect(platform.log.warn).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /Schedule outcome unknown.*Rocky.*Mornings.*no failed-command cooldown/
-      )
-    );
-    const reads = platform.roborockAPI.getCloudScenes.mock.calls.length;
-    setReadFailure(!recovers);
-    await jest.advanceTimersByTimeAsync(3001);
-    expect(platform.roborockAPI.getCloudScenes).toHaveBeenCalledTimes(
-      reads + 1
-    );
-    expect(platform.roborockAPI.updateCloudSceneParam).toHaveBeenCalledTimes(1);
-    if (recovers) {
-      expect(manager.context.scheduleDisplayStates["scene:1"]).toEqual({
-        confirmed: false,
-      });
-      expect(platform.log.info).toHaveBeenCalledWith(
-        expect.stringMatching(
-          /Schedule outcome resolved by fresh read.*Rocky.*Mornings.*confirmed off/
-        )
-      );
-    } else {
-      expect(platform.log.warn).toHaveBeenCalledWith(
-        expect.stringContaining("outcome still unknown")
-      );
-      await jest.advanceTimersByTimeAsync(30_000);
-      expect(platform.roborockAPI.getCloudScenes).toHaveBeenCalledTimes(
-        reads + 1
-      );
-      setReadFailure(false);
-      await coordinator.refreshDetailed(Date.now(), false, true);
-      expect(platform.log.info).toHaveBeenCalledWith(
-        expect.stringContaining("outcome resolved by fresh read")
-      );
-    }
-    coordinator.stopRuntime();
+test.each([true, false])("an unverified applied write stays unknown and one follow-up read resolves it (read recovers=%s)", async (recovers) => {
+  const { coordinator, manager, platform, setReadFailure } = setup({ ambiguous: true });
+  await coordinator.initialize("Rocky");
+  const on = onOf(manager);
+  await on.handleSetRequest(false);
+  await jest.advanceTimersByTimeAsync(5001);
+  expect(on.value).toBe(false);
+  expect(manager.context.scheduleDisplayStates["scene:1"].confirmed).toBe(true);
+  expect(platform.log.warn).toHaveBeenCalledWith(expect.stringMatching(/Schedule outcome unknown.*Rocky.*Mornings.*no failed-command cooldown/));
+  const reads = platform.roborockAPI.getCloudScenes.mock.calls.length;
+  setReadFailure(!recovers);
+  await jest.advanceTimersByTimeAsync(3001);
+  expect(platform.roborockAPI.getCloudScenes).toHaveBeenCalledTimes(reads + 1);
+  expect(platform.roborockAPI.updateCloudSceneParam).toHaveBeenCalledTimes(1);
+  if (recovers) {
+    expect(manager.context.scheduleDisplayStates["scene:1"]).toEqual({ confirmed: false });
+    expect(platform.log.info).toHaveBeenCalledWith(expect.stringMatching(/Schedule outcome resolved by fresh read.*Rocky.*Mornings.*confirmed off/));
+  } else {
+    expect(platform.log.warn).toHaveBeenCalledWith(expect.stringContaining("outcome still unknown"));
+    await jest.advanceTimersByTimeAsync(30_000);
+    expect(platform.roborockAPI.getCloudScenes).toHaveBeenCalledTimes(reads + 1);
+    setReadFailure(false);
+    await coordinator.refreshDetailed(Date.now(), false, true);
+    expect(platform.log.info).toHaveBeenCalledWith(expect.stringContaining("outcome resolved by fresh read"));
   }
-);
+  coordinator.stopRuntime();
+});
 
 test("outcome unknown does not block a correct re-tap for thirty seconds", async () => {
-  const { coordinator, manager, platform, setReadFailure } = setup({
-    ambiguous: true,
-  });
+  const { coordinator, manager, platform, setReadFailure } = setup({ ambiguous: true });
   await coordinator.initialize("Rocky");
   const on = onOf(manager);
   await on.handleSetRequest(false);
@@ -298,9 +252,7 @@ test("outcome unknown does not block a correct re-tap for thirty seconds", async
   await on.handleSetRequest(false);
   await jest.advanceTimersByTimeAsync(2001);
   expect(platform.roborockAPI.updateCloudSceneParam).toHaveBeenCalledTimes(2);
-  expect(platform.log.warn.mock.calls.flat().join("\n")).not.toContain(
-    "request suppressed after failure"
-  );
+  expect(platform.log.warn.mock.calls.flat().join("\n")).not.toContain("request suppressed after failure");
   coordinator.stopRuntime();
   await jest.advanceTimersByTimeAsync(20_000);
 });
@@ -309,12 +261,7 @@ test("shutdown cancels pending feedback timers and late completions cannot chang
   const { coordinator, manager } = setup({ refuse: false });
   await coordinator.initialize("Rocky");
   let reject;
-  coordinator.enqueueScheduleWrite = jest.fn(
-    () =>
-      new Promise((_resolve, fail) => {
-        reject = fail;
-      })
-  );
+  coordinator.enqueueScheduleWrite = jest.fn(() => new Promise((_resolve, fail) => { reject = fail; }));
   const on = onOf(manager);
   await on.handleSetRequest(false);
   coordinator.stopRuntime();

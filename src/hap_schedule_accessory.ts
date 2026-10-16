@@ -765,14 +765,10 @@ export default class RoborockHapScheduleAccessory {
 
       seen.add(scheduleId);
 
-      const saved =
-        this.managerAccessory.context.scheduleDisplayStates?.[scheduleId];
-      const enabled =
-        typeof saved?.confirmed === "boolean"
-          ? saved.confirmed
-          : Boolean(
-              service.getCharacteristic(this.platform.Characteristic.On).value
-            );
+      const saved = this.managerAccessory.context.scheduleDisplayStates?.[scheduleId];
+      const enabled = typeof saved?.confirmed === "boolean" ? saved.confirmed : Boolean(
+        service.getCharacteristic(this.platform.Characteristic.On).value
+      );
 
       if (isCloudSceneScheduleId(scheduleId)) {
         // A cloud scene's switch remembers its Routine's name in the service
@@ -911,7 +907,7 @@ export default class RoborockHapScheduleAccessory {
       : undefined;
   }
 
-  private async refreshDetailed(
+  async refreshDetailed(
     minimumRefreshStartedAt = 0,
     accountCoordinatorHeld = false,
     forceFresh = false
@@ -1109,12 +1105,8 @@ export default class RoborockHapScheduleAccessory {
       );
 
       this.sync(merged, [
-        ...(readings.timers.state === "read" && timerSchedules.ok
-          ? ["serverTimer" as const]
-          : []),
-        ...(readings.scenes.state === "read" && sceneSchedules.ok
-          ? ["cloudScene" as const]
-          : []),
+        ...(readings.timers.state === "read" && timerSchedules.ok ? ["serverTimer" as const] : []),
+        ...(readings.scenes.state === "read" && sceneSchedules.ok ? ["cloudScene" as const] : []),
       ]);
 
       if (readings.scenes.state === "read") {
@@ -1380,14 +1372,10 @@ export default class RoborockHapScheduleAccessory {
     await this.waitForScheduleVerification();
     const verification = await this.refreshDetailed(Date.now(), true, true);
     const throttle = this.accountCoordinator.currentThrottleError();
-    if (throttle !== undefined)
-      return failAll(
-        candidates,
-        Object.assign(
-          new Error("Schedule verification was throttled; outcome unknown"),
-          { code: "SCHEDULE_OUTCOME_UNKNOWN", cause: throttle }
-        )
-      );
+    if (throttle !== undefined) return failAll(candidates, Object.assign(
+      new Error("Schedule verification was throttled; outcome unknown"),
+      { code: "SCHEDULE_OUTCOME_UNKNOWN", cause: throttle }
+    ));
     if (this.disposed) return failAll(candidates, stopped());
 
     const verified = (
@@ -1406,12 +1394,9 @@ export default class RoborockHapScheduleAccessory {
       if (!verified(verification, request)) {
         failures.set(
           request.scheduleId,
-          Object.assign(
-            new Error(
-              `Fresh schedule verification failed for ${request.scheduleId}; outcome unknown; no retry was sent`
-            ),
-            { code: "SCHEDULE_OUTCOME_UNKNOWN" }
-          )
+          Object.assign(new Error(
+            `Fresh schedule verification failed for ${request.scheduleId}; outcome unknown; no retry was sent`
+          ), { code: "SCHEDULE_OUTCOME_UNKNOWN" })
         );
       } else if (
         !this.cachedSchedules?.some(
@@ -1494,16 +1479,9 @@ export default class RoborockHapScheduleAccessory {
         } else {
           failures.set(
             request.scheduleId,
-            Object.assign(
-              new Error(
-                `Roborock did not freshly confirm schedule ${request.scheduleId}; no further retry was sent`
-              ),
-              {
-                code: verified(finalVerification, request)
-                  ? "SCHEDULE_NOT_CONFIRMED"
-                  : "SCHEDULE_OUTCOME_UNKNOWN",
-              }
-            )
+            Object.assign(new Error(
+              `Roborock did not freshly confirm schedule ${request.scheduleId}; no further retry was sent`
+            ), { code: verified(finalVerification, request) ? "SCHEDULE_NOT_CONFIRMED" : "SCHEDULE_OUTCOME_UNKNOWN" })
           );
         }
       }
@@ -1846,17 +1824,10 @@ export default class RoborockHapScheduleAccessory {
   }
 
   scheduleRobotLabel(): string {
-    return (
-      this.vacuumName ||
-      this.platform.roborockAPI?.getVacuumDeviceInfo(this.duid, "name") ||
-      this.duid
-    );
+    return this.vacuumName || this.platform.roborockAPI?.getVacuumDeviceInfo(this.duid, "name") || this.duid;
   }
 
-  private sync(
-    schedules: RoborockSchedule[],
-    verifiedSources?: ScheduleSource[]
-  ): void {
+  private sync(schedules: RoborockSchedule[], verifiedSources?: ScheduleSource[]): void {
     if (this.exposeSchedules === false) {
       // Routines only: the reading is still applied to the routine
       // switches by the caller, but no schedule switch may exist.
@@ -1894,9 +1865,7 @@ export default class RoborockHapScheduleAccessory {
               "Roborock Vacuum",
               `Schedule ${++timerOrdinal}`
             );
-      const sourceVerified =
-        verifiedSources === undefined ||
-        verifiedSources.includes(schedule.source ?? "serverTimer");
+      const sourceVerified = verifiedSources === undefined || verifiedSources.includes(schedule.source ?? "serverTimer");
       const existing = this.scheduleAccessories.get(schedule.id);
 
       if (existing) {
@@ -1964,9 +1933,7 @@ class RoborockHapScheduleSwitchAccessory {
   private schedule: RoborockSchedule;
   private disposed = false;
   private intentSequence = 0;
-  private uncertain:
-    | { enabled: boolean; startedAt: number; showRequested: boolean }
-    | undefined;
+  private uncertain: { enabled: boolean; startedAt: number; showRequested: boolean } | undefined;
   private followUpTimer: ReturnType<typeof scheduleTimer> | undefined;
   private correctionTimer: ReturnType<typeof scheduleTimer> | undefined;
   private pendingCommand:
@@ -1987,15 +1954,9 @@ class RoborockHapScheduleSwitchAccessory {
     };
   }
 
-  initialize(
-    displayName: string,
-    schedule: RoborockSchedule,
-    sourceVerified = true
-  ): void {
+  initialize(displayName: string, schedule: RoborockSchedule, sourceVerified = true): void {
     this.disposed = false;
-    const saved = this.accessory.context.scheduleDisplayStates?.[
-      this.scheduleId
-    ] as ScheduleDisplayState | undefined;
+    const saved = this.accessory.context.scheduleDisplayStates?.[this.scheduleId] as ScheduleDisplayState | undefined;
     if (saved?.pending) {
       this.uncertain = { ...saved.pending, showRequested: false };
     }
@@ -2056,11 +2017,7 @@ class RoborockHapScheduleSwitchAccessory {
     this.saveDisplayState();
   }
 
-  updateIdentity(
-    displayName: string,
-    schedule: RoborockSchedule,
-    sourceVerified = true
-  ): void {
+  updateIdentity(displayName: string, schedule: RoborockSchedule, sourceVerified = true): void {
     const previous = this.schedule.enabled;
     this.schedule = { ...schedule, timer: [...schedule.timer] };
     if (sourceVerified && this.uncertain) {
@@ -2111,9 +2068,7 @@ class RoborockHapScheduleSwitchAccessory {
 
   dispose(reason = "shutdown"): void {
     if (this.pendingCommand || this.uncertain) {
-      this.platform.log.warn(
-        `Schedule request interrupted by ${reason} for ${this.displayLabel()}: outcome unknown; last confirmed ${this.schedule.enabled ? "on" : "off"} is saved for restart.`
-      );
+      this.platform.log.warn(`Schedule request interrupted by ${reason} for ${this.displayLabel()}: outcome unknown; last confirmed ${this.schedule.enabled ? "on" : "off"} is saved for restart.`);
       this.saveDisplayState();
     }
     this.disposed = true;
@@ -2182,29 +2137,21 @@ class RoborockHapScheduleSwitchAccessory {
         }
       } catch (error) {
         if (this.disposed) return;
-        const unverified =
-          (error as { code?: string })?.code === "SCHEDULE_OUTCOME_UNKNOWN";
+        const unverified = (error as { code?: string })?.code === "SCHEDULE_OUTCOME_UNKNOWN";
         const unknown = unverified || Boolean(this.uncertain);
         if (unknown && intent === this.intentSequence) {
-          if (unverified)
-            this.uncertain = { enabled, startedAt, showRequested: true };
+          if (unverified) this.uncertain = { enabled, startedAt, showRequested: true };
           this.failedCommands.delete(this.scheduleId);
           this.suppression.delete(this.scheduleId);
-          this.platform.log.warn(
-            `Schedule outcome unknown for ${this.displayLabel()}: unverified request ${this.uncertain?.enabled ? "on" : "off"} after ${Date.now() - startedAt}ms; the earlier write may have applied. One follow-up read is scheduled; no failed-command cooldown is applied.`
-          );
+          this.platform.log.warn(`Schedule outcome unknown for ${this.displayLabel()}: unverified request ${this.uncertain?.enabled ? "on" : "off"} after ${Date.now() - startedAt}ms; the earlier write may have applied. One follow-up read is scheduled; no failed-command cooldown is applied.`);
           this.scheduleFollowUpRead();
-        } else if (!unknown)
-          this.failedCommands.set(this.scheduleId, {
-            enabled,
-            timestamp: Date.now(),
-          });
+        } else if (!unknown) this.failedCommands.set(this.scheduleId, {
+          enabled,
+          timestamp: Date.now(),
+        });
         const detail = error instanceof Error ? error.message : String(error);
         if (unknown) {
-          if (intent !== this.intentSequence)
-            this.platform.log.warn(
-              `Earlier schedule outcome unknown for ${this.displayLabel()}; keeping the newer intent and its confirmation.`
-            );
+          if (intent !== this.intentSequence) this.platform.log.warn(`Earlier schedule outcome unknown for ${this.displayLabel()}; keeping the newer intent and its confirmation.`);
         } else if (this.pendingCommand?.promise === promise) {
           this.platform.log.warn(
             `Schedule display rollback for ${this.displayLabel()}: requested ${enabled ? "on" : "off"}, restoring confirmed ${this.schedule.enabled ? "on" : "off"} after ${Date.now() - startedAt}ms; ${detail}. This is failure recovery, not a user change.`
@@ -2245,25 +2192,14 @@ class RoborockHapScheduleSwitchAccessory {
   }
 
   private displayValue(): boolean {
-    return (
-      this.pendingCommand?.enabled ??
-      (this.uncertain?.showRequested
-        ? this.uncertain.enabled
-        : this.schedule.enabled)
-    );
+    return this.pendingCommand?.enabled ?? (this.uncertain?.showRequested ? this.uncertain.enabled : this.schedule.enabled);
   }
 
   private displayLabel(): string {
-    const service = this.accessory.getServiceById(
-      this.platform.Service.Switch,
-      `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`
-    );
-    const name =
-      service?.getCharacteristic(this.platform.Characteristic.ConfiguredName)
-        .value ||
-      service?.displayName ||
-      this.schedule.name ||
-      this.scheduleId;
+    const service = this.accessory.getServiceById(this.platform.Service.Switch,
+      `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
+    const name = service?.getCharacteristic(this.platform.Characteristic.ConfiguredName).value ||
+      service?.displayName || this.schedule.name || this.scheduleId;
     return `${this.coordinator.scheduleRobotLabel()} / "${name}" (${this.duid}/${this.scheduleId})`;
   }
 
@@ -2271,25 +2207,12 @@ class RoborockHapScheduleSwitchAccessory {
     const intent = this.pendingCommand ?? this.uncertain;
     const state: ScheduleDisplayState = {
       confirmed: this.schedule.enabled,
-      ...(intent
-        ? {
-            pending: {
-              enabled: intent.enabled,
-              startedAt: intent.startedAt,
-              ...(this.uncertain && !this.pendingCommand
-                ? { outcomeUnknown: true }
-                : {}),
-            },
-          }
-        : {}),
+      ...(intent ? { pending: { enabled: intent.enabled, startedAt: intent.startedAt,
+        ...(this.uncertain && !this.pendingCommand ? { outcomeUnknown: true } : {}) } } : {}),
     };
     const states = this.accessory.context.scheduleDisplayStates ?? {};
-    if (JSON.stringify(states[this.scheduleId]) === JSON.stringify(state))
-      return;
-    this.accessory.context.scheduleDisplayStates = {
-      ...states,
-      [this.scheduleId]: state,
-    };
+    if (JSON.stringify(states[this.scheduleId]) === JSON.stringify(state)) return;
+    this.accessory.context.scheduleDisplayStates = { ...states, [this.scheduleId]: state };
     this.platform.api.updatePlatformAccessories([this.accessory]);
   }
 
@@ -2298,15 +2221,11 @@ class RoborockHapScheduleSwitchAccessory {
     this.followUpTimer = scheduleTimer(() => {
       this.followUpTimer = undefined;
       if (this.disposed || !this.uncertain) return;
-      void this.coordinator
-        .refreshDetailed(Date.now(), false, true)
-        .then(() => {
-          if (!this.disposed && this.uncertain) {
-            this.platform.log.warn(
-              `Schedule outcome still unknown for ${this.displayLabel()}: the follow-up could not confirm this source. The next successful refresh will report the resolved state.`
-            );
-          }
-        });
+      void this.coordinator.refreshDetailed(Date.now(), false, true).then(() => {
+        if (!this.disposed && this.uncertain) {
+          this.platform.log.warn(`Schedule outcome still unknown for ${this.displayLabel()}: the follow-up could not confirm this source. The next successful refresh will report the resolved state.`);
+        }
+      });
     }, VERIFY_DELAY_MS);
     unrefTimer(this.followUpTimer);
   }

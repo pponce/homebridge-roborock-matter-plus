@@ -470,7 +470,7 @@ describe("HomeKit schedule settings contract", () => {
 
   test("schedule switch GET returns pending or cached state without waiting for refresh", () => {
     expect(scheduleSource).toMatch(
-      /\.onGet\(\(\) => \{[\s\S]*?void this\.coordinator\.refreshIfNeeded\(\);[\s\S]*?return this\.pendingCommand\?\.enabled \?\? this\.schedule\.enabled;/
+      /\.onGet\(\(\) => \{[\s\S]*?void this\.coordinator\.refreshIfNeeded\(\);[\s\S]*?return this\.displayValue\(\);/
     );
     expect(scheduleSource).not.toMatch(
       /\.onGet\(async \(\) => \{[\s\S]*?await this\.coordinator\.refreshIfNeeded\(\);/

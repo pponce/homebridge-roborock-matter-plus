@@ -126,7 +126,7 @@ describe("HAP schedule coordinator cache", () => {
         enabled: true,
         timer: ["timer-2", "on"],
       },
-    ]);
+    ], ["serverTimer"]);
   });
 
   test("concurrent refreshes share one in-flight cloud request", async () => {
@@ -217,6 +217,7 @@ describe("HAP schedule coordinator cache", () => {
     };
 
     coordinator.managerAccessory = {
+      context: {},
       services: [restoredService],
     };
 
@@ -230,7 +231,7 @@ describe("HAP schedule coordinator cache", () => {
         enabled: true,
         timer: ["timer-2", "on"],
       },
-    ]);
+    ], []);
   });
 
   test("failed refresh backoff suppresses repeated cloud requests and later retries", async () => {
@@ -485,7 +486,7 @@ describe("HAP schedule coordinator cache", () => {
     await expect(coordinator.refresh()).resolves.toBe(false);
     expect(getServerTimers).toHaveBeenCalledTimes(1);
     expect(coordinator.cachedSchedules).toEqual([]);
-    expect(coordinator.sync).toHaveBeenCalledWith([]);
+    expect(coordinator.sync).toHaveBeenCalledWith([], ["serverTimer"]);
 
     await expect(coordinator.refreshIfNeeded()).resolves.toBe(false);
 
