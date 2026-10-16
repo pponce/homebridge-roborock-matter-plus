@@ -295,7 +295,9 @@ test("an unacknowledged subscription supplies no correlated-silence evidence", a
   expect(error.accountSessionWasSilent).not.toBe(true);
   // With the readiness gate, nothing is published or counted. Without it,
   // published timeouts retain normal breaker accounting, never an exemption.
-  expect(outcomes.filter((o) => o.counted)).toHaveLength(mockClient.publish.mock.calls.length);
+  expect(outcomes.filter((o) => o.counted)).toHaveLength(
+    mockClient.publish.mock.calls.length
+  );
 });
 
 test("missing instrumentation keeps the existing timeout classification", async () => {
