@@ -38,4 +38,4 @@ jobs:
           git add -f dist
           git commit -m "Build isolated PR #${{ matrix.pr }} for live Homebridge checks"
           git diff --name-only HEAD^ HEAD | node -e 'let s="";process.stdin.on("data",c=>s+=c);process.stdin.on("end",()=>{if(s.trim().split("\n").some(p=>!p.startsWith("dist/")))process.exit(1)})'
-          git push origin HEAD:${{ matrix.branch }}
+          git push origin HEAD:refs/heads/${{ matrix.branch }}
