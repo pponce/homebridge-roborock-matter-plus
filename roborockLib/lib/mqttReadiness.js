@@ -49,17 +49,24 @@ class MqttReadiness {
       };
       const waiter = {
         ready: () => finish(null),
-        stop: () => finish(
-          readinessError(
-            "MQTT stopped while waiting for readiness; this command was not sent.",
-            "MQTT_SHUTTING_DOWN"
-          )
-        ),
+        stop: () =>
+          finish(
+            readinessError(
+              "MQTT stopped while waiting for readiness; this command was not sent.",
+              "MQTT_SHUTTING_DOWN"
+            )
+          ),
       };
       this.waiters.add(waiter);
-      timer = setTimeout(() => finish(readinessError(
-        `MQTT reply subscription did not become ready within ${timeoutMs}ms; this command was not sent.`
-      )), timeoutMs);
+      timer = setTimeout(
+        () =>
+          finish(
+            readinessError(
+              `MQTT reply subscription did not become ready within ${timeoutMs}ms; this command was not sent.`
+            )
+          ),
+        timeoutMs
+      );
       timer.unref?.();
       this.changed();
     });
