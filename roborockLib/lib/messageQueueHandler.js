@@ -778,7 +778,8 @@ class messageQueueHandler {
                   () => {
                     const pending = this.adapter.pendingRequests.get(messageID);
                     if (!pending) return;
-                    if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
+                    if (pending.timeout)
+                      this.adapter.clearTimeout(pending.timeout);
                     this.adapter.pendingRequests.delete(messageID);
                     reject(
                       refusal(

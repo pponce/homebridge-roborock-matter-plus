@@ -200,7 +200,9 @@ describe("a B01 map request in flight at shutdown", () => {
       api.message.buildPayload = async () => "{}";
       api.message.buildRoborockMessage = async () => Buffer.from("frame");
       const generation = api.rr_mqtt_connector.sessionDiagnostics.onConnect();
-      api.rr_mqtt_connector.sessionDiagnostics.onSubscribe(generation, null, [{ qos: 1 }]);
+      api.rr_mqtt_connector.sessionDiagnostics.onSubscribe(generation, null, [
+        { qos: 1 },
+      ]);
       api.rr_mqtt_connector.sendMessage = jest.fn();
       api.noteLiveRoomFetchFailed = jest.fn();
 
