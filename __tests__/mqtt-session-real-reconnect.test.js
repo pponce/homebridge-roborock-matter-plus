@@ -36,7 +36,9 @@ test("real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCR
     .mockImplementation(function (...args) {
       if (!realClient) {
         realClient = this;
-        this.on("message", (_topic, _message, packet) => presencePackets.push(packet));
+        this.on("message", (_topic, _message, packet) =>
+          presencePackets.push(packet)
+        );
         this.on("packetreceive", (packet) => {
           if (packet.cmd === "suback") receivedSubacks += 1;
         });
@@ -76,13 +78,16 @@ test("real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCR
         });
         if (connections.length === 1) {
           socket.write(suback);
-          socket.write(mqttPacket.generate({
-            cmd: "publish", qos: 0, retain: true,
-            topic: packet.subscriptions[0].topic.replace(/#$/, "robot-a"),
-            payload: Buffer.from(JSON.stringify({ online: true })),
-          }));
-        }
-        else connection.pendingSuback = suback;
+          socket.write(
+            mqttPacket.generate({
+              cmd: "publish",
+              qos: 0,
+              retain: true,
+              topic: packet.subscriptions[0].topic.replace(/#$/, "robot-a"),
+              payload: Buffer.from(JSON.stringify({ online: true })),
+            })
+          );
+        } else connection.pendingSuback = suback;
       } else if (packet.cmd === "pingreq") {
         socket.write(mqttPacket.generate({ cmd: "pingresp" }));
       } else if (packet.cmd === "disconnect") socket.end();
@@ -125,14 +130,25 @@ test("real mqtt.js automatic reconnect acknowledges generation 2 with one SUBSCR
     expect(presencePackets[0].retain).toBe(true);
     expect(adapter.log.info).not.toHaveBeenCalled();
     expect(connector.robotPresenceByDuid.has("robot-a")).toBe(false);
-    const presenceTopic = connections[0].subscriptions[0].subscriptions[0].topic.replace(/#$/, "robot-a");
-    connections[0].socket.write(mqttPacket.generate({
-      cmd: "publish", qos: 0, retain: false, topic: presenceTopic,
-      payload: Buffer.from(JSON.stringify({ online: true })),
-    }));
+    const presenceTopic =
+      connections[0].subscriptions[0].subscriptions[0].topic.replace(
+        /#$/,
+        "robot-a"
+      );
+    connections[0].socket.write(
+      mqttPacket.generate({
+        cmd: "publish",
+        qos: 0,
+        retain: false,
+        topic: presenceTopic,
+        payload: Buffer.from(JSON.stringify({ online: true })),
+      })
+    );
     await until(() => presencePackets.length === 2);
     expect(presencePackets[1].retain).toBe(false);
-    expect(adapter.log.info).toHaveBeenCalledWith("Fixture robot: first live MQTT presence report is online.");
+    expect(adapter.log.info).toHaveBeenCalledWith(
+      "Fixture robot: first live MQTT presence report is online."
+    );
     connections[0].socket.destroy();
     await until(
       () => latest?.generation === 2 && connections[1]?.pendingSuback
