@@ -1,0 +1,94 @@
+name: Validate preventive refresh interval
+on:
+  push:
+    branches: [review-delay/preventive-interval-validation]
+permissions:
+  contents: write
+concurrency:
+  group: validate-preventive-interval
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: review-delay/preventive-interval
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Format, validate and build the preventive refresh interval
+        shell: bash
+        run: |
+          set +e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm ci > /tmp/install.log 2>&1
+          install_status=$?
+          npm run lint:fix > /tmp/format.log 2>&1
+          format_status=$?
+          git add -u
+          if ! git diff --cached --quiet; then
+            git commit -m "Format configurable preventive refresh"
+          fi
+          source_sha=$(git rev-parse HEAD)
+          npm run lint > /tmp/lint.log 2>&1
+          lint_status=$?
+          npm run typecheck > /tmp/types.log 2>&1
+          types_status=$?
+          npm run build > /tmp/build.log 2>&1
+          build_status=$?
+          npm test -- --runInBand --json --outputFile=/tmp/jest.json > /tmp/jest.log 2>&1
+          jest_status=$?
+          node --test tests/*.test.cjs > /tmp/native.log 2>&1
+          native_status=$?
+          python3 -m unittest discover -s tests -p 'test_*.py' > /tmp/python.log 2>&1
+          python_status=$?
+          npm pack --ignore-scripts --json --pack-destination /tmp > /tmp/pack.json 2> /tmp/pack.log
+          pack_status=$?
+          if [ "$pack_status" -eq 0 ]; then
+            node - <<'JS'
+          const fs = require('fs');
+          const pack = JSON.parse(fs.readFileSync('/tmp/pack.json'))[0];
+          const paths = new Set(pack.files.map(f => f.path));
+          const required = ['package.json', 'config.schema.json', 'dist/index.js', 'dist/platform.js', 'homebridge-ui/public/index.js', 'homebridge-ui/public/index.html', 'dist/native_schedule_controls.js', 'dist/hap_schedule_api.js', 'dist/schedule_write_reconciliation.js', 'homebridge-ui/server.js', 'roborockLib/roborockAPI.js', ...fs.readdirSync('roborockLib/lib').filter(f => f.endsWith('.js')).map(f => 'roborockLib/lib/' + f)];
+          const missing = required.filter(p => !paths.has(p));
+          fs.writeFileSync('/tmp/pack-summary.json', JSON.stringify({name: pack.name, version: pack.version, filename: pack.filename, files: pack.files.length, requiredFiles: required.length, missing}));
+          if (missing.length) { console.error('Missing runtime files:', missing); process.exitCode = 1; }
+          JS
+            pack_status=$?
+          fi
+          all_status=$((install_status + format_status + lint_status + types_status + build_status + jest_status + native_status + python_status + pack_status))
+          install_sha=""
+          if [ "$all_status" -eq 0 ]; then
+            git add -f dist
+            if ! git diff --cached --quiet; then
+              git commit -m "Build configurable preventive refresh"
+            fi
+            install_sha=$(git rev-parse HEAD)
+          fi
+          export source_sha install_sha install_status format_status lint_status types_status build_status jest_status native_status python_status pack_status
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = {'sourceSha': os.environ['source_sha'], 'installSha': os.environ['install_sha'], 'statuses': {k: int(os.environ[k + '_status']) for k in ['install', 'format', 'lint', 'types', 'build', 'jest', 'native', 'python', 'pack']}}
+          if Path('/tmp/pack-summary.json').exists(): result['package'] = json.loads(Path('/tmp/pack-summary.json').read_text())
+          p = Path('/tmp/jest.json')
+          if p.exists():
+              j = json.loads(p.read_text())
+              result['jest'] = {k: j.get(k) for k in ['numPassedTests', 'numFailedTests', 'numPendingTests', 'numPassedTestSuites', 'numFailedTestSuites', 'success']}
+              result['failures'] = [{'file': t['name'].split('/homebridge-roborock-matter-plus/')[-1], 'message': t.get('message', '')[:12000], 'assertions': [{'name': a['fullName'], 'messages': a.get('failureMessages', [])} for a in t.get('assertionResults', []) if a['status'] == 'failed']} for t in j.get('testResults', []) if t['status'] == 'failed']
+          result['logs'] = {k: Path('/tmp/' + k + '.log').read_text()[-35000:] for k in ['install', 'lint', 'types', 'build', 'native', 'python', 'pack']}
+          Path('interval-validation-result.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps({k:v for k,v in result.items() if k not in ['logs', 'failures']}))
+          PY
+          git add -f interval-validation-result.json
+          git commit -m "Record preventive interval validation evidence"
+          git push origin HEAD:review-delay/preventive-interval
+          push_status=$?
+          if [ "$all_status" -ne 0 ] || [ "$push_status" -ne 0 ]; then
+            exit 1
+          fi
