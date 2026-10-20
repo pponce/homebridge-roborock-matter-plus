@@ -380,12 +380,70 @@ test("the independent preventive control permits an idle four-hour refresh", asy
   expect(connector.isConnected()).toBe(true);
 });
 
-test("preventive refresh defers for a pending write", async () => {
+test.each([1, 13, 360])("preventive refresh uses a configured %i-minute interval", async (minutes) => {
   await restartWith({
     enableMqttSessionRecovery: true,
     enableMqttPreventiveRefresh: true,
+    mqttPreventiveRefreshMinutes: minutes,
   });
-  await jest.advanceTimersByTimeAsync(4 * 60 * 60 * 1000 - 1000);
+  await jest.advanceTimersByTimeAsync(minutes * 60_000 - 1);
+  expect(mockClients).toHaveLength(1);
+  await jest.advanceTimersByTimeAsync(1);
+  expect(mockClients).toHaveLength(2);
+  await replacementReady();
+  expect(snapshot().recovery.preventiveRefreshMinutes).toBe(minutes);
+  expect(connector.isConnected()).toBe(true);
+});
+
+test.each([0, -5, 1.5, NaN, Infinity, null, true, "30"])(
+  "invalid preventive interval %p retains the four-hour default",
+  async (minutes) => {
+    await restartWith({
+      enableMqttSessionRecovery: true,
+      enableMqttPreventiveRefresh: true,
+      mqttPreventiveRefreshMinutes: minutes,
+    });
+    await jest.advanceTimersByTimeAsync(4 * 60 * 60 * 1000 - 1);
+    expect(mockClients).toHaveLength(1);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(mockClients).toHaveLength(2);
+    await replacementReady();
+    expect(snapshot().recovery.preventiveRefreshMinutes).toBe(240);
+  }
+);
+
+test.each([
+  { enableMqttSessionRecovery: true },
+  { enableMqttPreventiveRefresh: true },
+])("a configured interval does not enable missing prerequisites: %p", async (config) => {
+  await restartWith({ ...config, mqttPreventiveRefreshMinutes: 1 });
+  await jest.advanceTimersByTimeAsync(5 * 60_000);
+  expect(mockClients).toHaveLength(1);
+});
+
+test("reconnecting restarts the configured preventive age", async () => {
+  await restartWith({
+    enableMqttSessionRecovery: true,
+    enableMqttPreventiveRefresh: true,
+    mqttPreventiveRefreshMinutes: 5,
+  });
+  await jest.advanceTimersByTimeAsync(4 * 60_000);
+  mockClients[0].handlers.get("close")();
+  connectLatest();
+  await jest.advanceTimersByTimeAsync(4 * 60_000);
+  expect(mockClients).toHaveLength(1);
+  await jest.advanceTimersByTimeAsync(60_000);
+  expect(mockClients).toHaveLength(2);
+  await replacementReady();
+});
+
+test.each([2, 240])("preventive refresh at %i minutes defers for a pending write", async (minutes) => {
+  await restartWith({
+    enableMqttSessionRecovery: true,
+    enableMqttPreventiveRefresh: true,
+    mqttPreventiveRefreshMinutes: minutes,
+  });
+  await jest.advanceTimersByTimeAsync(minutes * 60_000 - 1000);
   const write = await startRequest("robot-a", "app_start");
   await jest.advanceTimersByTimeAsync(1500);
   expect(mockClients).toHaveLength(1);

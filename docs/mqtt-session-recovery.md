@@ -45,8 +45,16 @@ can choose another presentation later. It is a configuration option, not a HomeK
 accessory. It requires experimental session recovery to be enabled, and a child
 bridge restart after changing it.
 
+`mqttPreventiveRefreshMinutes` sets the session age in whole minutes, with a
+minimum of 1 and a default of 240 (four hours). The field sits below the preventive
+refresh checkbox and is disabled unless both recovery and preventive refresh are
+enabled. Its saved value is retained when either checkbox is turned off. Missing
+or invalid values use 240 minutes. Restart the child bridge after changing it.
+
 When enabled, a once-per-minute check refreshes sessions that have been ready for
-at least four hours. Refresh defers if any cloud request is
+at least the configured interval. A reconnect or replacement restarts that age
+clock. This is a periodic age check, not a prediction of the next timeout.
+Refresh defers if any cloud request is
 outstanding, including a write or B01 map request, before closing the send gate.
 Commands arriving during that deferral can still use the ready session.
 It does not coordinate entire multi-command schedule transactions.
@@ -58,7 +66,7 @@ request-queue timeouts; upstream baseline tests are retained, with additional te
 ## Recovery diagnostics
 
 The persisted `MqttSessionDiagnostics` snapshot includes a `recovery` object:
-`enabled`, `preventiveRefreshEnabled`, `inProgress`, `lastReason`, `lastResult`,
+`enabled`, `preventiveRefreshEnabled`, `preventiveRefreshMinutes`, `inProgress`, `lastReason`, `lastResult`,
 `consecutiveFailures`, `cooldownRemainingMs`, and `silenceCooldownRemainingMs`.
 The two remaining durations distinguish the general success/failure cooldown from
 the shared 30-minute silence cooldown. They are measured when the snapshot is

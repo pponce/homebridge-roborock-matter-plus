@@ -27,6 +27,8 @@ const ids = [
 ];
 
 function harness(saved) {
+  let configs = saved ? [{ platform: "RoborockVacuumPlatform", ...saved }] : [];
+  let saveCount = 0;
   const elements = new Map();
   for (const [, attributes, id] of html.matchAll(
     /<\w+\b([^>]*\bid="([^"]+)"[^>]*)>/g
@@ -63,8 +65,9 @@ function harness(saved) {
     window: {
       homebridge: {
         addEventListener() {},
-        getPluginConfig: async () =>
-          saved ? [{ platform: "RoborockVacuumPlatform", ...saved }] : [],
+        getPluginConfig: async () => JSON.parse(JSON.stringify(configs)),
+        updatePluginConfig: async (next) => { configs = next; },
+        savePluginConfig: async () => { saveCount++; },
       },
     },
   });
@@ -79,6 +82,9 @@ function harness(saved) {
     load: () => context.loadConfig(),
     sync: () => context.syncScheduleControlOptions(),
     form: () => JSON.parse(JSON.stringify(context.getFormValues())),
+    save: () => vm.runInContext("saveCredentials(false, { only: AUTO_SAVED_FIELDS })", context),
+    saved: () => JSON.parse(JSON.stringify(configs[0])),
+    saveCount: () => saveCount,
     context,
   };
 }
@@ -197,4 +203,66 @@ test("schema and markup agree on all-vacuum defaults", () => {
     ids.map((id) => harness().elements.get(id).checked),
     [true, false, true, false]
   );
+});
+
+test("preventive refresh defaults to 240 minutes for old or invalid configs", async () => {
+  for (const value of [undefined, 0, -1, 1.5, "30", null, true]) {
+    const h = harness({ mqttPreventiveRefreshMinutes: value });
+    await h.load();
+    const input = h.elements.get("mqtt-preventive-refresh-minutes");
+    assert.equal(input.value, "240");
+    assert.equal(input.disabled, true);
+    assert.equal(h.form().mqttPreventiveRefreshMinutes, 240);
+  }
+});
+
+test("both recovery flags are required without erasing the chosen interval", async () => {
+  const h = harness({ mqttPreventiveRefreshMinutes: 45 });
+  await h.load();
+  const input = h.elements.get("mqtt-preventive-refresh-minutes");
+  const options = h.elements.get("mqtt-preventive-refresh-options");
+  for (const [recovery, preventive] of [[true, false], [false, true], [true, true], [false, false]]) {
+    h.elements.get("enableMqttSessionRecovery").checked = recovery;
+    h.elements.get("enableMqttPreventiveRefresh").checked = preventive;
+    h.context.syncMqttPreventiveRefreshOptions();
+    assert.equal(input.disabled, !(recovery && preventive));
+    assert.equal(options.classList.contains("disabled"), input.disabled);
+    assert.equal(h.form().mqttPreventiveRefreshMinutes, 45);
+  }
+});
+
+test("the interval saves as a number and reloads without saving pending pause/delay edits", async () => {
+  const h = harness({
+    email: "test@example.com",
+    enableMqttSessionRecovery: true,
+    enableMqttPreventiveRefresh: true,
+    mqttPreventiveRefreshMinutes: 120,
+    enableSchedulePauseUntilTomorrow: true,
+    enableScheduleDelay: true,
+    scheduleDelayMinutes: 60,
+  });
+  await h.load();
+  const input = h.elements.get("mqtt-preventive-refresh-minutes");
+  assert.equal(input.value, "120");
+  h.elements.get("enable-schedule-pause").checked = false;
+  h.elements.get("enable-schedule-delay").checked = false;
+  h.elements.get("schedule-delay-minutes").value = "15";
+  input.value = "90";
+  await h.save();
+  assert.equal(h.saveCount(), 1);
+  assert.equal(h.saved().mqttPreventiveRefreshMinutes, 90);
+  assert.equal(h.saved().enableSchedulePauseUntilTomorrow, true);
+  assert.equal(h.saved().enableScheduleDelay, true);
+  assert.equal(h.saved().scheduleDelayMinutes, 60);
+  const reopened = harness(h.saved());
+  await reopened.load();
+  assert.equal(reopened.elements.get("mqtt-preventive-refresh-minutes").value, "90");
+  assert.equal(reopened.elements.get("mqtt-preventive-refresh-minutes").disabled, false);
+
+  for (const invalid of ["", "0", "-1", "1.5", "not-a-number"]) {
+    input.value = invalid;
+    await h.save();
+    assert.equal(input.value, "240");
+    assert.equal(h.saved().mqttPreventiveRefreshMinutes, 240);
+  }
 });

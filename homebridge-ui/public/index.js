@@ -64,6 +64,12 @@ const elements = {
   enableMqttPreventiveRefresh: document.getElementById(
     "enableMqttPreventiveRefresh"
   ),
+  mqttPreventiveRefreshMinutes: document.getElementById(
+    "mqtt-preventive-refresh-minutes"
+  ),
+  mqttPreventiveRefreshOptions: document.getElementById(
+    "mqtt-preventive-refresh-options"
+  ),
   cloudOnlyMode: document.getElementById("cloud-only-mode"),
   transientWarningThrottleHours: document.getElementById(
     "transient-warning-throttle-hours"
@@ -102,6 +108,7 @@ const state = {
 const DIAGNOSTICS_AUTO_REFRESH_DELAY_MS = 3000;
 const DIAGNOSTICS_AUTO_REFRESH_LIMIT = 2;
 const DEFAULT_TRANSIENT_WARNING_THROTTLE_HOURS = 6;
+const DEFAULT_MQTT_PREVENTIVE_REFRESH_MINUTES = 240;
 
 // Kept in the same order as HOMEKIT_ACTION_KEYS in src/types.ts, so the form,
 // the saved config and the plugin all name these the same way.
@@ -274,6 +281,11 @@ async function loadConfig() {
     if (elements.enableMqttPreventiveRefresh)
       elements.enableMqttPreventiveRefresh.checked =
         config.enableMqttPreventiveRefresh === true;
+    if (elements.mqttPreventiveRefreshMinutes)
+      elements.mqttPreventiveRefreshMinutes.value = String(
+        normalizeMqttPreventiveRefreshMinutes(config.mqttPreventiveRefreshMinutes)
+      );
+    syncMqttPreventiveRefreshOptions();
     elements.cloudOnlyMode.checked = Boolean(config.cloudOnlyMode);
     elements.advancedSettings.open = Boolean(
       config.debugMode ||
@@ -592,6 +604,33 @@ function applyStateSensorSelection(selection) {
  */
 function syncFeatureDependencies() {}
 
+function syncMqttPreventiveRefreshOptions() {
+  const enabled = Boolean(
+    elements.enableMqttSessionRecovery?.checked &&
+      elements.enableMqttPreventiveRefresh?.checked
+  );
+  if (elements.mqttPreventiveRefreshMinutes) {
+    elements.mqttPreventiveRefreshMinutes.disabled = !enabled;
+  }
+  elements.mqttPreventiveRefreshOptions?.classList.toggle("disabled", !enabled);
+}
+
+function normalizeMqttPreventiveRefreshMinutes(value) {
+  return Number.isSafeInteger(value) && value >= 1
+    ? value
+    : DEFAULT_MQTT_PREVENTIVE_REFRESH_MINUTES;
+}
+
+function getMqttPreventiveRefreshMinutes() {
+  const minutes = normalizeMqttPreventiveRefreshMinutes(
+    Number(elements.mqttPreventiveRefreshMinutes?.value)
+  );
+  if (elements.mqttPreventiveRefreshMinutes) {
+    elements.mqttPreventiveRefreshMinutes.value = String(minutes);
+  }
+  return minutes;
+}
+
 function syncScheduleControlOptions() {
   elements.schedulePauseOptions?.classList.toggle(
     "hidden",
@@ -740,6 +779,7 @@ const AUTO_SAVED_FIELDS = [
   "preferCloudForMatterCommands",
   "enableMqttSessionRecovery",
   "enableMqttPreventiveRefresh",
+  "mqttPreventiveRefreshMinutes",
   "cloudOnlyMode",
   "transientWarningThrottleHours",
 ];
@@ -790,6 +830,7 @@ function getFormValues() {
     enableMqttPreventiveRefresh: Boolean(
       elements.enableMqttPreventiveRefresh?.checked
     ),
+    mqttPreventiveRefreshMinutes: getMqttPreventiveRefreshMinutes(),
     cloudOnlyMode: getCloudOnlyMode(),
     transientWarningThrottleHours: getTransientWarningThrottleHours(),
   };
@@ -1937,6 +1978,7 @@ function init() {
   syncActionSwitchAvailability();
   syncFeatureDependencies();
   syncScheduleControlOptions();
+  syncMqttPreventiveRefreshOptions();
   loadManagedDevices().catch(() => {});
   if (elements.refreshDevices) {
     elements.refreshDevices.addEventListener("click", () =>
@@ -2038,10 +2080,15 @@ function init() {
   elements.preferCloudForMatterCommands.addEventListener("change", () =>
     autoSave()
   );
-  elements.enableMqttSessionRecovery?.addEventListener("change", () =>
-    autoSave()
-  );
-  elements.enableMqttPreventiveRefresh?.addEventListener("change", () =>
+  elements.enableMqttSessionRecovery?.addEventListener("change", () => {
+    syncMqttPreventiveRefreshOptions();
+    autoSave();
+  });
+  elements.enableMqttPreventiveRefresh?.addEventListener("change", () => {
+    syncMqttPreventiveRefreshOptions();
+    autoSave();
+  });
+  elements.mqttPreventiveRefreshMinutes?.addEventListener("change", () =>
     autoSave()
   );
   elements.cloudOnlyMode.addEventListener("change", () => autoSave());
