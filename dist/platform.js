@@ -123,6 +123,7 @@ class RoborockPlatform {
             enableLiveRoomTracking: this.platformConfig.enableLiveRoomTracking !== false,
             cloudOnlyMode: Boolean(this.platformConfig.cloudOnlyMode),
             enableMqttPreventiveRefresh: this.platformConfig.enableMqttPreventiveRefresh === true,
+            mqttPreventiveRefreshMinutes: this.platformConfig.mqttPreventiveRefreshMinutes,
             enableMqttSessionRecovery: this.platformConfig.enableMqttSessionRecovery === true,
             log: this.log,
             userData: decryptedSession,
