@@ -283,7 +283,9 @@ async function loadConfig() {
         config.enableMqttPreventiveRefresh === true;
     if (elements.mqttPreventiveRefreshMinutes)
       elements.mqttPreventiveRefreshMinutes.value = String(
-        normalizeMqttPreventiveRefreshMinutes(config.mqttPreventiveRefreshMinutes)
+        normalizeMqttPreventiveRefreshMinutes(
+          config.mqttPreventiveRefreshMinutes
+        )
       );
     syncMqttPreventiveRefreshOptions();
     elements.cloudOnlyMode.checked = Boolean(config.cloudOnlyMode);

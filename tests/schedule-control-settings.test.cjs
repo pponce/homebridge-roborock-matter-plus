@@ -66,8 +66,12 @@ function harness(saved) {
       homebridge: {
         addEventListener() {},
         getPluginConfig: async () => JSON.parse(JSON.stringify(configs)),
-        updatePluginConfig: async (next) => { configs = next; },
-        savePluginConfig: async () => { saveCount++; },
+        updatePluginConfig: async (next) => {
+          configs = next;
+        },
+        savePluginConfig: async () => {
+          saveCount++;
+        },
       },
     },
   });
@@ -82,7 +86,11 @@ function harness(saved) {
     load: () => context.loadConfig(),
     sync: () => context.syncScheduleControlOptions(),
     form: () => JSON.parse(JSON.stringify(context.getFormValues())),
-    save: () => vm.runInContext("saveCredentials(false, { only: AUTO_SAVED_FIELDS })", context),
+    save: () =>
+      vm.runInContext(
+        "saveCredentials(false, { only: AUTO_SAVED_FIELDS })",
+        context
+      ),
     saved: () => JSON.parse(JSON.stringify(configs[0])),
     saveCount: () => saveCount,
     context,
@@ -221,7 +229,12 @@ test("both recovery flags are required without erasing the chosen interval", asy
   await h.load();
   const input = h.elements.get("mqtt-preventive-refresh-minutes");
   const options = h.elements.get("mqtt-preventive-refresh-options");
-  for (const [recovery, preventive] of [[true, false], [false, true], [true, true], [false, false]]) {
+  for (const [recovery, preventive] of [
+    [true, false],
+    [false, true],
+    [true, true],
+    [false, false],
+  ]) {
     h.elements.get("enableMqttSessionRecovery").checked = recovery;
     h.elements.get("enableMqttPreventiveRefresh").checked = preventive;
     h.context.syncMqttPreventiveRefreshOptions();
@@ -256,8 +269,14 @@ test("the interval saves as a number and reloads without saving pending pause/de
   assert.equal(h.saved().scheduleDelayMinutes, 60);
   const reopened = harness(h.saved());
   await reopened.load();
-  assert.equal(reopened.elements.get("mqtt-preventive-refresh-minutes").value, "90");
-  assert.equal(reopened.elements.get("mqtt-preventive-refresh-minutes").disabled, false);
+  assert.equal(
+    reopened.elements.get("mqtt-preventive-refresh-minutes").value,
+    "90"
+  );
+  assert.equal(
+    reopened.elements.get("mqtt-preventive-refresh-minutes").disabled,
+    false
+  );
 
   for (const invalid of ["", "0", "-1", "1.5", "not-a-number"]) {
     input.value = invalid;

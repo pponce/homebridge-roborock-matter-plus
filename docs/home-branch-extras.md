@@ -1,6 +1,7 @@
 # Home branch integration and remaining extras
 
 ## Integration on upstream v3.39.0 (16 October 2026)
+
 `SCHEDULE_PAUSE_DELAY` incorporates the revised PRs #30, #31, #32, #36,
 #37, #38 and #39, plus the separate local TCP-probe test fix. The native
 pause and stacked schedule-delay controls are retained, including their
