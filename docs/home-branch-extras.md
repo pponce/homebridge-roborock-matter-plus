@@ -62,15 +62,15 @@ silence breaker exemption and #42's probe-test correction.
 
 The combined build also includes:
 
-| PR | Remaining scope |
-| --- | --- |
+| PR  | Remaining scope                                                                  |
+| --- | -------------------------------------------------------------------------------- |
 | #31 | Optional recovery triggers and diagnostics, adapted here to upstream's lifecycle |
-| #32 | Reconcile uncertain schedule writes and share duplicate pending requests |
-| #36 | Distinguish retained presence snapshots from live changes |
-| #37 | Wait for reply readiness without blocking a working LAN route |
-| #38 | Persist confirmed schedule state and handle unknown write outcomes |
-| #39 | Acknowledge Find/Routine presses promptly and suppress duplicate runs |
-| #46 | Preserve historical eligible-read evidence across sessions |
+| #32 | Reconcile uncertain schedule writes and share duplicate pending requests         |
+| #36 | Distinguish retained presence snapshots from live changes                        |
+| #37 | Wait for reply readiness without blocking a working LAN route                    |
+| #38 | Persist confirmed schedule state and handle unknown write outcomes               |
+| #39 | Acknowledge Find/Routine presses promptly and suppress duplicate runs            |
+| #46 | Preserve historical eligible-read evidence across sessions                       |
 
 The extras cleanup changes only this integration branch, not those PRs.
 

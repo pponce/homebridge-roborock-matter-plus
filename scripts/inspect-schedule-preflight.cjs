@@ -13,7 +13,10 @@ const {
   readState,
   writePrivate,
 } = require("./test-schedule-time.cjs");
-const { scheduleShape, inspectCloudJobs } = require("../roborockLib/lib/inspectCloudJobs");
+const {
+  scheduleShape,
+  inspectCloudJobs,
+} = require("../roborockLib/lib/inspectCloudJobs");
 const { TrialError } = require("../roborockLib/lib/cloudJobTimeTrial");
 const alias = (value) =>
   createHash("sha256").update(String(value)).digest("hex").slice(0, 12);
@@ -100,7 +103,14 @@ function describeJob(job, selectedJobId, logged) {
   };
 }
 
-async function inspect({ request, collectionPath, jobId, storage, duid, probeMethods = false }) {
+async function inspect({
+  request,
+  collectionPath,
+  jobId,
+  storage,
+  duid,
+  probeMethods = false,
+}) {
   const requestedAt = new Date().toISOString();
   const response = await request("GET", collectionPath);
   if (
@@ -140,14 +150,21 @@ async function inspect({ request, collectionPath, jobId, storage, duid, probeMet
   };
   if (probeMethods) {
     const selected = jobs.find((job) => String(job.id) === String(jobId));
-    const inspection = await inspectCloudJobs({
-      options: async (route) => {
-        const response = await request("OPTIONS", `/${route}`);
-        const result = { status: response.status, headers: { allow: response.allow } };
-        if (response.status >= 400) throw { response: result };
-        return result;
+    const inspection = await inspectCloudJobs(
+      {
+        options: async (route) => {
+          const response = await request("OPTIONS", `/${route}`);
+          const result = {
+            status: response.status,
+            headers: { allow: response.allow },
+          };
+          if (response.status >= 400) throw { response: result };
+          return result;
+        },
       },
-    }, duid, selected ? [selected] : []);
+      duid,
+      selected ? [selected] : []
+    );
     report.methodChecks = inspection.methodChecks;
   }
   return report;

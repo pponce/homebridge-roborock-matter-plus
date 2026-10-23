@@ -131,7 +131,11 @@ function makeRequester(
       policy.allowMethodProbes === true &&
       method === "OPTIONS" &&
       payload === undefined &&
-      [collectionPath, itemPath, `${itemPath}/no-such-subresource-control`].includes(requestPath);
+      [
+        collectionPath,
+        itemPath,
+        `${itemPath}/no-such-subresource-control`,
+      ].includes(requestPath);
     if (policy.readOnly && method !== "GET" && !methodProbe)
       throw new TrialError("READ_ONLY_REQUEST_REQUIRED");
     const permitted =

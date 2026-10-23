@@ -425,11 +425,15 @@ test("repeated initialization does not add duplicate listeners to the current cl
 });
 
 function nativeApi() {
-  const { createNativeScheduleApi } = require("../roborockLib/lib/nativeScheduleApi");
+  const {
+    createNativeScheduleApi,
+  } = require("../roborockLib/lib/nativeScheduleApi");
   adapter.messageQueueHandler = queue;
   adapter.vacuums = {
-    "robot-a": { command: (duid, method, params, options) =>
-      queue.sendRequest(duid, method, params, false, false, options) },
+    "robot-a": {
+      command: (duid, method, params, options) =>
+        queue.sendRequest(duid, method, params, false, false, options),
+    },
   };
   return createNativeScheduleApi(adapter, {
     recordRequest: jest.fn(),
@@ -437,41 +441,50 @@ function nativeApi() {
   });
 }
 
-test.each(["read", "write"])("native schedule %s waits through the upstream reconnect and retains its response budget", async kind => {
-  const api = nativeApi();
-  const old = mockClients[0];
-  old.handlers.get("close")();
-  const operation = (kind === "read" ? api.isCleaning("robot-a") : api.dock("robot-a")).catch(error => error);
-  await jest.advanceTimersByTimeAsync(9999);
-  expect(mockClients).toHaveLength(1);
-  expect(connector.readiness.waiters.size).toBe(1);
-  expect(adapter.pendingRequests.size).toBe(0);
-  await jest.advanceTimersByTimeAsync(1);
-  expect(mockClients).toHaveLength(2);
-  const fresh = mockClients[1];
-  fresh.handlers.get("connect")({});
-  await jest.advanceTimersByTimeAsync(2500);
-  expect(fresh.publish).not.toHaveBeenCalled();
-  acknowledge();
-  await jest.advanceTimersByTimeAsync(0);
-  expect(fresh.publish).toHaveBeenCalledTimes(1);
-  expect(old.publish).not.toHaveBeenCalled();
-  const id = requestId;
-  await jest.advanceTimersByTimeAsync(9999);
-  expect(adapter.pendingRequests.has(id)).toBe(true);
-  receive(reply(id, kind === "read" ? [{ state: 5 }] : ["ok"]));
-  expect(await operation).toBe(kind === "read" ? true : undefined);
-  expect(adapter.pendingRequests.size).toBe(0);
-});
+test.each(["read", "write"])(
+  "native schedule %s waits through the upstream reconnect and retains its response budget",
+  async (kind) => {
+    const api = nativeApi();
+    const old = mockClients[0];
+    old.handlers.get("close")();
+    const operation = (
+      kind === "read" ? api.isCleaning("robot-a") : api.dock("robot-a")
+    ).catch((error) => error);
+    await jest.advanceTimersByTimeAsync(9999);
+    expect(mockClients).toHaveLength(1);
+    expect(connector.readiness.waiters.size).toBe(1);
+    expect(adapter.pendingRequests.size).toBe(0);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(mockClients).toHaveLength(2);
+    const fresh = mockClients[1];
+    fresh.handlers.get("connect")({});
+    await jest.advanceTimersByTimeAsync(2500);
+    expect(fresh.publish).not.toHaveBeenCalled();
+    acknowledge();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(fresh.publish).toHaveBeenCalledTimes(1);
+    expect(old.publish).not.toHaveBeenCalled();
+    const id = requestId;
+    await jest.advanceTimersByTimeAsync(9999);
+    expect(adapter.pendingRequests.has(id)).toBe(true);
+    receive(reply(id, kind === "read" ? [{ state: 5 }] : ["ok"]));
+    expect(await operation).toBe(kind === "read" ? true : undefined);
+    expect(adapter.pendingRequests.size).toBe(0);
+  }
+);
 
 test("native schedule readiness expires after thirty seconds and a late SUBACK cannot send it", async () => {
   const api = nativeApi();
   mockClients[0].handlers.get("close")();
-  const operation = api.isCleaning("robot-a").catch(error => error);
+  const operation = api.isCleaning("robot-a").catch((error) => error);
   await jest.advanceTimersByTimeAsync(29999);
   expect(connector.readiness.waiters.size).toBe(1);
   await jest.advanceTimersByTimeAsync(1);
-  expect(await operation).toMatchObject({ code: "MQTT_READINESS_TIMEOUT", requestNotSent: true, unansweredRequest: false });
+  expect(await operation).toMatchObject({
+    code: "MQTT_READINESS_TIMEOUT",
+    requestNotSent: true,
+    unansweredRequest: false,
+  });
   expect(adapter.pendingRequests.size).toBe(0);
   const fresh = mockClients.at(-1);
   fresh.handlers.get("connect")({});
