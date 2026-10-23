@@ -491,6 +491,116 @@ test("failed diagnostic reads are bounded and snapshots cannot overlap", async (
   assert.equal(count, 6);
 });
 
+test("status reads recover after an outage without restarting capture", async (t) => {
+  const h = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  let offline = true;
+  let statusCalls = 0;
+  h.adapter.messageQueueHandler.exchangeOverCloud = async ({ method }) => {
+    if (method !== "get_status") return [];
+    statusCalls++;
+    if (offline) throw new Error("Robot PRIVATE timed out");
+    return [{ state: 8, clean_time: 0 }];
+  };
+  for (let i = 0; i < 3; i++) await h.capture.snapshot();
+  offline = false;
+  await h.capture.snapshot();
+  assert.equal(statusCalls, 3);
+  assert(h.records().some((r) => r.event === "snapshot-read-skipped"));
+  now += 120000;
+  await h.capture.snapshot();
+  assert.equal(statusCalls, 4);
+  const recovered = h
+    .records()
+    .find((r) => r.event === "snapshot-read-recovered");
+  assert.equal(recovered.read, "get_status");
+  assert.equal(recovered.consecutiveFailures, 3);
+  assert(
+    h
+      .records()
+      .some(
+        (r) =>
+          r.event === "rpc-response" &&
+          r.method === "get_status" &&
+          r.result[0].state === 8
+      )
+  );
+  assert.equal(h.capture.active, true);
+  assert(!JSON.stringify(h.records()).includes("PRIVATE"));
+  // One later failure must not inherit the old outage's cooldown or count.
+  offline = true;
+  await h.capture.snapshot();
+  offline = false;
+  await h.capture.snapshot();
+  assert.equal(statusCalls, 6);
+  assert.equal(
+    h
+      .records()
+      .filter((r) => r.event === "snapshot-read-recovered")
+      .at(-1).consecutiveFailures,
+    1
+  );
+});
+
+test("continued failure probes are spaced out and stop at the capture deadline", async (t) => {
+  const h = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  let calls = 0;
+  h.adapter.api.get = async () => {
+    calls++;
+    throw new Error("unavailable");
+  };
+  for (let i = 0; i < 3; i++) await h.capture.snapshot();
+  assert.equal(calls, 6);
+  now += 120000;
+  await h.capture.snapshot();
+  assert.equal(calls, 8);
+  now += 60000;
+  await h.capture.snapshot();
+  assert.equal(calls, 8);
+  now += 60000;
+  await h.capture.snapshot();
+  assert.equal(calls, 10);
+  h.capture.stop();
+  now += 120000;
+  await h.capture.snapshot();
+  assert.equal(calls, 10);
+  const expiring = fixture(t);
+  expiring.adapter.api.get = h.adapter.api.get;
+  now = expiring.capture.deadline;
+  await expiring.capture.snapshot();
+  assert.equal(calls, 10);
+  assert.equal(expiring.capture.active, false);
+});
+
+test("HTTP recovery is independent of RPC failures and 429 still stops capture", async (t) => {
+  const h = fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  let status = 503;
+  h.adapter.api.get = async () => {
+    if (status) throw { response: { status } };
+    return { data: { result: [] } };
+  };
+  for (let i = 0; i < 3; i++) await h.capture.snapshot();
+  status = 0;
+  now += 120000;
+  await h.capture.snapshot();
+  assert.deepEqual(
+    h
+      .records()
+      .filter((r) => r.event === "snapshot-read-recovered")
+      .map((r) => r.read),
+    ["jobs", "scenes"]
+  );
+  status = 429;
+  await h.capture.snapshot();
+  assert.equal(h.capture.active, false);
+  assert.equal(h.records().at(-1).reason, "http-rate-limit");
+});
+
 test("size limit detaches observers without interrupting a command", async (t) => {
   const h = fixture(t, { maxBytes: 2500 });
   const result = await h.adapter.messageQueueHandler.sendRequest(

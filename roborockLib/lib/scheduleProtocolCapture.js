@@ -13,6 +13,7 @@ const FORMAT_VERSION = 2;
 const MAX_BYTES = 2 * 1024 * 1024;
 const DURATION_MS = 30 * 60 * 1000;
 const INTERVAL_MS = 60 * 1000;
+const READ_RETRY_COOLDOWN_MS = 2 * INTERVAL_MS;
 const FILE_NAME = /^schedule-\d{13}-[a-f0-9]{16}\.jsonl$/;
 const RPC_METHODS = new Set([
   "get_timer",
@@ -201,6 +202,7 @@ class ScheduleProtocolCapture {
     this.active = false;
     this.restorers = [];
     this.failures = new Map();
+    this.retryAfter = new Map();
     this.snapshotRunning = false;
     try {
       const directory = path.join(
@@ -542,16 +544,39 @@ class ScheduleProtocolCapture {
         for (const [name, read] of reads) {
           if (!available()) break;
           const key = duid + ":" + name;
-          // Failed/unsupported reads cannot turn a diagnostic into endless
-          // retries. A new capture is needed after three failed attempts.
-          if ((this.failures.get(key) || 0) >= 3) continue;
+          // Keep probing during an outage, but slow down after three consecutive
+          // failures. Recovery must be observable within the same capture.
+          const retryAfter = this.retryAfter.get(key) || 0;
+          if (Date.now() < retryAfter) {
+            this.record("snapshot-read-skipped", {
+              robot: this.sanitize.ref(duid),
+              read: name,
+              reason: "failure-cooldown",
+              retryAfter,
+            });
+            continue;
+          }
           try {
             await read();
+            const failures = this.failures.get(key) || 0;
+            this.failures.delete(key);
+            this.retryAfter.delete(key);
+            if (failures > 0)
+              this.record("snapshot-read-recovered", {
+                robot: this.sanitize.ref(duid),
+                read: name,
+                consecutiveFailures: failures,
+              });
           } catch (error) {
-            this.failures.set(key, (this.failures.get(key) || 0) + 1);
+            const failures = (this.failures.get(key) || 0) + 1;
+            this.failures.set(key, failures);
+            if (failures >= 3)
+              this.retryAfter.set(key, Date.now() + READ_RETRY_COOLDOWN_MS);
             this.record("snapshot-read-error", {
               robot: this.sanitize.ref(duid),
               read: name,
+              consecutiveFailures: failures,
+              retryAfter: this.retryAfter.get(key) || null,
               ...describeError(error),
             });
             if (error?.response?.status === 429) this.stop("http-rate-limit");

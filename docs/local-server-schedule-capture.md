@@ -75,8 +75,15 @@ while testing schedule edits and restore the original settings afterward.
 If a full round of reads takes longer, allow more time between actions.
 `snapshot-start` and `snapshot-end` delimit each round. Failed reads are
 reported explicitly; a missing or failed response is not an empty schedule list.
-Snapshots skip while a schedule operation is pending, and stop trying an
-individual read after three failures in the capture. They are sequential
+Snapshots skip while a schedule operation is pending. After three consecutive
+failures of an individual read, that read gets a two-minute cooldown before
+another attempt; the cooldown is checked on the next snapshot. A successful
+read resets its failure count and records `snapshot-read-recovered`, so an
+offline/reconnect experiment can include fresh status without restarting the
+capture. Cooldown skips are recorded as `snapshot-read-skipped`. Other reads
+continue independently. The thirty-minute, size, shutdown, and HTTP 429 limits
+still apply, and no extra retry timers or overlapping snapshots are created.
+These are sequential
 observations, not an atomic snapshot of the account.
 
 Useful later experiments are a temporary disabled schedule created/edited/
