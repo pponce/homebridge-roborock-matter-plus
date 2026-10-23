@@ -109,8 +109,7 @@ function createSanitizer() {
     // types, room order, and spacing; unknown text still becomes an alias.
     if (
       (key === "nextFireTime" && NEXT_FIRE_TIME_STRING.test(value)) ||
-      (key === "segments" &&
-        (value === "" || SEGMENT_LIST_STRING.test(value)))
+      (key === "segments" && (value === "" || SEGMENT_LIST_STRING.test(value)))
     )
       return value;
     if (
