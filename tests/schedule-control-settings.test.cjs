@@ -113,7 +113,10 @@ test("schedule capture is opt-in and saves independently of pause/delay controls
   assert.equal(h.saved().enableScheduleDelay, true);
   const reopened = harness(h.saved());
   await reopened.load();
-  assert.equal(reopened.elements.get("schedule-protocol-capture").checked, true);
+  assert.equal(
+    reopened.elements.get("schedule-protocol-capture").checked,
+    true
+  );
   reopened.elements.get("schedule-protocol-capture").checked = false;
   await reopened.save();
   assert.equal(reopened.saved().enableScheduleProtocolCapture, false);
