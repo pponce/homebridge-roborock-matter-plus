@@ -197,6 +197,8 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       username: username,
       password: password,
       debug: debugMode,
+      enableScheduleProtocolCapture:
+        this.platformConfig.enableScheduleProtocolCapture === true,
       baseURL: baseURL,
       serverURL: this.platformConfig.serverURL,
       skipDevices: this.platformConfig.skipDevices,

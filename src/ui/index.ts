@@ -6,6 +6,9 @@ import QRCode from "qrcode";
 import { encryptSession } from "../crypto";
 
 const roborockAuth = require("../../roborockLib/lib/roborockAuth");
+const {
+  readLatestScheduleCapture,
+} = require("../../roborockLib/lib/scheduleProtocolCapture");
 // What the report says about a robot's transport lives in plain JavaScript, so
 // the test suite — which runs before any build — can exercise the wording
 // directly instead of grepping this file for it.
@@ -75,6 +78,10 @@ class RoborockUiServer {
     this.homebridgePluginUiServer.onRequest(
       "/diagnostics/state",
       this.getDiagnostics.bind(this)
+    );
+    this.homebridgePluginUiServer.onRequest(
+      "/diagnostics/schedule-capture",
+      async () => readLatestScheduleCapture(this.homebridgeStoragePath)
     );
     this.homebridgePluginUiServer.onRequest(
       "/diagnostics/test-local",

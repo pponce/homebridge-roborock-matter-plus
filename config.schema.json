@@ -69,6 +69,12 @@
         "type": "boolean",
         "default": false
       },
+      "enableScheduleProtocolCapture": {
+        "title": "Capture schedule protocol for 30 minutes",
+        "description": "After restarting the Roborock child bridge, record sanitized schedule requests and replies and take read-only snapshots once a minute. Stops after 30 minutes or 2 MiB. Does not change schedules. Download the capture from Advanced settings; turn this off after testing. General debug logging is not required.",
+        "type": "boolean",
+        "default": false
+      },
       "transientWarningThrottleHours": {
         "title": "Transient Warning Interval",
         "description": "Hours between repeated transient timeout warnings for each vacuum. Use 0 to hide these recurring warnings unless debug logging is enabled.",

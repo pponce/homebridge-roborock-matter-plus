@@ -68,6 +68,7 @@ export interface RoborockPlatformConfig extends PlatformConfig {
   email: string;
   password?: string;
   debugMode: boolean;
+  enableScheduleProtocolCapture?: boolean;
   baseURL?: string;
   serverURL?: string;
   encryptedToken?: string;

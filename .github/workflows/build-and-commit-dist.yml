@@ -35,6 +35,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Format capture changes with the pinned toolchain
+        run: ./node_modules/.bin/prettier --write config.schema.json homebridge-ui/public/index.html homebridge-ui/public/index.js roborockLib/roborockAPI.js src/platform.ts src/types.ts src/ui/index.ts roborockLib/lib/scheduleProtocolCapture.js tests/schedule-protocol-capture.test.cjs docs/local-server-schedule-capture.md
+
       - name: Check formatting
         run: npm run lint
 
@@ -62,11 +65,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add -f dist
+          git add config.schema.json homebridge-ui/public/index.html homebridge-ui/public/index.js roborockLib/roborockAPI.js src/platform.ts src/types.ts src/ui/index.ts roborockLib/lib/scheduleProtocolCapture.js tests/schedule-protocol-capture.test.cjs docs/local-server-schedule-capture.md
 
-          if git diff --cached --quiet -- dist; then
+          if git diff --cached --quiet; then
             echo "dist is already up to date."
             exit 0
           fi
 
-          git commit -m "Build dist from source"
+          git commit -m "Format and build schedule capture diagnostics"
           git push
