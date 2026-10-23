@@ -6538,42 +6538,42 @@ class Roborock {
     entry.promise = promise;
     this.pendingB01MapRequests.set(duid, entry);
     const onTimeout = () => {
-        // Live frames during the wait mean the robot is talking; it sent no
-        // saved map. That is not a robot that did not answer, and saying so
-        // tells the field which kind of frame a request gets back.
-        const error =
-          entry.liveFrames > 0
-            ? Object.assign(
-                new Error(
-                  `${this.describeDevice(duid)} sent ${entry.liveFrames} live map frame(s) (map type 0) but no saved map within 20s of the B01 map request.`
-                ),
-                { unansweredRequest: false, liveFramesArrived: true }
-              )
-            : Object.assign(
-                new Error(
-                  `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
-                ),
-                {
-                  unansweredRequest: true,
-                  transportWasUp: this.rr_mqtt_connector.isConnected(),
-                }
-              );
-        this.settleB01MapRequest(duid, entry, error);
+      // Live frames during the wait mean the robot is talking; it sent no
+      // saved map. That is not a robot that did not answer, and saying so
+      // tells the field which kind of frame a request gets back.
+      const error =
+        entry.liveFrames > 0
+          ? Object.assign(
+              new Error(
+                `${this.describeDevice(duid)} sent ${entry.liveFrames} live map frame(s) (map type 0) but no saved map within 20s of the B01 map request.`
+              ),
+              { unansweredRequest: false, liveFramesArrived: true }
+            )
+          : Object.assign(
+              new Error(
+                `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
+              ),
+              {
+                unansweredRequest: true,
+                transportWasUp: this.rr_mqtt_connector.isConnected(),
+              }
+            );
+      this.settleB01MapRequest(duid, entry, error);
     };
     // Refused by mqtt.js (the link dropped): fail now as a transport refusal,
     // which the give-up register does not count, rather than after 20 s as a
     // robot that did not answer.
     try {
-    this.rr_mqtt_connector.sendMessage(duid, roborockMessage, () => {
-      this.settleB01MapRequest(
-        duid,
-        entry,
-        refusal(
-          "cloud unavailable",
-          `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
-        )
-      );
-    });
+      this.rr_mqtt_connector.sendMessage(duid, roborockMessage, () => {
+        this.settleB01MapRequest(
+          duid,
+          entry,
+          refusal(
+            "cloud unavailable",
+            `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
+          )
+        );
+      });
     } catch (error) {
       this.settleB01MapRequest(duid, entry, error);
     }

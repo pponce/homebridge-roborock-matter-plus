@@ -64,7 +64,6 @@ const protocol301Parser = new Parser()
     length: 6,
   });
 
-
 // How many protocol-301 frames have been discarded per robot, and why.
 //
 // 3.31.0 added a log line for each drop — at DEBUG level, which is off by
@@ -212,8 +211,10 @@ function parseProtocol301Header(payload) {
 class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
-    this.recovery = adapter.config?.enableMqttSessionRecovery === true
-      ? new MqttSessionRecovery(this) : null;
+    this.recovery =
+      adapter.config?.enableMqttSessionRecovery === true
+        ? new MqttSessionRecovery(this)
+        : null;
 
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
       this.recovery?.onSessionChanged();
@@ -223,7 +224,10 @@ class roborock_mqtt_connector {
       this.readiness?.changed();
       Promise.resolve(
         this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
-          val: JSON.stringify({ ...snapshot, recovery: this.recovery?.snapshot() ?? { enabled: false } }),
+          val: JSON.stringify({
+            ...snapshot,
+            recovery: this.recovery?.snapshot() ?? { enabled: false },
+          }),
           ack: true,
         })
       ).catch(() => {});
@@ -275,8 +279,12 @@ class roborock_mqtt_connector {
       .md5bin(this.rriot.k)
       .subarray(8, 14)
       .toString("base64"); // Could be a random but rather static string. The app generates it on first run.
-    this.mqttUser = roborockCrypto.md5hex(this.rriot.u + ":" + this.rriot.k).substring(2, 10);
-    this.mqttPassword = roborockCrypto.md5hex(this.rriot.s + ":" + this.rriot.k).substring(16);
+    this.mqttUser = roborockCrypto
+      .md5hex(this.rriot.u + ":" + this.rriot.k)
+      .substring(2, 10);
+    this.mqttPassword = roborockCrypto
+      .md5hex(this.rriot.s + ":" + this.rriot.k)
+      .substring(16);
     // A new session from scratch: initMQTT_Subscribe and initMQTT_Message say
     // again which listeners it wants.
     this.connectionEventsWanted = false;

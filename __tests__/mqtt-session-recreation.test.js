@@ -424,7 +424,8 @@ test("preventive refresh cannot turn on recovery by itself", async () => {
 
 function enableBaselineRule() {
   adapter.cloudSessionHealth = { consecutiveSilences: 0, lastRestartAt: 0 };
-  adapter.restartCloudSession = Roborock.prototype.restartCloudSession.bind(adapter);
+  adapter.restartCloudSession =
+    Roborock.prototype.restartCloudSession.bind(adapter);
   adapter.noteCloudSilence = Roborock.prototype.noteCloudSilence.bind(adapter);
   adapter.noteCloudReply = Roborock.prototype.noteCloudReply.bind(adapter);
 }

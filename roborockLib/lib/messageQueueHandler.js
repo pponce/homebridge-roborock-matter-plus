@@ -513,8 +513,12 @@ class messageQueueHandler {
       remoteConnection ||
       secure ||
       CLOUD_ONLY_METHODS.has(method);
-    if (!useCloudConnection && !localConnectionState &&
-        (mqttConnectionState || typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")) {
+    if (
+      !useCloudConnection &&
+      !localConnectionState &&
+      (mqttConnectionState ||
+        typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")
+    ) {
       useCloudConnection = true;
       await this.adapter.updateTransportDiagnostics(duid, {
         lastTransport: "cloud",
@@ -594,13 +598,19 @@ class messageQueueHandler {
       payload
     );
 
-    if (roborockMessage && useCloudConnection &&
-        this.adapter.rr_mqtt_connector.recovery &&
-        !this.adapter.rr_mqtt_connector.isReady?.()) {
+    if (
+      roborockMessage &&
+      useCloudConnection &&
+      this.adapter.rr_mqtt_connector.recovery &&
+      !this.adapter.rr_mqtt_connector.isReady?.()
+    ) {
       await this.adapter.rr_mqtt_connector.waitUntilReady?.();
       mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
       roborockMessage = await this.adapter.message.buildRoborockMessage(
-        duid, protocol, Math.floor(Date.now() / 1000), payload
+        duid,
+        protocol,
+        Math.floor(Date.now() / 1000),
+        payload
       );
     }
 
@@ -811,7 +821,10 @@ class messageQueueHandler {
           ? retryTimeout - (Date.now() - readinessStartedAt)
           : retryTimeout;
         if (responseTimeout <= 0) {
-          throw refusal("cloud unavailable", "The cloud retry budget expired before publication; the retry was not sent.");
+          throw refusal(
+            "cloud unavailable",
+            "The cloud retry budget expired before publication; the retry was not sent."
+          );
         }
         const payload = await this.adapter.message.buildPayload(
           duid,
@@ -867,8 +880,10 @@ class messageQueueHandler {
     if (!retryable) {
       return null;
     }
-    if (!this.adapter.rr_mqtt_connector.isConnected() &&
-        typeof this.adapter.rr_mqtt_connector.waitUntilReady !== "function") {
+    if (
+      !this.adapter.rr_mqtt_connector.isConnected() &&
+      typeof this.adapter.rr_mqtt_connector.waitUntilReady !== "function"
+    ) {
       return null;
     }
     if (!context.deviceOnline && !context.options.allowOfflineCloudSend) {
@@ -1024,22 +1039,22 @@ class messageQueueHandler {
       // timeout read a dead link as a robot that did not answer.
       let publicationRejected = false;
       try {
-      this.adapter.rr_mqtt_connector.sendMessage(duid, frame, () => {
-        publicationRejected = true;
-        const pending = this.adapter.pendingRequests.get(messageID);
-        if (pending !== pendingRequest) {
-          return;
-        }
-        if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
-        this.adapter.pendingRequests.delete(messageID);
-        this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
-        reject(
-          refusal(
-            "cloud unavailable",
-            `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
-          )
-        );
-      });
+        this.adapter.rr_mqtt_connector.sendMessage(duid, frame, () => {
+          publicationRejected = true;
+          const pending = this.adapter.pendingRequests.get(messageID);
+          if (pending !== pendingRequest) {
+            return;
+          }
+          if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
+          this.adapter.pendingRequests.delete(messageID);
+          this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
+          reject(
+            refusal(
+              "cloud unavailable",
+              `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
+            )
+          );
+        });
       } catch (error) {
         this.adapter.pendingRequests.delete(messageID);
         this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
@@ -1048,7 +1063,10 @@ class messageQueueHandler {
       }
       if (publicationRejected) return;
       if (this.adapter.pendingRequests.get(messageID) === pendingRequest) {
-        pendingRequest.timeout = this.adapter.setTimeout(onTimeout, requestTimeout);
+        pendingRequest.timeout = this.adapter.setTimeout(
+          onTimeout,
+          requestTimeout
+        );
       }
       this.adapter.updateTransportDiagnostics(duid, {
         lastTransport: "cloud",
@@ -1140,41 +1158,44 @@ class messageQueueHandler {
       lengthBuffer.writeUInt32BE(frame.length, 0);
       const fullMessage = Buffer.concat([lengthBuffer, frame]);
       try {
-      const written = this.writeLocal(duid, fullMessage, (cause) => {
-        const pending = this.adapter.pendingRequests.get(messageID);
-        if (pending !== pendingRequest) {
+        const written = this.writeLocal(duid, fullMessage, (cause) => {
+          const pending = this.adapter.pendingRequests.get(messageID);
+          if (pending !== pendingRequest) {
+            return;
+          }
+          if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
+          this.adapter.pendingRequests.delete(messageID);
+          this.adapter.noteTransportOutcome?.(duid, "local", "lost");
+          finish(
+            reject,
+            Object.assign(
+              refusal(
+                "local connection unavailable",
+                `The local connection to ${describeDevice(this.adapter, duid)} closed before ${method} (local id ${messageID}) was answered: ${cause}.`
+              ),
+              { localTransportLost: true }
+            )
+          );
+        });
+        handle = written;
+        if (!handle) {
           return;
         }
-        if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
-        this.adapter.pendingRequests.delete(messageID);
-        this.adapter.noteTransportOutcome?.(duid, "local", "lost");
-        finish(
-          reject,
-          Object.assign(
-            refusal(
-              "local connection unavailable",
-              `The local connection to ${describeDevice(this.adapter, duid)} closed before ${method} (local id ${messageID}) was answered: ${cause}.`
-            ),
-            { localTransportLost: true }
-          )
-        );
-      });
-      handle = written;
-      if (!handle) {
-        return;
-      }
-      if (settled) {
-        // Answered while it was being written (a test double): nothing is
-        // left to watch for.
-        handle.release();
-      }
+        if (settled) {
+          // Answered while it was being written (a test double): nothing is
+          // left to watch for.
+          handle.release();
+        }
       } catch (error) {
         this.adapter.pendingRequests.delete(messageID);
         finish(reject, error);
         return;
       }
       if (this.adapter.pendingRequests.get(messageID) === pendingRequest) {
-        pendingRequest.timeout = this.adapter.setTimeout(onTimeout, requestTimeout);
+        pendingRequest.timeout = this.adapter.setTimeout(
+          onTimeout,
+          requestTimeout
+        );
       }
       this.adapter.updateTransportDiagnostics(duid, {
         lastTransport: "local",

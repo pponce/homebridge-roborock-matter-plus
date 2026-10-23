@@ -175,7 +175,9 @@ test("expired readiness is unsent, never robot silence, and cannot publish later
   mockClients.at(-1).handlers.get("connect")({});
   acknowledge();
   await jest.advanceTimersByTimeAsync(0);
-  expect(mockClients.every((c) => c.publish.mock.calls.length === 0)).toBe(true);
+  expect(mockClients.every((c) => c.publish.mock.calls.length === 0)).toBe(
+    true
+  );
 });
 
 test("disconnect settles all outstanding readiness waits without waiting for the deadline", async () => {
@@ -284,10 +286,10 @@ test("a retried initUser reopens the readiness gate after retiring the previous 
   expect(await request.result).toEqual(["ok"]);
 });
 
-
 function installHealthRestart() {
   adapter.cloudSessionHealth = { consecutiveSilences: 0, lastRestartAt: 0 };
-  adapter.restartCloudSession = Roborock.prototype.restartCloudSession.bind(adapter);
+  adapter.restartCloudSession =
+    Roborock.prototype.restartCloudSession.bind(adapter);
   adapter.noteCloudSilence = Roborock.prototype.noteCloudSilence.bind(adapter);
   return jest.spyOn(connector, "reconnectClient");
 }
@@ -295,7 +297,11 @@ function installHealthRestart() {
 async function readinessExpiry() {
   const { result } = await startRequest();
   await jest.advanceTimersByTimeAsync(10000);
-  expect(await result).toMatchObject({ code: "MQTT_READINESS_TIMEOUT", requestNotSent: true, unansweredRequest: false });
+  expect(await result).toMatchObject({
+    code: "MQTT_READINESS_TIMEOUT",
+    requestNotSent: true,
+    unansweredRequest: false,
+  });
 }
 
 test.each(["missing", "refused"])(
@@ -314,7 +320,9 @@ test.each(["missing", "refused"])(
     expect(adapter.pendingRequests.size).toBe(0);
     expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
     expect(adapter.cloudSessionHealth.consecutiveSilences).toBe(0);
-    expect(mockClients.every((c) => c.publish.mock.calls.length === 0)).toBe(true);
+    expect(mockClients.every((c) => c.publish.mock.calls.length === 0)).toBe(
+      true
+    );
     await jest.advanceTimersByTimeAsync(10000);
     const fresh = mockClients.at(-1);
     expect(fresh).not.toBe(old);
@@ -368,7 +376,6 @@ test("readiness and published-request silence share one restart cooldown", async
   expect(restart).toHaveBeenCalledTimes(2);
 });
 
-
 test("a LAN loss shares the explicit remaining budget with MQTT readiness and its reply", async () => {
   adapter.config.cloudOnlyMode = false;
   adapter.localConnector.isConnected.mockReturnValue(true);
@@ -381,17 +388,26 @@ test("a LAN loss shares the explicit remaining budget with MQTT readiness and it
   await jest.advanceTimersByTimeAsync(0);
   const fresh = mockClients.at(-1);
   fresh.handlers.get("connect")({});
-  const { result, id } = await startRequest("robot-a", "get_status", { requestTimeoutMs: 10000 });
+  const { result, id } = await startRequest("robot-a", "get_status", {
+    requestTimeoutMs: 10000,
+  });
   await jest.advanceTimersByTimeAsync(7000);
   expect(adapter.pendingRequests.size).toBe(0);
   expect(fresh.publish).not.toHaveBeenCalled();
-  expect(adapter.message.buildPayload.mock.calls.map((args) => args[1])).toEqual([4]);
+  expect(
+    adapter.message.buildPayload.mock.calls.map((args) => args[1])
+  ).toEqual([4]);
   acknowledge();
   await jest.advanceTimersByTimeAsync(0);
   expect(fresh.publish).toHaveBeenCalledTimes(1);
-  expect(adapter.message.buildRoborockMessage.mock.calls.at(-1)[2]).toBe(Math.floor(Date.now() / 1000));
+  expect(adapter.message.buildRoborockMessage.mock.calls.at(-1)[2]).toBe(
+    Math.floor(Date.now() / 1000)
+  );
   await jest.advanceTimersByTimeAsync(2999);
   expect(adapter.pendingRequests.has(id)).toBe(true);
   await jest.advanceTimersByTimeAsync(1);
-  expect(await result).toMatchObject({ unansweredRequest: true, transportWasUp: false });
+  expect(await result).toMatchObject({
+    unansweredRequest: true,
+    transportWasUp: false,
+  });
 });
