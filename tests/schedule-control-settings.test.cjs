@@ -46,7 +46,9 @@ function harness(saved) {
       },
       checked: /\bchecked\b/.test(attributes),
       options: [],
-      appendChild(option) { this.options.push(option); },
+      appendChild(option) {
+        this.options.push(option);
+      },
       classList: {
         add: (s) => classes.add(s),
         remove: (s) => classes.delete(s),
