@@ -32,6 +32,10 @@ import RoborockHapScheduleAccessory, {
 
 import RoborockPlatformLogger from "./logger";
 import {
+  NativeScheduleControls,
+  isNativeScheduleControl,
+} from "./native_schedule_controls";
+import {
   HomeKitActionKey,
   HomeKitStateSensorKey,
   isHomeKitActionKey,
@@ -123,6 +127,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
     RoborockHapScheduleAccessory
   > = new Map();
   private readonly scheduleAccountCoordinator: ScheduleAccountCoordinator;
+  private readonly nativeScheduleControls: NativeScheduleControls;
   private schedulePolicyLogged = false;
   private discoveryQueue: Promise<void> = Promise.resolve();
   // See discoverDevices: the destructive sweep runs once per process.
@@ -200,6 +205,15 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       enableLiveRoomTracking:
         this.platformConfig.enableLiveRoomTracking !== false,
       cloudOnlyMode: Boolean(this.platformConfig.cloudOnlyMode),
+      enableMqttPreventiveRefresh:
+        this.platformConfig.enableMqttPreventiveRefresh === true,
+      isScheduleOperationPending: () =>
+        this.scheduleAccountCoordinator.busy || this.nativeScheduleControls?.busy === true ||
+        [...this.hapScheduleAccessories.values()].some(schedule => schedule.hasPendingScheduleWrites()),
+      mqttPreventiveRefreshMinutes:
+        this.platformConfig.mqttPreventiveRefreshMinutes,
+      enableMqttSessionRecovery:
+        this.platformConfig.enableMqttSessionRecovery === true,
       log: this.log,
       userData: decryptedSession,
       storagePath: storagePath,
@@ -210,6 +224,12 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
           ? undefined
           : transientWarningThrottleHours * 60 * 60 * 1000,
     });
+    this.nativeScheduleControls = new NativeScheduleControls(
+      this,
+      this.accessories,
+      this.scheduleAccountCoordinator,
+      storagePath
+    );
 
     /**
      * When this event is fired it means Homebridge has restored all cached accessories from disk.
@@ -270,6 +290,9 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       for (const schedule of this.hapScheduleAccessories.values()) {
         step("schedule shutdown", () => schedule.shutdown());
       }
+      step("native schedule controls shutdown", () =>
+        this.nativeScheduleControls?.dispose()
+      );
 
       if (this.roborockAPI) {
         step("stopService", () => {
@@ -623,6 +646,7 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
 
       const knownDevices = Array.isArray(devices) ? devices : [];
       this.syncHapSchedules(knownDevices);
+      this.nativeScheduleControls?.sync(knownDevices);
       this.syncActionSwitches(knownDevices);
       this.syncStateSensors(knownDevices);
       // After both syncs, so the count is the total a user has to find in
@@ -1114,7 +1138,8 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       isActionSwitchAccessory(accessory) ||
       isStateSensorAccessory(accessory) ||
       isHapScheduleAccessory(accessory) ||
-      isHapRoutineAccessory(accessory)
+      isHapRoutineAccessory(accessory) ||
+      isNativeScheduleControl(accessory)
     );
   }
 
@@ -1536,6 +1561,11 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
    */
   private logHapPairingHint(): void {
     const parts: string[] = [];
+    if (this.nativeScheduleControls?.size > 0) {
+      parts.push(
+        `${this.nativeScheduleControls.size} schedule control switches`
+      );
+    }
     if (this.actionSwitches.size > 0) {
       parts.push(
         `${this.actionSwitches.size} switch${this.actionSwitches.size === 1 ? "" : "es"}`

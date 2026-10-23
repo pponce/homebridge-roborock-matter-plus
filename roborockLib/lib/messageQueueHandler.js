@@ -166,11 +166,16 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
  *   tells the give-up register the robot answered.
  * @property {(reason?: unknown) => void} [abandon] Rejects WITHOUT telling the
  *   register anything — for shutdown, where nothing was answered.
- * @property {ReturnType<typeof setTimeout>} timeout
+ * @property {ReturnType<typeof setTimeout> | undefined} timeout
  * @property {boolean} [secure] True for requests whose protocol-102 reply is
  *   only an acknowledgement, with the real payload arriving on protocol 301.
  * @property {string} [method] The Roborock method, kept for diagnostics.
  * @property {"local" | "cloud"} [transport] The transport it was sent over.
+ * @property {string} [duid]
+ * @property {"read" | "write" | "fire-and-forget" | "secure-map"} [operationClass]
+ * @property {number} [sessionGeneration]
+ * @property {number} [createdAt]
+ * @property {number | null} [publishedAt]
  */
 
 /**
@@ -198,7 +203,11 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
 /**
  * @typedef {Object} MqttConnector
  * @property {import("./mqttSessionDiagnostics").MqttSessionDiagnostics} [sessionDiagnostics]
+ * @property {{sendPaused: boolean, observeTimeout: (observation: any) => void} | null} [recovery]
  * @property {number} [linkId] which connection is current
+ * @property {(options?: {timeoutMs?: number, signal?: AbortSignal}) => Promise<number>} [waitUntilReady]
+ * @property {() => number} [getSessionGeneration]
+ * @property {() => boolean} [isReady]
  * @property {() => boolean} isConnected
  * @property {(duid: string, message: Buffer, onNotSent?: (error: Error) => void) => void} sendMessage
  */
@@ -333,6 +342,8 @@ function errorText(error) {
  * @property {boolean} [preferLocal]
  * @property {boolean} [allowOfflineCloudSend]
  * @property {number} [requestTimeoutMs]
+ * @property {number} [cloudGateTimeoutMs]
+ * @property {"read" | "write" | "fire-and-forget" | "secure-map"} [operationClass]
  */
 
 class messageQueueHandler {
@@ -364,12 +375,13 @@ class messageQueueHandler {
     const remoteConnection = await this.adapter.isRemoteDevice(duid);
     const version = await this.adapter.getRobotVersion(duid);
 
-    const deviceOnline = await this.adapter.onlineChecker(duid);
-    const mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
+    let deviceOnline = await this.adapter.onlineChecker(duid);
+    let mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
     let localConnectionState = this.adapter.localConnector.isConnected(duid);
     const cloudOnlyConnection = Boolean(this.adapter.config?.cloudOnlyMode);
     const preferCloudConnection =
-      Boolean(options.preferCloud) && mqttConnectionState;
+      Boolean(options.preferCloud) &&
+      (this.adapter.rr_mqtt_connector.isReady?.() ?? mqttConnectionState);
     const preferLocalConnection =
       Boolean(options.preferLocal) &&
       !cloudOnlyConnection &&
@@ -509,7 +521,12 @@ class messageQueueHandler {
       remoteConnection ||
       secure ||
       CLOUD_ONLY_METHODS.has(method);
-    if (!useCloudConnection && !localConnectionState && mqttConnectionState) {
+    if (
+      !useCloudConnection &&
+      !localConnectionState &&
+      (mqttConnectionState ||
+        typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")
+    ) {
       useCloudConnection = true;
       await this.adapter.updateTransportDiagnostics(duid, {
         lastTransport: "cloud",
@@ -541,7 +558,8 @@ class messageQueueHandler {
       localConnectionState = this.adapter.localConnector.isConnected(duid);
       if (
         !localConnectionState &&
-        this.adapter.rr_mqtt_connector.isConnected()
+        (this.adapter.rr_mqtt_connector.isConnected() ||
+          typeof this.adapter.rr_mqtt_connector.waitUntilReady === "function")
       ) {
         useCloudConnection = true;
         this.adapter.log.debug(
@@ -555,11 +573,22 @@ class messageQueueHandler {
         ? b01Q7Adapter.createB01MessageId()
         : this.adapter.getRequestId()
     );
+    const allowOfflineCloudSend =
+      Boolean(options.allowOfflineCloudSend) && useCloudConnection;
+    if (useCloudConnection && (deviceOnline || allowOfflineCloudSend)) {
+      // No frame or pending RPC exists while the reply subscription is pending.
+      try {
+        await this.adapter.rr_mqtt_connector.waitUntilReady?.({ timeoutMs: options.cloudGateTimeoutMs || 10000 });
+      } catch (error) {
+        this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
+        throw error;
+      }
+      mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
+      deviceOnline = await this.adapter.onlineChecker(duid);
+    }
     const timestamp = Math.floor(Date.now() / 1000);
 
     const protocol = useCloudConnection ? 101 : 4;
-    const allowOfflineCloudSend =
-      Boolean(options.allowOfflineCloudSend) && useCloudConnection;
     const payload = await this.adapter.message.buildPayload(
       duid,
       protocol,
@@ -570,12 +599,28 @@ class messageQueueHandler {
       false,
       b01Q10Dps ? { b01Q10Dps } : {}
     );
-    const roborockMessage = await this.adapter.message.buildRoborockMessage(
+    let roborockMessage = await this.adapter.message.buildRoborockMessage(
       duid,
       protocol,
       timestamp,
       payload
     );
+
+    if (
+      roborockMessage &&
+      useCloudConnection &&
+      this.adapter.rr_mqtt_connector.recovery &&
+      !this.adapter.rr_mqtt_connector.isReady?.()
+    ) {
+      await this.adapter.rr_mqtt_connector.waitUntilReady?.({ timeoutMs: options.cloudGateTimeoutMs || 10000 });
+      mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
+      roborockMessage = await this.adapter.message.buildRoborockMessage(
+        duid,
+        protocol,
+        Math.floor(Date.now() / 1000),
+        payload
+      );
+    }
 
     if (roborockMessage) {
       return new Promise((resolve, reject) => {
@@ -770,6 +815,25 @@ class messageQueueHandler {
           `Retrying ${method} (id ${context.messageID}) for ${duid} over the cloud: ${errorText(localError)}`
         );
         this.adapter.noteTransportOutcome?.(duid, "local", "retried");
+        const readinessStartedAt = Date.now();
+        const explicitBudget = Number(options.requestTimeoutMs) > 0;
+        try {
+          await this.adapter.rr_mqtt_connector.waitUntilReady?.({
+            timeoutMs: explicitBudget ? Math.min(options.cloudGateTimeoutMs || 10000, retryTimeout) : (options.cloudGateTimeoutMs || 10000),
+          });
+        } catch (error) {
+          this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
+          throw error;
+        }
+        const responseTimeout = explicitBudget
+          ? retryTimeout - (Date.now() - readinessStartedAt)
+          : retryTimeout;
+        if (responseTimeout <= 0) {
+          throw refusal(
+            "cloud unavailable",
+            "The cloud retry budget expired before publication; the retry was not sent."
+          );
+        }
         const payload = await this.adapter.message.buildPayload(
           duid,
           101,
@@ -792,7 +856,7 @@ class messageQueueHandler {
         return await this.exchangeOverCloud(
           { ...context, payload, cloudReason: "local-failed-cloud-retry" },
           frame,
-          retryTimeout,
+          responseTimeout,
           localError
         );
       }
@@ -824,7 +888,10 @@ class messageQueueHandler {
     if (!retryable) {
       return null;
     }
-    if (!this.adapter.rr_mqtt_connector.isConnected()) {
+    if (
+      !this.adapter.rr_mqtt_connector.isConnected() &&
+      typeof this.adapter.rr_mqtt_connector.waitUntilReady !== "function"
+    ) {
       return null;
     }
     if (!context.deviceOnline && !context.options.allowOfflineCloudSend) {
@@ -868,7 +935,7 @@ class messageQueueHandler {
       const localWasUp =
         localError === undefined ||
         /** @type {any} */ (localError)?.transportWasUp === true;
-      const timeout = this.adapter.setTimeout(() => {
+      const onTimeout = () => {
         this.adapter.pendingRequests.delete(messageID);
         // The link state READ NOW, not the copy taken before the send. A
         // link that died mid-flight is the entire case the give-up
@@ -915,14 +982,16 @@ class messageQueueHandler {
         }
         this.adapter.noteTransportOutcome?.(duid, "cloud", "timeout");
         reject(error);
-      }, requestTimeout);
+        this.adapter.rr_mqtt_connector.recovery?.observeTimeout(sessionHealth);
+      };
 
       // `secure` travels with the entry so the MQTT receiver can tell a
       // secure request (whose protocol-102 reply is only an ack — the real
       // payload arrives on protocol 301) from an ordinary one (whose 102
       // reply IS the result). It used to guess by comparing the result to
       // the string "ok", which silently never matched.
-      this.adapter.pendingRequests.set(messageID, {
+      /** @type {PendingRequest} */
+      const pendingRequest = {
         // Wrapped so the give-up register learns of an answer HERE, in the
         // one place that knows a reply arrived. Until 3.32.0 the register
         // was told by `pollParameter`, whose try/catch never fired:
@@ -960,11 +1029,17 @@ class messageQueueHandler {
           reject(error);
         },
         abandon: reject,
-        timeout,
+        timeout: undefined,
         secure,
         method,
         transport: "cloud",
-      });
+        duid,
+        operationClass: context.options.operationClass || (secure ? "secure-map" : /^(get_|prop\.get)/.test(method) ? "read" : "write"),
+        sessionGeneration: this.adapter.rr_mqtt_connector.getSessionGeneration?.(),
+        createdAt: Date.now(),
+        publishedAt: null,
+      };
+      this.adapter.pendingRequests.set(messageID, pendingRequest);
 
       if (!context.deviceOnline && context.allowOfflineCloudSend) {
         this.adapter.log.debug(
@@ -975,21 +1050,38 @@ class messageQueueHandler {
       // (there are awaits in between). mqtt.js then refuses the publish;
       // fail the request now, as the refusal it is, rather than let its
       // timeout read a dead link as a robot that did not answer.
-      this.adapter.rr_mqtt_connector.sendMessage(duid, frame, () => {
-        const pending = this.adapter.pendingRequests.get(messageID);
-        if (!pending || pending.timeout !== timeout) {
-          return;
-        }
-        this.adapter.clearTimeout(pending.timeout);
+      let publicationRejected = false;
+      try {
+        this.adapter.rr_mqtt_connector.sendMessage(duid, frame, () => {
+          publicationRejected = true;
+          const pending = this.adapter.pendingRequests.get(messageID);
+          if (pending !== pendingRequest) {
+            return;
+          }
+          if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
+          this.adapter.pendingRequests.delete(messageID);
+          this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
+          reject(
+            refusal(
+              "cloud unavailable",
+              `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
+            )
+          );
+        });
+      } catch (error) {
         this.adapter.pendingRequests.delete(messageID);
         this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
-        reject(
-          refusal(
-            "cloud unavailable",
-            `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
-          )
+        reject(error);
+        return;
+      }
+      if (publicationRejected) return;
+      pendingRequest.publishedAt = Date.now();
+      if (this.adapter.pendingRequests.get(messageID) === pendingRequest) {
+        pendingRequest.timeout = this.adapter.setTimeout(
+          onTimeout,
+          requestTimeout
         );
-      });
+      }
       this.adapter.updateTransportDiagnostics(duid, {
         lastTransport: "cloud",
         lastTransportReason: context.cloudReason,
@@ -1032,7 +1124,7 @@ class messageQueueHandler {
         handle?.release();
         settle(value);
       };
-      const timeout = this.adapter.setTimeout(() => {
+      const onTimeout = () => {
         this.adapter.pendingRequests.delete(messageID);
         // Up means the socket this request was written on is still the
         // robot's socket and still connected.
@@ -1052,9 +1144,10 @@ class messageQueueHandler {
             "local timeout"
           )
         );
-      }, requestTimeout);
+      };
 
-      this.adapter.pendingRequests.set(messageID, {
+      /** @type {PendingRequest} */
+      const pendingRequest = {
         resolve: (value) => {
           sessionDiagnostics?.noteActivity("local");
           sessionDiagnostics?.emit();
@@ -1068,42 +1161,55 @@ class messageQueueHandler {
           finish(reject, error);
         },
         abandon: (error) => finish(reject, error),
-        timeout,
+        timeout: undefined,
         secure,
         method,
         transport: "local",
-      });
+      };
+      this.adapter.pendingRequests.set(messageID, pendingRequest);
 
       const lengthBuffer = Buffer.alloc(4);
       lengthBuffer.writeUInt32BE(frame.length, 0);
       const fullMessage = Buffer.concat([lengthBuffer, frame]);
-      const written = this.writeLocal(duid, fullMessage, (cause) => {
-        const pending = this.adapter.pendingRequests.get(messageID);
-        if (!pending || pending.timeout !== timeout) {
+      try {
+        const written = this.writeLocal(duid, fullMessage, (cause) => {
+          const pending = this.adapter.pendingRequests.get(messageID);
+          if (pending !== pendingRequest) {
+            return;
+          }
+          if (pending.timeout) this.adapter.clearTimeout(pending.timeout);
+          this.adapter.pendingRequests.delete(messageID);
+          this.adapter.noteTransportOutcome?.(duid, "local", "lost");
+          finish(
+            reject,
+            Object.assign(
+              refusal(
+                "local connection unavailable",
+                `The local connection to ${describeDevice(this.adapter, duid)} closed before ${method} (local id ${messageID}) was answered: ${cause}.`
+              ),
+              { localTransportLost: true }
+            )
+          );
+        });
+        handle = written;
+        if (!handle) {
           return;
         }
-        this.adapter.clearTimeout(timeout);
+        if (settled) {
+          // Answered while it was being written (a test double): nothing is
+          // left to watch for.
+          handle.release();
+        }
+      } catch (error) {
         this.adapter.pendingRequests.delete(messageID);
-        this.adapter.noteTransportOutcome?.(duid, "local", "lost");
-        finish(
-          reject,
-          Object.assign(
-            refusal(
-              "local connection unavailable",
-              `The local connection to ${describeDevice(this.adapter, duid)} closed before ${method} (local id ${messageID}) was answered: ${cause}.`
-            ),
-            { localTransportLost: true }
-          )
-        );
-      });
-      handle = written;
-      if (!handle) {
+        finish(reject, error);
         return;
       }
-      if (settled) {
-        // Answered while it was being written (a test double): nothing is
-        // left to watch for.
-        handle.release();
+      if (this.adapter.pendingRequests.get(messageID) === pendingRequest) {
+        pendingRequest.timeout = this.adapter.setTimeout(
+          onTimeout,
+          requestTimeout
+        );
       }
       this.adapter.updateTransportDiagnostics(duid, {
         lastTransport: "local",

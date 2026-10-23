@@ -12,6 +12,9 @@ const {
   createRefusalError,
 } = require("./describeReplyRefusal");
 
+const { MqttReadiness } = require("./mqttReadiness");
+const { MqttSessionRecovery } = require("./mqttSessionRecovery");
+
 const { MqttSessionDiagnostics } = require("./mqttSessionDiagnostics");
 
 // python-roborock's MQTT reconnect policy (mqtt/roborock_session.py):
@@ -60,12 +63,6 @@ const protocol301Parser = new Parser()
   .buffer("unknown2", {
     length: 6,
   });
-
-let mqttUser;
-let mqttPassword;
-let client;
-let endpoint;
-let rriot;
 
 // How many protocol-301 frames have been discarded per robot, and why.
 //
@@ -214,15 +211,39 @@ function parseProtocol301Header(payload) {
 class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
+    this.recovery =
+      adapter.config?.enableMqttSessionRecovery === true
+        ? new MqttSessionRecovery(this)
+        : null;
+    // Last live presence value per robot; log suppression only.
+    this.robotPresenceByDuid = new Map();
+    this.activityByDuid = new Map();
 
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
+      this.recovery?.onSessionChanged();
+      if (!snapshot.connected || snapshot.subscriptionAcknowledged) {
+        this.unsubscribedExpiries = 0;
+      }
+      this.readiness?.changed();
       Promise.resolve(
         this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
-          val: JSON.stringify(snapshot),
+          val: JSON.stringify({
+            ...snapshot,
+            recovery: this.recovery?.snapshot() ?? { enabled: false },
+          }),
           ack: true,
         })
       ).catch(() => {});
     });
+    this.readiness = new MqttReadiness(
+      () =>
+        !this.recovery?.sendPaused &&
+        !this.recovery?.stopped &&
+        this.sessionDiagnostics.connected &&
+        this.sessionDiagnostics.subscriptionAcknowledged,
+      () => this.sessionDiagnostics.generation
+    );
+    this.unsubscribedExpiries = 0;
     this.connected = false;
     // Which MQTT connection is current: a new number on every connect, so a
     // request can tell "the link I went out on is still up" from "a link is
@@ -237,7 +258,7 @@ class roborock_mqtt_connector {
     this.reconnectTimer = null;
     this.sessionWanted = false;
     this.connectionEventsWanted = false;
-    /** @type {((topic: string, message: Buffer) => void) | null} */
+    /** @type {((topic: string, message: Buffer, packet?: { retain?: boolean, dup?: boolean }) => void) | null} */
     this.messageHandler = null;
     /** @type {Set<(connected: boolean) => void>} see waitUntilConnected */
     this.connectWaiters = new Set();
@@ -253,14 +274,20 @@ class roborock_mqtt_connector {
     // kept disconnecting one for the other, both kept reconnecting, and the
     // old one still delivered every frame and was never ended at shutdown.
     this.disconnect();
-    rriot = userdata.rriot;
+    this.readiness.start();
+    if (this.recovery) this.recovery = new MqttSessionRecovery(this);
+    this.rriot = userdata.rriot;
 
-    endpoint = roborockCrypto
-      .md5bin(rriot.k)
+    this.endpoint = roborockCrypto
+      .md5bin(this.rriot.k)
       .subarray(8, 14)
       .toString("base64"); // Could be a random but rather static string. The app generates it on first run.
-    mqttUser = roborockCrypto.md5hex(rriot.u + ":" + rriot.k).substring(2, 10);
-    mqttPassword = roborockCrypto.md5hex(rriot.s + ":" + rriot.k).substring(16);
+    this.mqttUser = roborockCrypto
+      .md5hex(this.rriot.u + ":" + this.rriot.k)
+      .substring(2, 10);
+    this.mqttPassword = roborockCrypto
+      .md5hex(this.rriot.s + ":" + this.rriot.k)
+      .substring(16);
     // A new session from scratch: initMQTT_Subscribe and initMQTT_Message say
     // again which listeners it wants.
     this.connectionEventsWanted = false;
@@ -277,10 +304,10 @@ class roborock_mqtt_connector {
    * that went bad — its id, its stores, its timers — reaches the next one.
    */
   openClient() {
-    client = mqtt.connect(rriot.r.m, {
+    this.client = mqtt.connect(this.rriot.r.m, {
       clientId: randomClientId(),
-      username: mqttUser,
-      password: mqttPassword,
+      username: this.mqttUser,
+      password: this.mqttPassword,
       keepalive: 30,
       // mqtt.js queues a QoS 0 publish made while it is disconnected and
       // sends the whole queue on the next connect — and that queue survives
@@ -322,11 +349,11 @@ class roborock_mqtt_connector {
       if (!this.sessionWanted || this.connected) {
         return;
       }
-      const previous = client;
+      const previous = this.client;
       this.openClient();
       // Let go of the closed one. Its listeners stay and ignore it (see
       // listen); end() only makes sure nothing of it is left running.
-      if (previous && previous !== client) {
+      if (previous && previous !== this.client) {
         try {
           previous.end(true);
         } catch (error) {
@@ -350,6 +377,7 @@ class roborock_mqtt_connector {
   }
 
   async initMQTT_Subscribe() {
+    if (this.connectionEventsWanted && this.eventsInstalledFor === this.client) return;
     // This used to invoke a `restart` method on the adapter, which the
     // Roborock class has never had — so on the one path it was written for
     // (the broker
@@ -374,6 +402,7 @@ class roborock_mqtt_connector {
 
     this.connectionEventsWanted = true;
     this.installConnectionEvents();
+    this.recovery?.install();
   }
 
   /**
@@ -381,6 +410,8 @@ class roborock_mqtt_connector {
    * every client openClient builds.
    */
   installConnectionEvents() {
+    if (!this.client || this.eventsInstalledFor === this.client) return;
+    this.eventsInstalledFor = this.client;
     // Observe every SUBACK packet without changing mqtt.js subscription
     // behaviour; its callback is not the only evidence of one.
     this.listen("packetreceive", (packet) => {
@@ -395,11 +426,12 @@ class roborock_mqtt_connector {
     this.listen("connect", (result) => {
       if (typeof result != "undefined") {
         this.linkId += 1;
+        this.unsubscribedExpiries = 0;
         // python-roborock: the back-off starts over after every connect.
         this.reconnectDelayMs = this.reconnectDelays.initialMs;
         const generation = this.sessionDiagnostics.onConnect();
-        client.subscribe(
-          `rr/m/o/${rriot.u}/${mqttUser}/#`,
+        this.client.subscribe(
+          `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`,
           this.whileCurrent((err, granted) => {
             this.sessionDiagnostics.onSubscribe(generation, err, granted);
             if (err) {
@@ -546,10 +578,12 @@ class roborock_mqtt_connector {
   }
 
   async initMQTT_Message() {
+    if (this.messageHandler) return;
     this.adapter.log.debug(`MQTT initialized.`);
 
     // Kept, so every client openClient builds gets it too.
-    this.messageHandler = (topic, message) => {
+    this.messageHandler = (topic, message, packet = {}) => {
+      const endpoint = this.endpoint;
       try {
         this.sessionDiagnostics.noteActivity("raw");
         const duid = this.resolveDuidFromTopic(topic);
@@ -574,7 +608,7 @@ class roborock_mqtt_connector {
           return;
         }
 
-        this.sessionDiagnostics.noteActivity("decoded");
+        this.noteSessionActivity("decoded", duid);
 
         // Counted here and nowhere else: past the topic match AND past
         // decryption, so the count means the link delivered something real
@@ -602,7 +636,7 @@ class roborock_mqtt_connector {
 
           if (
             resolveB01PendingResponse(this.adapter, duid, dps, () =>
-              this.sessionDiagnostics.noteActivity("correlated")
+              this.noteSessionActivity("correlated", duid)
             )
           ) {
             return;
@@ -655,7 +689,7 @@ class roborock_mqtt_connector {
           // Those requests then sat until the 10 s timeout and failed in Apple
           // Home even though the robot had already carried them out.
           const pending = this.adapter.pendingRequests.get(dps.id);
-          if (pending) this.sessionDiagnostics.noteActivity("correlated");
+          if (pending) this.noteSessionActivity("correlated", duid);
           if (shouldResolveOn102(pending, dps.result)) {
             this.adapter.clearTimeout(pending.timeout);
             this.adapter.pendingRequests.delete(dps.id);
@@ -687,7 +721,7 @@ class roborock_mqtt_connector {
             this.adapter.isB01Device?.(duid)
           ) {
             if (this.adapter.onB01MapFrame(duid, data.payload)) {
-              this.sessionDiagnostics.noteActivity("correlated");
+              this.noteSessionActivity("correlated", duid);
             }
             return;
           }
@@ -725,7 +759,7 @@ class roborock_mqtt_connector {
           if (!String(data2.endpoint || "").startsWith(endpoint)) {
             noteDroppedFrame(duid, "addressed-elsewhere");
             this.adapter.log.debug(
-              `Ignored a protocol 301 message for ${duid}: it is addressed to endpoint '${data2.endpoint}', and this plugin's endpoint is '${endpoint}'. It belongs to another controller on the same Roborock account (the Roborock app, for one), so ignoring it is expected.`
+              `Ignored a protocol 301 message for ${duid}: it is addressed to endpoint '${data2.endpoint}', and this plugin's endpoint is '${this.endpoint}'. It belongs to another controller on the same Roborock account (the Roborock app, for one), so ignoring it is expected.`
             );
             return;
           }
@@ -763,7 +797,7 @@ class roborock_mqtt_connector {
             }
             this.adapter.clearTimeout(pending.timeout);
             this.adapter.pendingRequests.delete(data2.id);
-            this.sessionDiagnostics.noteActivity("correlated");
+            this.noteSessionActivity("correlated", duid);
             pending.reject(
               Object.assign(
                 new Error(
@@ -804,7 +838,7 @@ class roborock_mqtt_connector {
             this.adapter.log.debug(
               `Cloud message with protocol 301 and id ${data2.id} received.`
             );
-            this.sessionDiagnostics.noteActivity("correlated");
+            this.noteSessionActivity("correlated", duid);
             resolve(decrypted);
           }
         } else if (data.protocol == 500) {
@@ -823,20 +857,50 @@ class roborock_mqtt_connector {
           }
 
           // Check if the device is online
-          if (parsedData.online == false) {
-            // A robot dropping off is the single most common thing users open
-            // issues about, and the old wording ("Couldn't process message")
-            // described a failure that did not happen — the message parsed
-            // fine, and what it said was "offline".
-            this.adapter.log.warn(
-              `${describeDevice(this.adapter, duid)} reports itself offline; commands will fail until it reconnects. Check that the robot is powered on and on Wi-Fi.`
+          // Accept Boolean presence and the numeric 0/1 form supported by the
+          // previous loose comparison, without coercing arbitrary values.
+          if (
+            typeof parsedData.online === "boolean" ||
+            parsedData.online === 0 ||
+            parsedData.online === 1
+          ) {
+            const online = Boolean(parsedData.online);
+            const retained = packet?.retain === true;
+            const duplicate = packet?.dup === true;
+            const label = describeDevice(this.adapter, duid);
+
+            this.adapter.log.debug(
+              `MQTT presence for ${label}: online=${online}; retain=${retained}; dup=${duplicate}.`
             );
-          } else if (parsedData.online == true) {
-            // The counterpart was commented out, so a robot that dropped and
-            // came back left the log asserting it was offline forever.
-            this.adapter.log.info(
-              `${describeDevice(this.adapter, duid)} is back online.`
-            );
+            if (retained) {
+              // A subscription snapshot is not evidence of a new transition.
+              return;
+            }
+
+            // DUP does not prove we received the earlier delivery. Process it
+            // normally and suppress logs by the observed value, not the flag.
+            const previous = this.robotPresenceByDuid.get(duid);
+            this.robotPresenceByDuid.set(duid, online);
+            if (previous === online) {
+              return;
+            }
+            const lanAvailable =
+              this.adapter.isB01Device?.(duid) === false &&
+              this.adapter.isCloudOnlyModeEnabled?.() !== true;
+            const offlineDetail =
+              " Cloud commands may fail." +
+              (lanAvailable ? " LAN commands may still work." : "");
+            if (previous === undefined) {
+              const message = `${label}: first live MQTT presence report is ${online ? "online" : "offline"}.${online ? "" : offlineDetail}`;
+              if (online) this.adapter.log.info(message);
+              else this.adapter.log.warn(message);
+            } else if (!online) {
+              this.adapter.log.warn(
+                `${label} reports itself offline via MQTT.${offlineDetail}`
+              );
+            } else if (previous === false) {
+              this.adapter.log.info(`${label} is back online.`);
+            }
           } else if (
             // Check for firmware update information
             parsedData.mqttOtaData
@@ -879,7 +943,7 @@ class roborock_mqtt_connector {
   }
 
   getEndpoint() {
-    return endpoint;
+    return this.endpoint;
   }
 
   /**
@@ -900,14 +964,78 @@ class roborock_mqtt_connector {
    *   so the caller can fail the request at once instead of waiting out its
    *   timeout and reading a dead link as a silent robot.
    */
+  isReady() {
+    return !this.readiness.stopped && this.readiness.isReady();
+  }
+
+  waitUntilReady({ timeoutMs = 10000, signal } = {}) {
+    return this.readiness.wait(timeoutMs, signal).catch((error) => {
+      // An unsent request is not robot silence. But a connected client whose
+      // reply subscription never succeeds must not stay stuck forever either.
+      if (
+        error.code === "MQTT_READINESS_TIMEOUT" &&
+        this.connected &&
+        !this.sessionDiagnostics.subscriptionAcknowledged &&
+        !this.readiness.stopped
+      ) {
+        this.unsubscribedExpiries += 1;
+        if (this.unsubscribedExpiries >= 3) {
+          this.adapter.restartCloudSession?.(
+            `${this.unsubscribedExpiries} requests in a row could not be sent because the connected MQTT session did not acknowledge its reply subscription`
+          );
+        }
+      }
+      throw error;
+    });
+  }
+
+  getSessionGeneration() { return this.sessionDiagnostics.generation; }
+
+  noteSessionActivity(stage, duid) {
+    this.sessionDiagnostics.noteActivity(stage);
+    if (duid) {
+      const activity = this.activityByDuid.get(duid) || {};
+      activity[stage] = performance.now();
+      this.activityByDuid.set(duid, activity);
+    }
+  }
+
+  getSessionHealthSnapshot(duid) {
+    const snapshot = this.sessionDiagnostics.snapshot();
+    const activity = this.activityByDuid.get(duid);
+    const age = value => typeof value === "number" ? Math.max(0, performance.now() - value) : null;
+    return {
+      ...snapshot,
+      state: this.readiness.stopped ? "shutting-down" : this.isReady() ? "ready" : "disconnected",
+      socketConnected: snapshot.connected,
+      subscriptionReady: snapshot.subscriptionAcknowledged,
+      readyAgeMs: age(this.recovery?.readyAt),
+      ...(duid ? { lastDecodedInboundAgeMs: age(activity?.decoded), lastCorrelatedReplyAgeMs: age(activity?.correlated) } : {}),
+    };
+  }
+
+  async reconnectAndWaitReady({ reason = "manual", mode } = {}) {
+    if (this.recovery) return this.recovery.recreate(mode === "preventive" ? "preventive" : reason);
+    if (!await this.reconnectClient(true) && !this.reconnectTimer) return false;
+    await this.readiness.wait(30_000);
+    return true;
+  }
+
   sendMessage(duid, roborockMessage, onNotSent) {
-    if (!client) {
+    if (!this.client) {
       // Shut down between the caller's connection check and this publish.
       onNotSent?.(new Error("The MQTT client is closed"));
       return;
     }
-    client.publish(
-      `rr/m/i/${rriot.u}/${mqttUser}/${duid}`,
+    try {
+      this.readiness.assertReady();
+    } catch (error) {
+      if (!onNotSent) throw error;
+      onNotSent(error);
+      return;
+    }
+    this.client.publish(
+      `rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`,
       roborockMessage,
       { qos: 0 },
       (error) => {
@@ -919,7 +1047,7 @@ class roborock_mqtt_connector {
   }
 
   isConnected() {
-    return this.connected;
+    return this.recovery ? this.isReady() : this.connected;
   }
 
   /**
@@ -933,14 +1061,14 @@ class roborock_mqtt_connector {
    * listener left, and an unhandled 'error' event ends the process.
    */
   listen(event, handler) {
-    client.on(event, this.whileCurrent(handler));
+    this.client.on(event, this.whileCurrent(handler));
   }
 
   /** `fn`, run only while the client current now is still the current one. */
   whileCurrent(fn) {
-    const owner = client;
+    const owner = this.client;
     return (...args) => {
-      if (client === owner) fn(...args);
+      if (this.client === owner) fn(...args);
     };
   }
 
@@ -960,11 +1088,13 @@ class roborock_mqtt_connector {
    * The client is let go of, not stripped of its listeners (see `listen`).
    */
   disconnect() {
+    this.recovery?.stop();
     this.sessionWanted = false;
     this.clearReconnectTimer();
+    this.readiness.stop();
     this.clearInitialConnectTimeout();
-    const closing = client;
-    client = undefined;
+    const closing = this.client;
+    this.client = undefined;
     if (!closing) {
       return;
     }
@@ -1014,7 +1144,7 @@ class roborock_mqtt_connector {
   }
 
   async ensureConnected() {
-    if (client && this.connected) {
+    if (this.client && this.isConnected()) {
       this.adapter.log.debug("MQTT health check passed. Reconnect skipped.");
       return false;
     }
@@ -1042,9 +1172,9 @@ class roborock_mqtt_connector {
    * @returns {Promise<boolean>} whether a new session was started
    */
   async reconnectClient(force = false) {
-    if (!client || !this.sessionWanted) {
-      return false;
-    }
+    // All restart reasons share upstream's scheduled, fresh-client path.
+    if (!this.sessionWanted || this.reconnectTimer) return false;
+    if (!this.client) return this.scheduleReconnect() !== null;
     if (!force && this.connected) {
       this.adapter.log.debug(
         "MQTT reconnect skipped because client is already connected."
@@ -1053,8 +1183,12 @@ class roborock_mqtt_connector {
     }
 
     this.adapter.log.info("Reconnecting mqtt client!");
-    const current = client;
+    const current = this.client;
+    // Retire it before end(): late events during the backoff must not declare
+    // the old session ready or resolve a newly created request.
+    this.client = undefined;
     this.connected = false;
+    this.recovery?.rejectPending();
     this.sessionDiagnostics.onDisconnect();
     try {
       current.end(true);
@@ -1064,7 +1198,7 @@ class roborock_mqtt_connector {
       );
     }
     // Shut down, or replaced by a retried start, while the link closed.
-    if (!this.sessionWanted || client !== current) {
+    if (!this.sessionWanted) {
       return false;
     }
     this.scheduleReconnect();

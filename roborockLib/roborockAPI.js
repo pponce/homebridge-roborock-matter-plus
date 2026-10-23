@@ -1,4 +1,5 @@
 "use strict";
+const { inspectCloudJobs } = require("./lib/inspectCloudJobs");
 
 const path = require("path");
 const fs = require("fs");
@@ -2224,7 +2225,7 @@ class Roborock {
       // Latched before anything is torn down, so a retry callback that fires
       // mid-shutdown reads it as already set.
       this.stopped = true;
-      await this.clearTimersAndIntervals();
+      this.clearTimersAndIntervals();
       // Timers were the only thing shutdown used to stop. Both transports
       // stayed open, so frames kept arriving into disposed accessories and
       // the process could only ever be killed rather than exit.
@@ -2270,6 +2271,11 @@ class Roborock {
         `Stopping the Roborock connection failed: ${/** @type {any} */ (e)?.stack || e}`
       );
     }
+  }
+
+  async recoverMqttSession(options = {}) {
+    if (this.stopped) throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
+    return this.rr_mqtt_connector.reconnectAndWaitReady(options);
   }
 
   /**
@@ -3362,6 +3368,17 @@ class Roborock {
     if (health.consecutiveSilences < CLOUD_SILENCES_BEFORE_SESSION_RESTART) {
       return false;
     }
+    const restarted = this.restartCloudSession(
+      `${health.consecutiveSilences} cloud requests in a row went unanswered while the MQTT connection reported itself up`
+    );
+    if (restarted) health.consecutiveSilences = 0;
+    return restarted;
+  }
+
+  /** @param {string} reason @returns {boolean} whether a restart was started */
+  restartCloudSession(reason) {
+    if (this.stopped) return false;
+    const health = this.cloudSessionHealth;
     const now = Date.now();
     if (
       health.lastRestartAt !== 0 &&
@@ -3369,11 +3386,9 @@ class Roborock {
     ) {
       return false;
     }
-    const silences = health.consecutiveSilences;
     health.lastRestartAt = now;
-    health.consecutiveSilences = 0;
     this.log.info(
-      `${silences} cloud requests in a row went unanswered while the MQTT connection reported itself up, so the plugin is starting a fresh MQTT session — the same rule python-roborock applies (3 in a row, at most once every 30 minutes). A request in flight at this moment may fail once.`
+      `${reason}, so the plugin is starting a fresh MQTT session (at most once every 30 minutes). A request in flight at this moment may fail once.`
     );
     void Promise.resolve()
       .then(() => this.rr_mqtt_connector?.reconnectClient?.(true))
@@ -5238,6 +5253,26 @@ class Roborock {
       await this.probeOneCloudScheduleRoute(duid, route, results);
     }
 
+    // Decode complete cloud job definitions before generic diagnostics cut
+    // nested JSON strings at 500 characters. Keep the existing debug-only,
+    // once-per-robot guard and the current authenticated connection.
+    try {
+      const inspection = await inspectCloudJobs(
+        this.api,
+        duid,
+        results.schedules?.response
+      );
+      if (inspection) {
+        this.log.debug(
+          `Schedule time inspection for ${duid}: value=${JSON.stringify(inspection)}`
+        );
+      }
+    } catch {
+      this.log.debug(
+        "Schedule time inspection unavailable; normal discovery continues."
+      );
+    }
+
     // A HomeKit switch over these schedules has to WRITE, and the only write
     // route measured on this client is `user/scene/{id}/execute`, which RUNS a
     // scene rather than enabling one. The reporter's off-and-on measurement
@@ -6494,6 +6529,8 @@ class Roborock {
       return existing.promise;
     }
 
+    await this.rr_mqtt_connector.waitUntilReady?.();
+
     const messageID = b01Q7Adapter.createB01MessageId();
     const timestamp = Math.floor(Date.now() / 1000);
     const payload = await this.message.buildPayload(
@@ -6517,48 +6554,63 @@ class Roborock {
       );
     }
 
+    const concurrent = this.pendingB01MapRequests.get(duid);
+    if (concurrent) return concurrent.promise;
+
     let entry;
     const promise = new Promise((resolve, reject) => {
-      const timeout = this.setTimeout(() => {
-        // Live frames during the wait mean the robot is talking; it sent no
-        // saved map. That is not a robot that did not answer, and saying so
-        // tells the field which kind of frame a request gets back.
-        const error =
-          entry.liveFrames > 0
-            ? Object.assign(
-                new Error(
-                  `${this.describeDevice(duid)} sent ${entry.liveFrames} live map frame(s) (map type 0) but no saved map within 20s of the B01 map request.`
-                ),
-                { unansweredRequest: false, liveFramesArrived: true }
-              )
-            : Object.assign(
-                new Error(
-                  `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
-                ),
-                {
-                  unansweredRequest: true,
-                  transportWasUp: this.rr_mqtt_connector.isConnected(),
-                }
-              );
-        this.settleB01MapRequest(duid, entry, error);
-      }, 20000);
-      entry = { resolve, reject, timeout, liveFrames: 0 };
+      entry = { resolve, reject, timeout: undefined, liveFrames: 0,
+        duid, transport: "cloud", operationClass: "secure-map",
+        sessionGeneration: this.rr_mqtt_connector.getSessionGeneration?.(),
+        method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD, createdAt: Date.now(), publishedAt: null };
     });
     entry.promise = promise;
     this.pendingB01MapRequests.set(duid, entry);
+    const onTimeout = () => {
+      // Live frames during the wait mean the robot is talking; it sent no
+      // saved map. That is not a robot that did not answer, and saying so
+      // tells the field which kind of frame a request gets back.
+      const error =
+        entry.liveFrames > 0
+          ? Object.assign(
+              new Error(
+                `${this.describeDevice(duid)} sent ${entry.liveFrames} live map frame(s) (map type 0) but no saved map within 20s of the B01 map request.`
+              ),
+              { unansweredRequest: false, liveFramesArrived: true }
+            )
+          : Object.assign(
+              new Error(
+                `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
+              ),
+              {
+                unansweredRequest: true,
+                transportWasUp: this.rr_mqtt_connector.isConnected(),
+              }
+            );
+      this.settleB01MapRequest(duid, entry, error);
+    };
     // Refused by mqtt.js (the link dropped): fail now as a transport refusal,
     // which the give-up register does not count, rather than after 20 s as a
     // robot that did not answer.
-    this.rr_mqtt_connector.sendMessage(duid, roborockMessage, () => {
-      this.settleB01MapRequest(
-        duid,
-        entry,
-        refusal(
-          "cloud unavailable",
-          `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
-        )
-      );
-    });
+    try {
+      this.rr_mqtt_connector.sendMessage(duid, roborockMessage, () => {
+        this.settleB01MapRequest(
+          duid,
+          entry,
+          refusal(
+            "cloud unavailable",
+            `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
+          )
+        );
+      });
+    } catch (error) {
+      this.settleB01MapRequest(duid, entry, error);
+    }
+    if (this.pendingB01MapRequests.get(duid) === entry) {
+      entry.publishedAt = Date.now();
+      entry.timeout = this.setTimeout(onTimeout, 20000);
+      entry.timeout.unref?.();
+    }
     return promise;
   }
 

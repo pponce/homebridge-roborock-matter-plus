@@ -147,7 +147,7 @@
       },
       "enableHomeKitActionSwitches": {
         "title": "Add Home App Switches for Start, Dock, Empty Bin, Pause and Find",
-        "description": "Publishes one extra HomeKit switch per robot per action, so Apple Home automations and Shortcuts can send a command that Apple does not offer for a Matter vacuum. Measured in issue #3: Apple Home has no \"send the vacuum to its dock\" automation action for a Matter vacuum, and a plain switch is an automation action everywhere. Each switch is momentary: it turns itself off again about a second after it is pressed. Off by default, because turning it on adds accessories to your Home app. IMPORTANT \u2014 THESE NEED THEIR OWN PAIRING: the robot reaches Apple Home over Matter, but the switches are HomeKit accessories on this plugin's Homebridge child bridge, which is paired separately. Go to Plugins -> homebridge-roborock-matter -> the three-dot menu -> Child Bridge Config, make sure Enable HAP is ON (on a Matter-only setup it is often off, and until it is on no QR code will work), restart, then press Connect to HomeKit on that same screen and scan THAT QR code. It is not the main Homebridge QR code, and not the robot's Matter pairing code.",
+        "description": "Publishes one extra HomeKit switch per robot per action, so Apple Home automations and Shortcuts can send a command that Apple does not offer for a Matter vacuum. Measured in issue #3: Apple Home has no \"send the vacuum to its dock\" automation action for a Matter vacuum, and a plain switch is an automation action everywhere. Each switch is momentary: it turns itself off again about a second after it is pressed. Off by default, because turning it on adds accessories to your Home app. IMPORTANT — THESE NEED THEIR OWN PAIRING: the robot reaches Apple Home over Matter, but the switches are HomeKit accessories on this plugin's Homebridge child bridge, which is paired separately. Go to Plugins -> homebridge-roborock-matter -> the three-dot menu -> Child Bridge Config, make sure Enable HAP is ON (on a Matter-only setup it is often off, and until it is on no QR code will work), restart, then press Connect to HomeKit on that same screen and scan THAT QR code. It is not the main Homebridge QR code, and not the robot's Matter pairing code.",
         "type": "boolean",
         "default": false
       },
@@ -162,6 +162,57 @@
         "description": "Publishes one grouped \"<robot> Routines\" accessory per robot, holding one momentary switch for each Routine you created in the Roborock app. Turning a switch on runs that Routine — the same request the app's play button sends — and the switch turns itself off again after a moment, so Siri can start a Routine by its name and an Apple Home automation can run one the way it runs a scene (issue #22). Creating and editing Routines stays in the Roborock app. Off by default, because turning it on adds accessories to your Home app, and it needs the same child-bridge pairing as the schedule switches above. Requires the Home app switches master setting.",
         "type": "boolean",
         "default": false
+      },
+      "enableSchedulePauseUntilTomorrow": {
+        "title": "Pause Schedules",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds Pause Active switches per vacuum and for all vacuums. ON pauses schedules and docks active cleaning; OFF restores them."
+      },
+      "schedulePauseAll": {
+        "title": "Pause all vacuums switch",
+        "type": "boolean",
+        "default": true,
+        "description": "Adds one Pause Active switch for all vacuums when Pause Schedules is enabled."
+      },
+      "schedulePausePerVacuum": {
+        "title": "Per vacuum pause switches",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a Pause Active switch for each vacuum when Pause Schedules is enabled."
+      },
+      "enableScheduleDelay": {
+        "title": "Delay Schedules",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a momentary delay switch and a Delay Active switch per vacuum and for all vacuums. Each delay press adds the selected interval to eligible schedules for today and docks active cleaning. Turn Delay Active off to restore original times."
+      },
+      "scheduleDelayAll": {
+        "title": "Delay all vacuums switch",
+        "type": "boolean",
+        "default": true,
+        "description": "Adds a momentary delay switch and a Delay Active switch for all vacuums when Delay Schedules is enabled."
+      },
+      "scheduleDelayPerVacuum": {
+        "title": "Per vacuum Delay switches",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds a momentary delay switch and a Delay Active switch for each vacuum when Delay Schedules is enabled."
+      },
+      "scheduleDelayMinutes": {
+        "title": "Delay interval (minutes)",
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1440,
+        "default": 60,
+        "description": "One interval applies to every delay switch. While cleaning, the most recent schedule within the last 10 minutes is also eligible. Each press checks again using the current delayed times."
+      },
+      "scheduleResetTime": {
+        "title": "Daily reset time",
+        "type": "string",
+        "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+        "default": "00:05",
+        "description": "Homebridge's local time. Delayed times are restored daily. The shared Pause Until Tomorrow switch defaults to ON and allows pauses to end at this time; turn it OFF to keep pauses indefinite. Turning it back ON allows resume at the next reset. Homebridge must be running and connected to restore on time. Supports existing cloud schedules; Routines are not delayed. Before enabling, restore any pauses in an external controller and disable its schedule automations."
       },
       "homeKitActionSwitches": {
         "title": "Which Switches to Add",
@@ -252,6 +303,25 @@
         "description": "Sends Matter vacuum commands through the Roborock cloud when cloud transport is connected. This can avoid local LAN command timeouts on some models, such as S8. Status reporting is unaffected.",
         "type": "boolean",
         "default": false
+      },
+      "enableMqttSessionRecovery": {
+        "title": "Enable experimental MQTT session recovery",
+        "description": "Adds recovery when multiple robots stop replying, using the plugin's normal reconnect backoff. Off by default. Commands are not replayed. Restart the child bridge after changing this setting.",
+        "type": "boolean",
+        "default": false
+      },
+      "enableMqttPreventiveRefresh": {
+        "title": "Enable preventive MQTT refresh",
+        "description": "Refreshes the MQTT session at the configured interval when cloud requests and schedule operations are idle. Requires experimental MQTT session recovery. Off by default. Restart the child bridge after changing this setting.",
+        "type": "boolean",
+        "default": false
+      },
+      "mqttPreventiveRefreshMinutes": {
+        "title": "Preventive refresh interval (minutes)",
+        "description": "Session age before a preventive refresh. Enter whole minutes, at least 1. Default: 240 minutes (4 hours). Requires preventive MQTT refresh and experimental session recovery. Restart the child bridge after changing this setting.",
+        "type": "integer",
+        "minimum": 1,
+        "default": 240
       }
     },
     "required": ["email"]

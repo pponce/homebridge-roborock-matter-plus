@@ -168,6 +168,51 @@
           >
         </span>
       </label>
+      <label class="checkbox"
+        ><input id="enableMqttSessionRecovery" type="checkbox" /><span
+          >Enable experimental MQTT session recovery<small
+            >Adds recovery when multiple robots stop replying, using the
+            plugin's normal reconnect backoff.
+            Off by default. Commands are not replayed. Restart the child bridge
+            after changing this setting.</small
+          ></span
+        ></label
+      >
+      <div class="checkbox-group">
+        <p class="help">
+          This option only takes effect when session recovery above is enabled.
+        </p>
+        <label class="checkbox"
+          ><input id="enableMqttPreventiveRefresh" type="checkbox" /><span
+            >Enable preventive MQTT refresh<small
+              >Refreshes the MQTT session at the interval below when cloud
+              requests and schedule operations are idle. Requires experimental MQTT session recovery.
+              Off by default.</small
+            ></span
+          ></label
+        >
+        <div
+          id="mqtt-preventive-refresh-options"
+          class="checkbox-group disabled"
+        >
+          <label for="mqtt-preventive-refresh-minutes"
+            >Refresh interval (minutes)</label
+          >
+          <input
+            id="mqtt-preventive-refresh-minutes"
+            type="number"
+            min="1"
+            step="1"
+            value="240"
+            aria-describedby="mqtt-preventive-refresh-help"
+            disabled
+          />
+          <p id="mqtt-preventive-refresh-help" class="help">
+            Default: 240 minutes (4 hours). Enter whole minutes, at least 1.
+            Restart the Roborock child bridge after changing these settings.
+          </p>
+        </div>
+      </div>
     </details>
 
     <div class="actions">
@@ -294,6 +339,84 @@
             switch on runs that Routine, exactly as the app's play button does;
             it turns itself off again after a moment.</small
           ></span
+        >
+      </label>
+    </div>
+
+    <h3>Extra Schedule controls</h3>
+    <label class="checkbox">
+      <input id="enable-schedule-pause" type="checkbox" />
+      <span
+        >Pause Schedules
+        <small
+          >Adds Pause Active switches per vacuum and for all vacuums. ON pauses
+          schedules and docks active cleaning; OFF restores them.</small
+        >
+      </span>
+    </label>
+    <div id="schedule-pause-options" class="checkbox-group hidden">
+      <label class="checkbox">
+        <input id="schedule-pause-all" type="checkbox" checked />
+        <span>Pause all vacuums switch</span>
+      </label>
+      <label class="checkbox">
+        <input id="schedule-pause-per-vacuum" type="checkbox" />
+        <span>Per vacuum pause switches</span>
+      </label>
+    </div>
+    <label class="checkbox">
+      <input id="enable-schedule-delay" type="checkbox" />
+      <span
+        >Delay Schedules
+        <small
+          >Adds a momentary delay switch and a Delay Active switch per vacuum
+          and for all vacuums. Each delay press adds the selected interval to
+          eligible schedules for today and docks active cleaning. Turn Delay
+          Active off to restore original times.</small
+        >
+      </span>
+    </label>
+    <div id="schedule-delay-options" class="checkbox-group hidden">
+      <label class="checkbox">
+        <input id="schedule-delay-all" type="checkbox" checked />
+        <span>Delay all vacuums switch</span>
+      </label>
+      <label class="checkbox">
+        <input id="schedule-delay-per-vacuum" type="checkbox" />
+        <span>Per vacuum Delay switches</span>
+      </label>
+      <label class="field">
+        <span>Delay interval (minutes)</span>
+        <input
+          id="schedule-delay-minutes"
+          type="number"
+          min="1"
+          max="1440"
+          step="1"
+          value="60"
+        />
+        <small
+          >One interval applies to every delay switch. While cleaning, the most
+          recent schedule within the last 10 minutes is also eligible. Each
+          press checks again using the current delayed times.</small
+        >
+      </label>
+    </div>
+    <div id="schedule-reset-options" class="hidden">
+      <label class="field">
+        <span>Daily reset time</span>
+        <input id="schedule-reset-time" type="time" value="00:05" />
+        <small
+          >Homebridge's local time. Delayed times are restored daily. The shared
+          Pause Until Tomorrow switch defaults to ON and allows pauses to end at
+          this time; turn it OFF to keep pauses indefinite. Turning it back ON
+          allows resume at the next reset. Homebridge must be running and
+          connected to restore on time.</small
+        >
+        <small
+          >Supports existing cloud schedules; Routines are not delayed. Before
+          enabling, restore any pauses in an external controller and disable its
+          schedule automations.</small
         >
       </label>
     </div>

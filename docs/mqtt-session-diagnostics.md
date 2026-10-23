@@ -3,9 +3,9 @@
 The settings page's **Copy diagnostics** report includes an `mqttSession`
 snapshot. Cloud timeout messages append a short summary only for correlated
 silence or an unacknowledged subscription; the full snapshot stays in diagnostics.
-The observations do not change transport selection, subscription handling,
-request readiness, retries, or reconnection. The breaker integration below uses
-the measured signal to avoid counting account-session failures against methods.
+The connector uses the connection and subscription observations to gate cloud
+sends. Readiness expiry is an unsent transport failure. The breaker integration
+below uses correlated silence only for requests that were actually published.
 
 - `generation` increments on each MQTT connect event, including reconnects.
   Every connection is a new mqtt.js client with its own random client id; the
@@ -20,7 +20,7 @@ the measured signal to avoid counting account-session failures against methods.
   Failed subscriptions and refused SUBACK grants remain unacknowledged. Late
   callbacks from older connections cannot acknowledge or revoke the new
   generation. The existing subscribe calls
-  remain unchanged; this does not gate sends. The timeout summary only says
+  remain unchanged; sends wait for an acknowledged reply subscription. The timeout summary only says
   "subscription not acknowledged" when the session is still connected.
 - Inbound ages distinguish the raw MQTT callback, attribution to a known robot,
   successful Roborock decoding, and correlation to a pending request. A correlated
@@ -48,7 +48,13 @@ one did, and `null` means no eligible timeout has been observed. It is useful
 on single-robot accounts without relaxing the two-robot correlation rule.
 `lastReadTimeoutAgeMs` dates that observation at `capturedAt`; later traffic
 does not rewrite the historical result. Disconnect and connect reset both
-fields. Writes, B01 translated reads, and old-generation timeouts cannot
+fields. `lastEligibleRead` separately retains the latest eligible timeout across
+connections, including its original `generation`, `rawSilenceDuringRequest`, and
+`ageMs` at snapshot capture. It is initially null, changes only on an eligible
+read timeout, and is not used by recovery or breaker decisions. This lets a
+report distinguish historical evidence from the new session's current state;
+the hourly per-robot transport lines remain the broader traffic summary.
+Writes, B01 translated reads, and old-generation timeouts cannot
 supply this observation. An idle or non-answering robot can produce raw silence
 on a healthy session: this is evidence to inspect, not a session-fault verdict
 or a reason to change breaker/recovery policy in this PR.
