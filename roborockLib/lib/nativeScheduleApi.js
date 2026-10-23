@@ -4,7 +4,10 @@ const READ = {
   preferCloud: true,
   operationClass: "read",
   requestTimeoutMs: 10000,
-  cloudGateTimeoutMs: 8000,
+  // Native controls acknowledge HomeKit immediately and run in the background.
+  // Allow upstream's first 10 s reconnect backoff plus connect/SUBACK time.
+  // The robot's response still has its separate 10 s timeout after publication.
+  cloudGateTimeoutMs: 30000,
 };
 const WRITE = {
   ...READ,

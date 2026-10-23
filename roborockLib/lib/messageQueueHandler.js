@@ -171,11 +171,8 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
  *   only an acknowledgement, with the real payload arriving on protocol 301.
  * @property {string} [method] The Roborock method, kept for diagnostics.
  * @property {"local" | "cloud"} [transport] The transport it was sent over.
- * @property {string} [duid]
  * @property {"read" | "write" | "fire-and-forget" | "secure-map"} [operationClass]
  * @property {number} [sessionGeneration]
- * @property {number} [createdAt]
- * @property {number | null} [publishedAt]
  */
 
 /**
@@ -205,7 +202,7 @@ function describeCloudSilence(adapter, duid, receiptsAtSend) {
  * @property {import("./mqttSessionDiagnostics").MqttSessionDiagnostics} [sessionDiagnostics]
  * @property {{sendPaused: boolean, observeTimeout: (observation: any) => void} | null} [recovery]
  * @property {number} [linkId] which connection is current
- * @property {(options?: {timeoutMs?: number, signal?: AbortSignal}) => Promise<number>} [waitUntilReady]
+ * @property {(options?: {timeoutMs?: number}) => Promise<number>} [waitUntilReady]
  * @property {() => number} [getSessionGeneration]
  * @property {() => boolean} [isReady]
  * @property {() => boolean} isConnected
@@ -1039,7 +1036,6 @@ class messageQueueHandler {
         secure,
         method,
         transport: "cloud",
-        duid,
         operationClass:
           context.options.operationClass ||
           (secure
@@ -1049,8 +1045,6 @@ class messageQueueHandler {
               : "write"),
         sessionGeneration:
           this.adapter.rr_mqtt_connector.getSessionGeneration?.(),
-        createdAt: Date.now(),
-        publishedAt: null,
       };
       this.adapter.pendingRequests.set(messageID, pendingRequest);
 
@@ -1088,7 +1082,6 @@ class messageQueueHandler {
         return;
       }
       if (publicationRejected) return;
-      pendingRequest.publishedAt = Date.now();
       if (this.adapter.pendingRequests.get(messageID) === pendingRequest) {
         pendingRequest.timeout = this.adapter.setTimeout(
           onTimeout,

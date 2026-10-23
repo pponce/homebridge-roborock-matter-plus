@@ -114,49 +114,26 @@ reading through the plugin's normal diagnostics, not guessing a write payload.
 Do not blindly reuse the on/off operation's payload as a time-edit command.
 Do not delete and recreate schedules to work around an unverified edit API.
 
-## Expanded cloud-job inspection
+## Explicit cloud-job method inspection
 
-When plugin debug logging and child bridge Debug Mode are enabled, the existing
-once-per-robot startup probe now also emits `Schedule time inspection` records.
-The probe uses its existing authenticated cloud client. It decodes nested JSON
-before ordinary diagnostics truncate strings at 500 characters or arrays at
-eight entries. Unknown strings and credential fields are masked. Task parameter
-fingerprints allow comparisons without printing raw private strings. These
-sanitized records describe settings; they are **not restoration snapshots**.
+The three extra OPTIONS probes no longer run when plugin debug logging is enabled.
+Normal upstream debug discovery remains unchanged. To request the expanded
+inspection, append `--probe-methods` to the read-only preflight command below.
+The default preflight still makes only its existing GET request.
 
-For the first valid job, three additional OPTIONS requests inspect the collection,
-the existing job, and a deliberately absent subresource as a control. Each request
-has a 10-second timeout. No PUT, POST, PATCH, DELETE, login, or robot action is
-performed by the added diagnostic. A job endpoint advertising PUT identifies a
-candidate route; it does not prove a particular time-edit payload will work.
-An absent control returning the same Allow header would weaken that evidence.
-
-The collector includes the embedded capture timestamp and allowed methods. An
-expanded reading replaces the older compacted cloud-job log in the report; check
-the capture timestamp to establish freshness. Other readings can still be older.
-The robot-side on/off state and the cloud-job `enabled` field are reported
-separately. Do not assume those fields mean the same thing or enable jobs based
-on their disagreement.
-
-The candidate job update route is used for enabling/disabling jobs by
-[`roborock-q10-cli`](https://github.com/andrewlyeats/roborock-q10-cli/blob/main/vac.py):
-`PUT /user/devices/{duid}/jobs/{jobId}`. That client is evidence on another model,
-not a reason to reuse its full write body unchanged. The model a15 result above
-is the separate live verification.
-
-Verification commands:
-
-```bash
-node --test tests/inspect-cloud-jobs.test.cjs
-python3 -B -m unittest discover -s tests -p 'test_inspect_schedule_times.py'
-```
+With that flag, the preflight examines the collection, the selected existing job
+and an intentionally absent subresource, using ten-second OPTIONS deadlines.
+No method probes run if the selected job is absent. This mode cannot issue PUT,
+POST, PATCH or DELETE, and it cannot probe a different job. Results report status
+and allowed methods without logging authentication headers or response bodies.
+An Allow header describes routing; it does not prove a time-edit payload works.
 
 ## One-job time-change trial
 
 ### Read-only preflight after a refused trial
 
 `scripts/inspect-schedule-preflight.cjs` uses the same saved-session reader with
-a GET-only transport. It performs one fresh cloud job-list request and describes
+a GET-only transport by default. It performs one fresh cloud job-list request and describes
 every job, marking the selected ID. Cloud enabled values retain their types, so
 boolean false and the string "false" cannot be confused. Complete task structure
 is sanitized with the existing diagnostic sanitizer.
@@ -165,8 +142,9 @@ It also checks bounded existing Homebridge log tails and joins jobs to robot
 timers using the task's timer identifier. These log observations are explicitly
 historical, without interpreted timestamps; they are not current robot state
 and cannot justify relaxing a write guard. Missing or malformed observations
-remain unknown. There are no schedule writes, login attempts, MQTT connections,
-OPTIONS requests, or service changes. No plugin reinstall is needed.
+remain unknown. There are no schedule writes, login attempts, MQTT connections
+or service changes. OPTIONS requests require the explicit `--probe-methods` flag
+described above. No plugin reinstall is needed.
 
 On model a27, two 2026-10-09 trial attempts were refused by the local
 `CLOUD_JOB_MUST_BE_DISABLED` guard after app on/off and time-edit preparation.

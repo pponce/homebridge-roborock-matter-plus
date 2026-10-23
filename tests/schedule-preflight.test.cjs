@@ -145,3 +145,71 @@ test("read-only transport blocks PUT and OPTIONS before any fetch", async () => 
   await request("GET", "/jobs");
   assert.equal(calls, 1);
 });
+
+test("explicit method inspection reads once and probes only the selected job", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-methods-"));
+  const collectionPath = "/user/devices/robot/jobs";
+  const calls = [];
+  try {
+    const report = await inspect({
+      storage: root, duid: "robot", jobId: "124", collectionPath, probeMethods: true,
+      request: async (method, requestPath) => {
+        calls.push([method, requestPath]);
+        if (method === "GET") return { status: 200, data: { success: true, result: [job, { ...job, id: 124 }] } };
+        return { status: requestPath.endsWith("no-such-subresource-control") ? 404 : 200, allow: "GET, PUT, OPTIONS" };
+      },
+    });
+    assert.deepEqual(calls, [
+      ["GET", collectionPath],
+      ["OPTIONS", collectionPath],
+      ["OPTIONS", `${collectionPath}/124`],
+      ["OPTIONS", `${collectionPath}/124/no-such-subresource-control`],
+    ]);
+    assert.equal(report.writeAttempts, 0);
+    assert.deepEqual(report.methodChecks.map(check => check.ok), [true, true, false]);
+    assert.equal(report.methodChecks[2].status, 404);
+    assert.ok(!JSON.stringify(report).includes("private-task-key"));
+  } finally { fs.rmSync(root, { recursive: true }); }
+});
+
+test("explicit probes cannot enable writes, request bodies or other job routes", async () => {
+  const calls = [];
+  const request = makeRequester(
+    { u: "user", s: "session", h: "secret", r: { a: "https://api-us.roborock.com" } },
+    "/jobs", "123",
+    async (url, options) => {
+      calls.push([url.pathname, options.method, options.body]);
+      return { status: 200, headers: new Headers({ allow: "GET,OPTIONS" }) };
+    },
+    { readOnly: true, allowMethodProbes: true }
+  );
+  for (const method of ["PUT", "POST", "PATCH", "DELETE"])
+    await assert.rejects(request(method, "/jobs/123", {}), { code: "READ_ONLY_REQUEST_REQUIRED" });
+  await assert.rejects(request("OPTIONS", "/jobs/124"), { code: "READ_ONLY_REQUEST_REQUIRED" });
+  await assert.rejects(request("OPTIONS", "/jobs/123", {}), { code: "READ_ONLY_REQUEST_REQUIRED" });
+  assert.equal(calls.length, 0);
+  for (const route of ["/jobs", "/jobs/123", "/jobs/123/no-such-subresource-control"])
+    await request("OPTIONS", route);
+  assert.deepEqual(calls, [
+    ["/jobs", "OPTIONS", undefined],
+    ["/jobs/123", "OPTIONS", undefined],
+    ["/jobs/123/no-such-subresource-control", "OPTIONS", undefined],
+  ]);
+});
+
+test("an absent selected job never causes method probes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-methods-absent-"));
+  const calls = [];
+  try {
+    const report = await inspect({
+      storage: root, duid: "robot", jobId: "999", collectionPath: "/jobs", probeMethods: true,
+      request: async (method) => {
+        calls.push(method);
+        return { status: 200, data: { success: true, result: [job] } };
+      },
+    });
+    assert.deepEqual(calls, ["GET"]);
+    assert.equal(report.selectedJobFound, false);
+    assert.deepEqual(report.methodChecks, []);
+  } finally { fs.rmSync(root, { recursive: true }); }
+});

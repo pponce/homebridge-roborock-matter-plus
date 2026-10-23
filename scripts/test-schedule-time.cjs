@@ -126,9 +126,16 @@ function makeRequester(
     throw new TrialError("INVALID_SAVED_SESSION");
   const itemPath = `${collectionPath}/${jobId}`;
   return async (method, requestPath, payload) => {
-    if (policy.readOnly && method !== "GET")
+    const methodProbe =
+      policy.readOnly === true &&
+      policy.allowMethodProbes === true &&
+      method === "OPTIONS" &&
+      payload === undefined &&
+      [collectionPath, itemPath, `${itemPath}/no-such-subresource-control`].includes(requestPath);
+    if (policy.readOnly && method !== "GET" && !methodProbe)
       throw new TrialError("READ_ONLY_REQUEST_REQUIRED");
     const permitted =
+      methodProbe ||
       (method === "GET" && requestPath === collectionPath) ||
       (["OPTIONS", "PUT"].includes(method) && requestPath === itemPath);
     if (!permitted) throw new TrialError("REQUEST_OUTSIDE_SELECTED_JOB");
@@ -143,7 +150,7 @@ function makeRequester(
       headers,
       body,
       redirect: "error",
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(methodProbe ? 10000 : 15000),
     });
     let data;
     if (method !== "OPTIONS") {

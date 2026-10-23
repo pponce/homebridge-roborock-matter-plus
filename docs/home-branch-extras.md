@@ -1,149 +1,100 @@
-# Home branch integration and remaining extras
+# Home branch additions on 3.40.0
 
-## Integration on upstream 3.40.0 stable
+This inventory describes the current `SCHEDULE_PAUSE_DELAY` build, based on
+upstream **3.40.0 stable**. Earlier inventories mixed active features with
+historical proposals and unused helper APIs. The previous inventory remains in
+[Git history](https://github.com/pponce/homebridge-roborock-matter-plus/blob/d42eb597dd79960e3cd4f78319e985ad68c40708/docs/home-branch-extras.md).
+Personal working-plan documents remain in the repository for historical context.
 
-This branch incorporates the stable release and revised PRs #31, #32, #36,
-#37, #38, #39 and #46. The optional recovery code from #31 is adapted for this
-home build; the upstream proposal remains parked. Schedule reconciliation,
-optimistic switch feedback, momentary action acknowledgement, presence logging,
-send readiness and historical eligible-read diagnostics are retained.
+## Branch roles
 
-Native pause and stacked schedule-delay controls retain the same accessory IDs,
-configuration keys and persistent journal. The preventive refresh minutes field
-remains below its checkbox (default 240 minutes, both recovery flags required).
+- `SCHEDULE_PAUSE_DELAY`: stable upstream, the seven open PRs, native pause/delay,
+  and the limited home additions described here.
+- `upstream_plus_SCHEDULE_PAUSE_DELAY`: stable upstream plus native pause/delay
+  only. It retains upstream's transport and shutdown policies.
 
-Upstream 3.40 already creates fresh clients. Optional correlated-silence and
-preventive triggers now use that same reconnect path and its 10-second initial
-backoff, growing by 1.5 after failed connections. There is no independent client
-factory or retry loop. A successful connection plus SUBACK restarts session age.
-Preventive refresh defers while cloud requests, map reads, queued schedule writes
-or entire pause/delay transactions are pending. It never deliberately interrupts
-those operations just because the age limit expired. See
-[MQTT recovery behavior](mqtt-session-recovery.md).
+Both use the existing plugin package identity. Native accessory IDs, configuration
+keys and the saved schedule journal are preserved, so switching builds does not
+require replacing the native pause/delay controls. Choose one build at a time.
 
-Retained home extras include per-request readiness budgets, cancellable waits,
-operation and generation metadata, per-robot activity ages, idempotent listener
-installation, immediate shutdown ordering, and schedule inspection tools. The
-obsolete immediate-replacement lifecycle from the old home build is superseded
-by the upstream reconnect path. Physical Homebridge/robot validation remains
-separate from automated tests.
+## Native pause and delay
 
-`upstream_plus_SCHEDULE_PAUSE_DELAY` is the alternative stable-based build with
-only native pause/delay controls. It does not contain the optional recovery UI,
-these home extras, or the open-PR feature set. Both install as the existing
-`homebridge-roborock-matter` package, so select one build at a time.
+Pause Active, Pause Until Tomorrow, stacked delay presses, Delay Active restoration,
+per-vacuum/all-vacuum selections, configurable delay minutes and daily restoration
+remain available. See [schedule controls](schedule-controls.md).
 
-## Historical integration on upstream v3.39.0 (superseded)
+In the combined build, native MQTT readiness allows thirty seconds for the initial
+10-second reconnect delay and the connect/SUBACK handshake. The normal ten-second
+robot-response timeout begins after publication. Existing explicit total budgets
+for LAN-to-cloud retries remain bounded as before. Native HomeKit handlers already
+acknowledge presses immediately; the work happens in the background. A request
+whose readiness deadline expires is not sent or replayed later.
 
-`SCHEDULE_PAUSE_DELAY` incorporates the revised PRs #30, #31, #32, #36,
-#37, #38 and #39, plus the separate local TCP-probe test fix. The native
-pause and stacked schedule-delay controls are retained, including their
-existing accessory identifiers, configuration keys and persistent journal.
+## Optional recovery retained for comparison
 
-The home-only MQTT extras now reuse the reviewed client-replacement lifecycle.
-Ordinary recovery creates a fresh client, keeps mqtt.js's own teardown listeners,
-waits for SUBACK and uses the shared cooldown/backoff. The extra correlated-silence
-and preventive refresh triggers still require their configuration switches.
-Per-request readiness budgets (including the native controls' eight-second gate),
-request operation/generation metadata, cancellable readiness waits, per-robot
-activity diagnostics and synchronous shutdown are retained. Pending writes are
-never replayed when a session is replaced.
+The extra correlated-silence trigger and preventive age refresh remain experimental
+and **off by default**. Keeping them available does not establish a reliability
+benefit over 3.40.0. The upstream PR #31 proposal remains parked pending evidence.
 
-The historical inventory and plans below are retained for context;
-the implementation now follows the reviewed v3.39.0 lifecycle rather than the
-older independent session state machine.
+Preventive refresh retains its indented minutes field, default 240. It requires
+both recovery options. It uses upstream's fresh-client factory and reconnect
+backoff, resets age after successful subscription, and defers while cloud requests,
+map reads, queued schedule writes or complete native schedule operations are busy.
+There is no second client factory or retry timer. Failure recovery shares the
+upstream thirty-minute silence cooldown; age refresh does not consume it.
+See [MQTT recovery behavior](mqtt-session-recovery.md).
 
-## Historical v3.37.0 inventory (superseded)
+Small protections retained alongside that integration:
 
-The remainder records the earlier implementation. Current behavior is described above and in the focused feature documentation.
+- A retired client cannot change readiness or process replies during reconnect
+  backoff, and repeated initialization does not install duplicate handlers.
+- Pending requests carry their transport, session generation and operation type.
+  Interrupted cloud writes are marked as potentially ambiguous and never replayed.
+- Shutdown still cancels readiness waiters. Its teardown ordering now matches
+  upstream again.
 
-This inventory compares `MQTT_ACCOUNT_SESSION_RECOVERY` with upstream v3.37.0 plus the submitted versions of PRs #30, #31, #32, #36, #37 and #38, plus the focused momentary-action follow-up. It describes code, not a claim that every proposal has been approved or tested on physical robots. The reasons below describe the intended benefit from our home-branch work; they are not evidence that upstream needs every implementation detail.
+## Changes already covered by upstream or an open PR
 
-## Integration baseline
+Upstream supplies fresh clients with random IDs, growing reconnect backoff,
+V1-only silence counting, LAN keep-alives/cloud fallback, transport summaries,
+shutdown/persistence fixes, basic optimistic schedule feedback, #30's correlated
+silence breaker exemption and #42's probe-test correction.
 
-| Included work                                                               | Reviewed commit                            | Scope                                                                                        |
-| --------------------------------------------------------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| v3.37.0 / merged #29                                                        | `4d23bf0e812111758afbd46b68e26d1c9bd52e8c` | Passive diagnostics, real SUBACK observations, persistence flush after teardown              |
-| [#30](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/30) | `bb1777a32c98bcca35570023eddb6140aa7cbd59` | Strictly cross-robot breaker exemption                                                       |
-| [#31](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/31) | `a59ba5a96cdcfe3a7994b5d571237cfdf627ae66` | Experimental recreation, optional preventive refresh, recovery diagnostics                   |
-| [#32](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/32) | `3d1a03f3cc519defceaf0a1b8b6219881a967b8d` | Schedule-write reconciliation and duplicate-write suppression                                |
-| [#36](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/36) | `d68690f03f36745e10e2ade5aa03649d6db3cdc4` | Presence-only logging with first live report at info                                         |
-| [#37](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/37) | `bc469f1cd770e3b4639f773d592a4e655d88d552` | Ordinary MQTT readiness gate, separate publication/response budgets, unsent-request handling |
-| [#38](https://github.com/mathiashornbek/homebridge-roborock-matter/pull/38) | `91c4e05e87151588d5b8d558882fac320f620b8b` | Optimistic schedule display, explicit rollback and newer-intent protection                   |
+The combined build also includes:
 
-The home branch before this integration was `544097fd5bc3b2a840321b3145c616ce3ddd6294`. It already contained v3.37.0 and the #30–32 changes. This integration adopts #38's schedule-switch implementation and #37's send/timing safeguards, adapting readiness to the existing home connector so its additional lifecycle capabilities remain available. A subsequent integration implements the #36 discussion split: #36 is presence-only, and a separate momentary-action branch covers the five action buttons and routines with prominent failures. Physical-robot validation remains pending.
+| PR | Remaining scope |
+| --- | --- |
+| #31 | Optional recovery triggers and diagnostics, adapted here to upstream's lifecycle |
+| #32 | Reconcile uncertain schedule writes and share duplicate pending requests |
+| #36 | Distinguish retained presence snapshots from live changes |
+| #37 | Wait for reply readiness without blocking a working LAN route |
+| #38 | Persist confirmed schedule state and handle unknown write outcomes |
+| #39 | Acknowledge Find/Routine presses promptly and suppress duplicate runs |
+| #46 | Preserve historical eligible-read evidence across sessions |
 
-The focused acknowledgement branch is `momentary-action-acknowledgement` at `2ba3248ff7b91893a61dfb775f32911615d41bc6`. Its upstream draft requires manual creation because the GitHub integration denied PR creation. Both focused changes and the home integration pass automated validation; physical-robot testing remains pending.
+The extras cleanup changes only this integration branch, not those PRs.
 
-## Active capabilities still specific to the home branch
+## Removed supporting code
 
-### 1. Immediate shutdown teardown
+The unused manual recovery facade, cancellable-wait argument, extra per-robot
+activity-age map/snapshot, and request creation/publication timestamps have been
+removed. The ordinary readiness gate and its shutdown cancellation remain.
+The extra immediate-shutdown ordering has been reverted to upstream. Passive
+session diagnostics and upstream's per-robot transport summaries remain available.
 
-`roborockLib/roborockAPI.js` clears timers synchronously and starts transport teardown without first yielding through an unnecessary `await`. The intended benefit is to stop transport activity as soon as shutdown starts. Persisted state is flushed after teardown, including its final diagnostics snapshot.
+## Explicit schedule investigation
 
-Only the same-turn ordering remains extra: the persistence-flush correction is already upstream. Mathias explicitly asked to park further shutdown changes until the other lifecycle work settles. Keep this in the home branch and discuss it separately; it is not a prerequisite for the submitted series.
+The schedule inspection and controlled time-trial tools remain developer tools.
+Enabling plugin debug logging no longer runs the three extra cloud-job OPTIONS
+probes. Existing upstream debug discovery remains intact.
 
-### 2. A broader ordinary reconnect lifecycle
+Run the existing `scripts/inspect-schedule-preflight.cjs` diagnostic with
+`--probe-methods` only when method discovery is wanted. It reads the current job
+list, then probes the collection, the selected existing job and an intentionally
+absent subresource. Each OPTIONS request has a ten-second timeout. The default
+preflight remains GET-only; the probe mode cannot issue writes or probe other
+jobs. See [schedule investigation](schedule-time-investigation.md).
 
-`roborockLib/lib/roborock_mqtt_connector.js` can create a fresh client with experimental recovery disabled. It coordinates concurrent recreation attempts, briefly drains pending work, retires requests belonging to the old session, bounds client teardown and readiness waits, and tracks reconnect failures/backoff. With experimental recovery enabled, the dedicated #31 lifecycle is used.
-
-This was added to recover a wedged account session without restarting Homebridge and to avoid leaving old requests attached to a replacement connection. It goes beyond #37, which controls when an ordinary request may be sent. It changes how a reconnect happens, not just when a request waits.
-
-Do not interpret this as an unconditional minimum interval on every ordinary reconnect: a forced reconnect bypasses the ordinary cooldown check. The upstream default silence rule still has its own 30-minute limit. A useful discussion would be whether the fresh-client lifecycle should eventually become shared infrastructure, with its ordinary-path effects reviewed explicitly.
-
-### 3. More pending-request metadata
-
-The queue and API retain device, transport, operation classification, client generation, creation time and publication time. Vacuum/schedule callers can identify reads, writes and map operations. This supports retiring the correct generation's requests and marking a retired write as potentially ambiguous instead of counting teardown as a robot response.
-
-Some publication timing is now shared with #37. The extra classification/generation machinery mainly supports the broader reconnect lifecycle above. It is not a new user setting. Mathias has not explicitly rejected this machinery; its justification should be evaluated with the lifecycle that needs it.
-
-### 4. Additional readiness controls
-
-The home connector retains event-driven readiness waiters, optional `AbortSignal` cancellation, internal per-request `cloudGateTimeoutMs` overrides, and explicit subscription-attempt failure/deadline handling. It validates subscription grants and guards callbacks against retired clients/connection attempts.
-
-The intended benefit is to stop waiting promptly when subscription is refused or the caller cancels, and to prevent stale callbacks from declaring a new session ready. The main user-facing readiness feature and separate response budget are covered by #37. These are supporting differences, not additional UI options. No current production caller was found supplying an abort signal or overriding the readiness budget; those hooks are available rather than independently active features.
-
-### 5. Small lifecycle safeguards and diagnostic details
-
-| Difference                                                         | Intended benefit and discussion scope                                                                                         |
-| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| Prevent duplicate recovery-handler installation on the same client | Avoid multiple reactions when home initialization paths revisit a client; no demonstrated upstream duplication bug is claimed |
-| Clear the startup watchdog on experimental connection              | Avoid an obsolete initial-connect timeout after a successful connection                                                       |
-| Log recreation start and reason                                    | Show that recovery began, even before its result is available                                                                 |
-| Emit diagnostics when a general cooldown blocks recreation         | Make the reason for deferring an attempt visible                                                                              |
-| Catch and warn on hourly health-check errors                       | Avoid an unexpected rejected health-check promise disappearing without useful context                                         |
-
-These belong next to the lifecycle they protect if upstream needs them. They should not be bundled as unexplained behavior changes. Core recovery reason/result/failure/cooldown reporting is already in #31 and is not an extra.
-
-### 6. Routine acknowledgement is now covered by the focused action proposal
-
-Routine buttons now share the accepted-press/background-command policy with Start, Dock, Empty Bin, Pause and Find in `momentary-action-acknowledgement`. Failures name the routine or action, robot and reason at warning/error level. This capability is retained in the home branch but is no longer an unproposed extra. Physical-robot validation is still pending; see [the acknowledgement notes](momentary-action-acknowledgement.md).
-
-## Supporting differences and cleanup candidates
-
-These are not additional user-facing features. They are preserved so integration does not also become an unrelated cleanup.
-
-| Item                                                                                | Purpose / present status                                                                                       |
-| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| Per-robot raw/decoded/correlated ages in the connector health snapshot              | Additional internal inspection data; no production consumer found beyond the existing diagnostic/test surfaces |
-| `recoverMqttSession` API facade                                                     | Entry point for explicit recovery; no production caller found                                                  |
-| `isRecoverableScheduleCloudFailure` helper                                          | Classifies schedule/cloud failures; retained helper/test coverage, not a separate current behavior             |
-| Additional refresh-result `failedSources` / `error` fields                          | Carry partial-failure information; no production consumer found for the extra fields                           |
-| `isPreventiveReconnectDue` helper                                                   | Retained helper/test surface; active preventive policy is already supplied by #31                              |
-| Older maintenance/preventive constants and `silentCloudReadTimeouts` bookkeeping    | Leftovers from earlier iterations; do not represent a second active preventive or single-robot policy          |
-| Home-specific regression tests, generated `dist/`, build workflow and working notes | Support the fork's installation and development process; not product capabilities proposed upstream            |
-
-## Features that are no longer extras
-
-- Single-robot silence recovery already exists in the upstream baseline. The former separate single-robot checkbox is not an extra to reintroduce. Breaker exemption remains strictly cross-robot.
-- Recovery diagnostics and the nested preventive-refresh option are covered by #31.
-- Schedule-write readback and duplicate suppression are covered by #32.
-- Ordinary send readiness and a response budget that starts after publication are covered by #37.
-- Optimistic schedule feedback and its tested rollback policy are covered by #38.
-- Persistence flushing after transport teardown is already in v3.37.0.
-
-## Suggested discussion
-
-The home branch keeps the extras while adopting the submitted PR behavior wherever the features overlap. Which of the remaining pieces should become focused upstream follow-ups, and which should stay fork-specific? In particular, should the ordinary fresh-client lifecycle and the metadata it requires be reviewed together? Are the small lifecycle safeguards useful independently of that implementation? Immediate shutdown ordering can remain parked as requested.
-
-The #36 split is implemented: presence-only logging remains in #36, and momentary actions are prepared independently in `momentary-action-acknowledgement`. Retained snapshots stay debug-only; each robot's first live presence is informational once per plugin lifetime. The focused code and integrated home branch have separate automated validation. Physical-robot acknowledgement/failure checks remain pending and must be reported as integration-branch observations when testing this home branch.
+Automated tests verify readiness across reconnects, separate response timing,
+expiry without later publication, schedule-busy refresh deferral and explicit
+probe scope. Physical robot/Homebridge observations remain separate evidence.
