@@ -1,0 +1,110 @@
+name: Validate stable 3.40 branches
+on:
+  push:
+    branches: [review-delay/stable340-validation]
+permissions:
+  contents: write
+concurrency:
+  group: validate-stable340-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [pr31, pr32, pr36, pr37, pr38, pr39, pr46]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: review-delay/stable340-${{ matrix.target }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Format, validate and build
+        env:
+          REVIEW_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set +e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f stable340-validation-result.json
+          npm ci > /tmp/install.log 2>&1
+          install_status=$?
+          npm run lint:fix > /tmp/format.log 2>&1
+          format_status=$?
+          git add -u
+          if ! git diff --cached --quiet; then
+            git commit -m "Format integrated home branch"
+          fi
+          source_sha=$(git rev-parse HEAD)
+          npm run lint > /tmp/lint.log 2>&1
+          lint_status=$?
+          npm run typecheck > /tmp/types.log 2>&1
+          types_status=$?
+          npm run build > /tmp/build.log 2>&1
+          build_status=$?
+          npm test -- --runInBand --json --outputFile=/tmp/jest.json > /tmp/jest.log 2>&1
+          jest_status=$?
+          native_status=0
+          : > /tmp/native.log
+          if compgen -G "tests/*.test.cjs" > /dev/null; then
+            node --test tests/*.test.cjs > /tmp/native.log 2>&1
+            native_status=$?
+          fi
+          python_status=0
+          : > /tmp/python.log
+          if compgen -G 'tests/test_*.py' > /dev/null; then
+            python3 -m unittest discover -s tests -p 'test_*.py' > /tmp/python.log 2>&1
+            python_status=$?
+          fi
+          npm pack --ignore-scripts --json --pack-destination /tmp > /tmp/pack.json 2> /tmp/pack.log
+          pack_status=$?
+          if [ "$pack_status" -eq 0 ]; then
+            node - <<'JS'
+          const fs = require('fs');
+          const pack = JSON.parse(fs.readFileSync('/tmp/pack.json'))[0];
+          const paths = new Set(pack.files.map(f => f.path));
+          const required = ['package.json', 'config.schema.json', 'dist/index.js', 'dist/hap_schedule_api.js', 'homebridge-ui/server.js', 'roborockLib/roborockAPI.js', ...fs.readdirSync('roborockLib/lib').filter(f => f.endsWith('.js')).map(f => 'roborockLib/lib/' + f)];
+          if (['full', 'upstream'].includes(process.env.REVIEW_TARGET)) required.push('dist/native_schedule_controls.js');
+          const missing = required.filter(p => !paths.has(p));
+          fs.writeFileSync('/tmp/pack-summary.json', JSON.stringify({name: pack.name, version: pack.version, filename: pack.filename, files: pack.files.length, requiredFiles: required.length, missing}));
+          if (missing.length) { console.error('Missing runtime files:', missing); process.exitCode = 1; }
+          JS
+            pack_status=$?
+          fi
+          all_status=$((install_status + format_status + lint_status + types_status + build_status + jest_status + native_status + python_status + pack_status))
+          install_sha=""
+          if [ "$all_status" -eq 0 ] && [[ "$REVIEW_TARGET" == "full" || "$REVIEW_TARGET" == "upstream" ]]; then
+            git add -f dist
+            if ! git diff --cached --quiet; then
+              git commit -m "Build installable dist from validated integration"
+            fi
+            install_sha=$(git rev-parse HEAD)
+          fi
+          export source_sha install_sha install_status format_status lint_status types_status build_status jest_status native_status python_status pack_status
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = {'sourceSha': os.environ['source_sha'], 'installSha': os.environ['install_sha'], 'statuses': {k: int(os.environ[k + '_status']) for k in ['install', 'format', 'lint', 'types', 'build', 'jest', 'native', 'python', 'pack']}}
+          if Path('/tmp/pack-summary.json').exists(): result['package'] = json.loads(Path('/tmp/pack-summary.json').read_text())
+          p = Path('/tmp/jest.json')
+          if p.exists():
+              j = json.loads(p.read_text())
+              result['jest'] = {k: j.get(k) for k in ['numPassedTests', 'numFailedTests', 'numPendingTests', 'numPassedTestSuites', 'numFailedTestSuites', 'success']}
+              result['failures'] = [{'file': t['name'].split('/homebridge-roborock-matter-plus/')[-1], 'message': t.get('message', '')[:12000], 'assertions': [{'name': a['fullName'], 'messages': a.get('failureMessages', [])} for a in t.get('assertionResults', []) if a['status'] == 'failed']} for t in j.get('testResults', []) if t['status'] == 'failed']
+          result['logs'] = {k: Path('/tmp/' + k + '.log').read_text()[-35000:] for k in ['install', 'lint', 'types', 'build', 'native', 'python', 'pack']}
+          Path('stable340-validation-result.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps({k:v for k,v in result.items() if k not in ['logs', 'failures']}))
+          PY
+          git add -f stable340-validation-result.json
+          git commit -m "Record schedule integration validation evidence"
+          git push origin "HEAD:review-delay/stable340-${REVIEW_TARGET}"
+          push_status=$?
+          if [ "$all_status" -ne 0 ] || [ "$push_status" -ne 0 ]; then
+            exit 1
+          fi
