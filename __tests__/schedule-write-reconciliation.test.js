@@ -361,6 +361,8 @@ test("verification does not adopt a read started before the write completed", as
 });
 
 test("verification waits for an optional existing recovery without starting one", async () => {
+  const originalRecovery = connector.recovery;
+  try {
   let finishRecovery;
   connector.recovery = {
     inFlight: new Promise((resolve) => {
@@ -379,6 +381,10 @@ test("verification waits for an optional existing recovery without starting one"
   expect(writeEvents()).toHaveLength(1);
   expect(events.at(-1).method).toBe("get_server_timer");
   expect(restart).not.toHaveBeenCalled();
+  } finally {
+    // Restore the actual lifecycle before the connector's shutdown hook runs.
+    connector.recovery = originalRecovery;
+  }
 });
 
 test.each([true, false])(
