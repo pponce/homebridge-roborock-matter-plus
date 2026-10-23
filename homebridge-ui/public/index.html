@@ -147,6 +147,22 @@
       </label>
 
       <label class="checkbox">
+        <input id="schedule-protocol-capture" type="checkbox" />
+        <span>
+          Capture schedule protocol for 30 minutes
+          <small>
+            Restart the Roborock child bridge to begin. Records sanitized
+            requests and replies and reads schedules once a minute; does not
+            change schedules. Stops after 30 minutes or 2 MiB. Turn this off
+            after testing. General debug logging is not required.
+          </small>
+        </span>
+      </label>
+      <button id="download-schedule-capture" class="secondary" type="button">
+        Download schedule capture
+      </button>
+
+      <label class="checkbox">
         <input id="prefer-cloud-for-matter-commands" type="checkbox" />
         <span>
           Prefer Roborock cloud for Matter commands

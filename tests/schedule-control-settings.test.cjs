@@ -102,6 +102,26 @@ function harness(saved) {
   };
 }
 
+test("schedule capture is opt-in and saves independently of pause/delay controls", async () => {
+  const h = harness({ email: "test@example.com", enableScheduleDelay: true });
+  await h.load();
+  assert.equal(h.form().enableScheduleProtocolCapture, false);
+  h.elements.get("schedule-protocol-capture").checked = true;
+  h.elements.get("enable-schedule-delay").checked = false;
+  await h.save();
+  assert.equal(h.saved().enableScheduleProtocolCapture, true);
+  assert.equal(h.saved().enableScheduleDelay, true);
+  const reopened = harness(h.saved());
+  await reopened.load();
+  assert.equal(
+    reopened.elements.get("schedule-protocol-capture").checked,
+    true
+  );
+  reopened.elements.get("schedule-protocol-capture").checked = false;
+  await reopened.save();
+  assert.equal(reopened.saved().enableScheduleProtocolCapture, false);
+});
+
 test("new and existing settings without scope keys default to all-vacuum controls", async () => {
   for (const saved of [
     undefined,

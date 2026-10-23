@@ -1,4 +1,7 @@
 "use strict";
+const {
+  startScheduleProtocolCapture,
+} = require("./lib/scheduleProtocolCapture");
 
 const path = require("path");
 const fs = require("fs");
@@ -1930,6 +1933,7 @@ class Roborock {
     const rriot = userdata.rriot;
 
     // Initialize the real API.
+    this.scheduleProtocolCapture?.stop("connection-restarted");
     this.api = axios.create({
       baseURL: rriot.r.a,
       timeout: this.cloudRestTimeoutMs,
@@ -2071,6 +2075,9 @@ class Roborock {
       }
 
       this.bInited = true;
+      // One bounded capture per child-bridge process, even after a login retry.
+      if (!this.scheduleProtocolCapture)
+        this.scheduleProtocolCapture = startScheduleProtocolCapture(this);
       // A success ends the retry chain and forgets the backoff, so a
       // later outage starts from one minute again rather than ten.
       if (this.startServiceRetryTimer) {
@@ -2224,6 +2231,7 @@ class Roborock {
       // Latched before anything is torn down, so a retry callback that fires
       // mid-shutdown reads it as already set.
       this.stopped = true;
+      this.scheduleProtocolCapture?.stop("shutdown");
       await this.clearTimersAndIntervals();
       // Timers were the only thing shutdown used to stop. Both transports
       // stayed open, so frames kept arriving into disposed accessories and

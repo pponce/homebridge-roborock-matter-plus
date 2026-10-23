@@ -10,6 +10,8 @@ const elements = {
   devicesEmpty: document.getElementById("devices-empty"),
   refreshDevices: document.getElementById("refresh-devices"),
   debugMode: document.getElementById("debug-mode"),
+  scheduleProtocolCapture: document.getElementById("schedule-protocol-capture"),
+  downloadScheduleCapture: document.getElementById("download-schedule-capture"),
   saveFeatureSettings: document.getElementById("save-feature-settings"),
   enableHomeKitActionSwitches: document.getElementById(
     "enable-homekit-action-switches"
@@ -228,6 +230,9 @@ async function loadConfig() {
       elements.skipDevices.value = config.skipDevices;
     }
     elements.debugMode.checked = Boolean(config.debugMode);
+    if (elements.scheduleProtocolCapture)
+      elements.scheduleProtocolCapture.checked =
+        config.enableScheduleProtocolCapture === true;
     // No Apple Home feature toggles to load any more. 3.12.0 removed the
     // whole section: every Matter feature is on unless config.json explicitly
     // says false, and nothing here reads or writes those keys, so a save can
@@ -303,6 +308,7 @@ async function loadConfig() {
     elements.cloudOnlyMode.checked = Boolean(config.cloudOnlyMode);
     elements.advancedSettings.open = Boolean(
       config.debugMode ||
+        config.enableScheduleProtocolCapture ||
         config.preferCloudForMatterCommands ||
         config.enableMqttSessionRecovery ||
         config.enableMqttPreventiveRefresh ||
@@ -882,6 +888,7 @@ const AUTO_SAVED_FIELDS = [
   "serverURL",
   "skipDevices",
   "debugMode",
+  "enableScheduleProtocolCapture",
   "matterChargedBatteryThreshold",
   "preferCloudForMatterCommands",
   "enableMqttSessionRecovery",
@@ -916,6 +923,9 @@ function getFormValues() {
     serverURL: getServerUrl(),
     skipDevices: getSkipDevices(),
     debugMode: getDebugMode(),
+    enableScheduleProtocolCapture: Boolean(
+      elements.scheduleProtocolCapture?.checked
+    ),
     enableHomeKitActionSwitches: Boolean(
       elements.enableHomeKitActionSwitches?.checked
     ),
@@ -2239,6 +2249,29 @@ function init() {
     rerenderMatterPairing();
   });
   elements.debugMode.addEventListener("change", () => autoSave());
+  elements.scheduleProtocolCapture?.addEventListener("change", () =>
+    autoSave()
+  );
+  elements.downloadScheduleCapture?.addEventListener("click", async () => {
+    try {
+      const result = await request("/diagnostics/schedule-capture", {});
+      if (!result.ok) {
+        showToast("warning", result.message);
+        return;
+      }
+      const url = URL.createObjectURL(
+        new Blob([result.content], { type: "application/x-ndjson" })
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = result.name;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast("success", "Sanitized schedule capture downloaded.");
+    } catch {
+      showToast("error", "Could not download the schedule capture.");
+    }
+  });
   if (elements.matterChargedBatteryThreshold) {
     elements.matterChargedBatteryThreshold.addEventListener("change", () =>
       autoSave()
