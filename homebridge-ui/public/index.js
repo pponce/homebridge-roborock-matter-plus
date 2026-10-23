@@ -2249,7 +2249,9 @@ function init() {
     rerenderMatterPairing();
   });
   elements.debugMode.addEventListener("change", () => autoSave());
-  elements.scheduleProtocolCapture?.addEventListener("change", () => autoSave());
+  elements.scheduleProtocolCapture?.addEventListener("change", () =>
+    autoSave()
+  );
   elements.downloadScheduleCapture?.addEventListener("click", async () => {
     try {
       const result = await request("/diagnostics/schedule-capture", {});

@@ -1,5 +1,7 @@
 "use strict";
-const { startScheduleProtocolCapture } = require("./lib/scheduleProtocolCapture");
+const {
+  startScheduleProtocolCapture,
+} = require("./lib/scheduleProtocolCapture");
 
 const path = require("path");
 const fs = require("fs");
