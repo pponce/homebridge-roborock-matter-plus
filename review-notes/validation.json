@@ -1,0 +1,152 @@
+{
+  "date": "2026-10-23",
+  "upstream": {
+    "commit": "9b43a2a8c3d5172be3f5552f244c2bde0c7e8723",
+    "version": "3.40.0-beta.2"
+  },
+  "node": 22,
+  "checks": [
+    "npm ci",
+    "npm run lint:fix",
+    "npm run lint",
+    "npm run typecheck",
+    "npm run build",
+    "npm test -- --runInBand"
+  ],
+  "branches": [
+    {
+      "id": "31",
+      "sha": "0da198a8a16af37ab3688313e462ad0cec16cac0",
+      "branch": "mqtt-session-recreation",
+      "sourceSha": "25fd67529384af5d82d0692d60dd7fd910817a93",
+      "tests": 2589,
+      "suites": 241,
+      "statuses": {
+        "install": 0,
+        "format": 0,
+        "lint": 0,
+        "types": 0,
+        "build": 0,
+        "jest": 0
+      },
+      "tree": "ec5983f31bfecec5affa5dc77f4fe6863d7cfd0b",
+      "validationUrl": "https://github.com/pponce/homebridge-roborock-matter-plus/actions/runs/39982463922/job/120512996974",
+      "backup": "backup/review-v340/pr31"
+    },
+    {
+      "id": "32",
+      "sha": "5a27d0e4c8e59b0044738cee8428894948bd6954",
+      "branch": "schedule-write-reconciliation",
+      "sourceSha": "5a27d0e4c8e59b0044738cee8428894948bd6954",
+      "tests": 2568,
+      "suites": 241,
+      "statuses": {
+        "install": 0,
+        "format": 0,
+        "lint": 0,
+        "types": 0,
+        "build": 0,
+        "jest": 0
+      },
+      "tree": "e32211d77027c4fecb5927ffa19ae6802382ff98",
+      "validationUrl": "https://github.com/pponce/homebridge-roborock-matter-plus/actions/runs/39978430460/job/120499065328",
+      "backup": "backup/review-v340/pr32"
+    },
+    {
+      "id": "36",
+      "sha": "2280cabf4de7e852cdab828d9714d5ce550334ca",
+      "branch": "home-extras-pr5-discussion",
+      "sourceSha": "2280cabf4de7e852cdab828d9714d5ce550334ca",
+      "tests": 2549,
+      "suites": 240,
+      "statuses": {
+        "install": 0,
+        "format": 0,
+        "lint": 0,
+        "types": 0,
+        "build": 0,
+        "jest": 0
+      },
+      "tree": "4e54d81288fc3da78951f34232677cd8fd4c1c83",
+      "validationUrl": "https://github.com/pponce/homebridge-roborock-matter-plus/actions/runs/39978430460/job/120499065979",
+      "backup": "backup/review-v340/pr36"
+    },
+    {
+      "id": "37",
+      "sha": "5d022abfc98ac431181da49b5d7103a799b6c2d1",
+      "branch": "mqtt-send-readiness",
+      "sourceSha": "5d022abfc98ac431181da49b5d7103a799b6c2d1",
+      "tests": 2556,
+      "suites": 240,
+      "statuses": {
+        "install": 0,
+        "format": 0,
+        "lint": 0,
+        "types": 0,
+        "build": 0,
+        "jest": 0
+      },
+      "tree": "69bf34409d6d9fcabdfbc1342e4c9fea441dc488",
+      "validationUrl": "https://github.com/pponce/homebridge-roborock-matter-plus/actions/runs/39981679083/job/120510291957",
+      "backup": "backup/review-v340/pr37"
+    },
+    {
+      "id": "38",
+      "sha": "46dee7805d8e7cb6815715b6eaeb23ad546ebc53",
+      "branch": "schedule-optimistic-feedback",
+      "sourceSha": "ace37ce0c59f7889f8ae9e71be5fb86778caea5c",
+      "tests": 2577,
+      "suites": 241,
+      "statuses": {
+        "install": 0,
+        "format": 0,
+        "lint": 0,
+        "types": 0,
+        "build": 0,
+        "jest": 0
+      },
+      "tree": "54c87a2411682a1e7b17abb8680532bab8b1f700",
+      "validationUrl": "https://github.com/pponce/homebridge-roborock-matter-plus/actions/runs/39981679083/job/120510292470",
+      "backup": "backup/review-v340/pr38"
+    },
+    {
+      "id": "39",
+      "sha": "bb382275a2e1c39eec37d4523fad6ea5e90ade16",
+      "branch": "momentary-action-acknowledgement",
+      "sourceSha": "bb382275a2e1c39eec37d4523fad6ea5e90ade16",
+      "tests": 2554,
+      "suites": 240,
+      "statuses": {
+        "install": 0,
+        "format": 0,
+        "lint": 0,
+        "types": 0,
+        "build": 0,
+        "jest": 0
+      },
+      "tree": "ca14154b3054494df6ba8fd9490e0597eb568a93",
+      "validationUrl": "https://github.com/pponce/homebridge-roborock-matter-plus/actions/runs/39980221941/job/120505271334",
+      "backup": "backup/review-v340/pr39"
+    },
+    {
+      "id": "last-read",
+      "sha": "b4b52a9438baac36613877961f7a1c4cf154d13d",
+      "branch": "mqtt-last-eligible-read",
+      "sourceSha": "b4b52a9438baac36613877961f7a1c4cf154d13d",
+      "tests": 2542,
+      "suites": 239,
+      "statuses": {
+        "install": 0,
+        "format": 0,
+        "lint": 0,
+        "types": 0,
+        "build": 0,
+        "jest": 0
+      },
+      "tree": "4d577b05f70c2044d4e4704374783bb8ffd5528a",
+      "validationUrl": "https://github.com/pponce/homebridge-roborock-matter-plus/actions/runs/39980221941/job/120505270885",
+      "backup": null
+    }
+  ],
+  "liveHardwareTestsPerformed": false
+}
