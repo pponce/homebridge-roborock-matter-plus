@@ -1,0 +1,65 @@
+name: Validate 3.40 PR revisions
+on:
+  push:
+    branches: [review-delay/v340-validation]
+permissions:
+  contents: write
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        pr: [32, 36, 39]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: review-delay/v340-pr${{ matrix.pr }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Format, typecheck, test and build
+        shell: bash
+        env:
+          REVIEW_PR: ${{ matrix.pr }}
+        run: |
+          set +e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f review-validation-result.json
+          npm ci > /tmp/install.log 2>&1
+          install_status=$?
+          npm run lint:fix > /tmp/format.log 2>&1
+          format_status=$?
+          git add -u
+          if ! git diff --cached --quiet; then git commit -m "Format PR review changes"; fi
+          source_sha=$(git rev-parse HEAD)
+          npm run lint > /tmp/lint.log 2>&1
+          lint_status=$?
+          npm run typecheck > /tmp/types.log 2>&1
+          types_status=$?
+          npm run build > /tmp/build.log 2>&1
+          build_status=$?
+          npm test -- --runInBand --json --outputFile=/tmp/jest.json > /tmp/jest.log 2>&1
+          jest_status=$?
+          export source_sha install_status format_status lint_status types_status build_status jest_status
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = {'sourceSha': os.environ['source_sha'], 'statuses': {k: int(os.environ[k + '_status']) for k in ['install', 'format', 'lint', 'types', 'build', 'jest']}}
+          if Path('/tmp/jest.json').exists():
+              j = json.loads(Path('/tmp/jest.json').read_text())
+              result['jest'] = {k: j.get(k) for k in ['numPassedTests', 'numFailedTests', 'numPendingTests', 'numPassedTestSuites', 'numFailedTestSuites', 'success']}
+              result['failures'] = [{'file': t['name'].split('/homebridge-roborock-matter-plus/')[-1], 'message': t.get('message', '')[:18000]} for t in j.get('testResults', []) if t['status'] == 'failed']
+          result['logs'] = {k: Path('/tmp/' + k + '.log').read_text()[-30000:] for k in ['install', 'format', 'lint', 'types', 'build', 'jest']}
+          Path('review-validation-result.json').write_text(json.dumps(result, indent=2) + '\n')
+          print(json.dumps({k:v for k,v in result.items() if k not in ['logs', 'failures']}))
+          PY
+          git add -f review-validation-result.json
+          git commit -m "Record PR validation evidence"
+          git push origin "HEAD:review-delay/v340-pr${REVIEW_PR}"
+          push_status=$?
+          if [ "$((install_status + format_status + lint_status + types_status + build_status + jest_status + push_status))" -ne 0 ]; then exit 1; fi
