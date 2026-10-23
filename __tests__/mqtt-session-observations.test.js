@@ -686,27 +686,41 @@ test("shutdown persists the final disconnected MQTT snapshot without a pending w
   }
 });
 
-
 test("last eligible read survives reconnect with its original generation, without retaining current silence evidence", async () => {
   expect(snapshot().lastEligibleRead).toBeNull();
   await timeout();
-  expect(snapshot().lastEligibleRead).toEqual({ generation: 1, rawSilenceDuringRequest: true, ageMs: 0 });
+  expect(snapshot().lastEligibleRead).toEqual({
+    generation: 1,
+    rawSilenceDuringRequest: true,
+    ageMs: 0,
+  });
   await jest.advanceTimersByTimeAsync(1000);
   mockHandlers.get("close")();
   expect(snapshot()).toMatchObject({
     connected: false,
     rawSilenceDuringRequest: null,
     correlatedSilenceObserved: false,
-    lastEligibleRead: { generation: 1, rawSilenceDuringRequest: true, ageMs: 1000 },
+    lastEligibleRead: {
+      generation: 1,
+      rawSilenceDuringRequest: true,
+      ageMs: 1000,
+    },
   });
   mockHandlers.get("connect")({ sessionPresent: false });
   acknowledge();
-  expect(snapshot()).toMatchObject({ generation: 2, lastEligibleRead: { generation: 1 } });
+  expect(snapshot()).toMatchObject({
+    generation: 2,
+    lastEligibleRead: { generation: 1 },
+  });
   const request = await startRequest();
   receive({ protocol: 500, payload: Buffer.from('{"online":true}') });
   await jest.advanceTimersByTimeAsync(10000);
   await request.result;
-  expect(snapshot().lastEligibleRead).toEqual({ generation: 2, rawSilenceDuringRequest: false, ageMs: 0 });
+  expect(snapshot().lastEligibleRead).toEqual({
+    generation: 2,
+    rawSilenceDuringRequest: false,
+    ageMs: 0,
+  });
 });
 
 test("a write and an old-generation timeout cannot replace the last eligible read", async () => {
@@ -718,6 +732,10 @@ test("a write and an old-generation timeout cannot replace the last eligible rea
   await jest.advanceTimersByTimeAsync(10000);
   await oldRead.result;
   await timeout("robot-a", "app_start");
-  expect(snapshot().lastEligibleRead).toEqual({ generation: 1, rawSilenceDuringRequest: true, ageMs: 20000 });
+  expect(snapshot().lastEligibleRead).toEqual({
+    generation: 1,
+    rawSilenceDuringRequest: true,
+    ageMs: 20000,
+  });
   expect(snapshot().rawSilenceDuringRequest).toBeNull();
 });
