@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pr: [32, 36, 39]
+        pr: [37, 38, 39, last-read]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
