@@ -1,0 +1,41 @@
+{
+  "sourceSha": "e651221c53179da7f44442134cb928b0122b2464",
+  "installSha": "",
+  "statuses": {
+    "install": 0,
+    "format": 0,
+    "lint": 0,
+    "types": 0,
+    "build": 0,
+    "jest": 0,
+    "native": 0,
+    "python": 0,
+    "pack": 0
+  },
+  "package": {
+    "name": "homebridge-roborock-matter",
+    "version": "3.40.0",
+    "filename": "homebridge-roborock-matter-3.40.0.tgz",
+    "files": 88,
+    "requiredFiles": 28,
+    "missing": []
+  },
+  "jest": {
+    "numPassedTests": 2555,
+    "numFailedTests": 0,
+    "numPendingTests": 0,
+    "numPassedTestSuites": 240,
+    "numFailedTestSuites": 0,
+    "success": true
+  },
+  "failures": [],
+  "logs": {
+    "install": "npm warn EBADENGINE Unsupported engine {\nnpm warn EBADENGINE   package: 'homebridge@1.8.3',\nnpm warn EBADENGINE   required: { node: '^18.15.0 || ^20.7.0' },\nnpm warn EBADENGINE   current: { node: 'v22.23.3', npm: '10.9.9' }\nnpm warn EBADENGINE }\nnpm warn EBADENGINE Unsupported engine {\nnpm warn EBADENGINE   package: 'hap-nodejs@0.12.2',\nnpm warn EBADENGINE   required: { node: '^18 || ^20' },\nnpm warn EBADENGINE   current: { node: 'v22.23.3', npm: '10.9.9' }\nnpm warn EBADENGINE }\nnpm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.\nnpm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me\nnpm warn deprecated q@1.1.2: You or someone you depend on is using Q, the JavaScript Promise library that gave JavaScript developers strong feelings about promises. They can almost certainly migrate to the native JavaScript promise now. Thank you literally everyone for joining me in this bet against the odds. Be excellent to each other.\nnpm warn deprecated\nnpm warn deprecated (For a CapTP with native promises, see @endo/eventual-send and @endo/captp)\nnpm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me\nnpm warn deprecated glob@11.1.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me\n\nadded 801 packages, and audited 802 packages in 9s\n\n66 packages are looking for funding\n  run `npm fund` for details\n\n5 vulnerabilities (1 moderate, 4 high)\n\nTo address all issues, run:\n  npm audit fix\n\nRun `npm audit` for details.\n",
+    "lint": "\n> homebridge-roborock-matter@3.40.0 lint\n> prettier --check .\n\nChecking formatting...\nAll matched files use Prettier code style!\n",
+    "types": "\n> homebridge-roborock-matter@3.40.0 typecheck\n> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.roborockLib.json\n\n",
+    "build": "\n> homebridge-roborock-matter@3.40.0 build\n> rimraf ./dist && tsc\n\n",
+    "native": "",
+    "python": "",
+    "pack": ""
+  }
+}
