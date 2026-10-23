@@ -280,9 +280,7 @@ describe("HomeKit schedule settings contract", () => {
     expect(scheduleSource).toContain(
       "new ScheduleWriteBatcher<ScheduleWriteRequest>("
     );
-    expect(scheduleSource).toContain(
-      "this.coordinator.enqueueScheduleWrite("
-    );
+    expect(scheduleSource).toContain("this.coordinator.enqueueScheduleWrite(");
     expect(scheduleSource).toMatch(
       /private stopRuntime\(\): void \{[\s\S]*?this\.writeBatcher\.cancelPending\(\);/
     );

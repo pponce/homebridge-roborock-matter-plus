@@ -381,7 +381,6 @@ test("verification waits for an optional existing recovery without starting one"
   expect(restart).not.toHaveBeenCalled();
 });
 
-
 test.each([true, false])(
   "timer read matches requested state=%s while scenes are throttled: no fallback and cooldown stays armed",
   async (applied) => {
@@ -395,9 +394,13 @@ test.each([true, false])(
     if (!applied) expect(failures.get("timer-1")).toBe(throttle);
     expect(writeEvents()).toHaveLength(1);
     expect(coordinator.cachedSchedules[0].enabled).toBe(applied);
-    expect(coordinator.accountCoordinator.currentThrottleError()).toBe(throttle);
+    expect(coordinator.accountCoordinator.currentThrottleError()).toBe(
+      throttle
+    );
     expect(adapter.log.info).toHaveBeenCalledWith(
-      expect.stringContaining(`primaryConfirmed=${applied ? 1 : 0}; retried=0; fallbackSent=0; failed=${applied ? 0 : 1}`)
+      expect.stringContaining(
+        `primaryConfirmed=${applied ? 1 : 0}; retried=0; fallbackSent=0; failed=${applied ? 0 : 1}`
+      )
     );
   }
 );
