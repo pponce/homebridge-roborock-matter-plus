@@ -1,89 +1,87 @@
-# Opt-in MQTT session recreation
+# Optional MQTT recovery in the home build
 
-`enableMqttSessionRecovery` defaults to false. Enable it in advanced plugin
-settings or config.json and restart the child bridge to participate in this
-experimental release. Leaving it absent preserves v3.36.0's default recovery:
-three consecutive cloud timeouts with the link up and no traffic from the robot
-while each request waited restart MQTT, at most once every thirty minutes.
+This home build is based on **3.40.0 stable**. Upstream already creates a fresh
+client with a random ID on reconnection. The optional recovery layer supplies
+additional triggers and request draining; the connector owns client creation,
+teardown and retry backoff. It does not run a second replacement loop.
 
-With recovery enabled, the measured multi-robot silence can
-recreate the account's MQTT client. Upstream's baseline remains active (including
-single-robot silence) and uses the same bounded lifecycle. The correlated policy
-adds cross-robot evidence; it does not disable or narrow the baseline's counting
-rules. Local timeouts and idle time do not trigger reactive recreation.
+`enableMqttSessionRecovery` defaults to false. When enabled, correlated silent
+reads across multiple robots can request a replacement. Upstream's existing
+three-consecutive-V1-timeout recovery remains active, including for one robot.
+Both failure policies share the same thirty-minute silence cooldown. Local
+failures and idle time alone do not count as correlated cloud silence.
 
-Cloud sends pause until the broker acknowledges the reply subscription. During
-recreation, new cloud requests use the ordinary bounded readiness gate; a request
-that cannot become ready within ten seconds fails as not sent. The gate is checked
-again at publication. Local requests keep operating.
-Existing cloud requests get up to 500 ms to finish. Remaining requests, including
-B01 map reads, reject with an unknown outcome and are never replayed. Schedule
-write reconciliation is independent of this lifecycle.
+Cloud sends wait for the broker's actual reply-subscription acknowledgement.
+Their normal readiness deadline is ten seconds; the native pause/delay controls
+use an eight-second readiness budget. A request that expires before publication
+fails as not sent and is never replayed later. Once published, it receives its
+separate response deadline. Local requests bypass the cloud readiness gate.
 
-Recreation is single-flight. Forced client teardown is bounded at two seconds;
-connection plus subscription readiness is bounded at twenty seconds. Successful
-attempts have a one-minute minimum interval; failures back off from one to fifteen
-minutes. Both silence policies additionally share upstream's thirty-minute
-cooldown, measured from actual teardown. Every replacement resets the baseline
-streak, but only silence-triggered recovery starts the thirty-minute cooldown.
-Preventive and health-check refreshes use the one-minute minimum interval instead.
-A replacement that misses its twenty-second readiness deadline stays alive and
-mqtt.js keeps reconnecting automatically. A connected client whose SUBACK remains
-missing/refused, or a failed client creation, is retried after the bounded backoff.
-Concurrent triggers share one in-flight attempt. Shutdown cancels
-waits and prevents another client from being created. Retired client callbacks
-cannot change readiness or process messages. Readiness observes actual SUBACK
-packets, including mqtt.js automatic resubscriptions; successful empty subscribe
-callbacks leave readiness unchanged. The real mqtt.js loopback-broker regression
-runs with experimental recovery both off and on.
+## Preventive refresh and minutes setting
 
-## Preventive refresh: separate and off by default
+`enableMqttPreventiveRefresh` is separate and defaults to false. It requires
+experimental session recovery to be enabled. The indented **Refresh interval
+(minutes)** field below its checkbox sets `mqttPreventiveRefreshMinutes`.
+The default is **240 minutes (4 hours)**; accepted values are positive whole
+minutes. Invalid saved values fall back to 240. Restart the child bridge after
+changing these settings.
 
-`enableMqttPreventiveRefresh` defaults to false and lives in the collapsible
-Advanced troubleshooting section of the plugin config UI for now. The maintainer
-can choose another presentation later. It is a configuration option, not a HomeKit
-accessory. It requires experimental session recovery to be enabled, and a child
-bridge restart after changing it.
+A once-per-minute check compares the age of the ready session with that interval.
+The age starts after connection and successful SUBACK, and resets after every
+ordinary or requested reconnection. The interval is therefore a minimum age,
+not a promise to reconnect at an exact wall-clock minute.
 
-`mqttPreventiveRefreshMinutes` sets the session age in whole minutes, with a
-minimum of 1 and a default of 240 (four hours). The field sits below the preventive
-refresh checkbox and is disabled unless both recovery and preventive refresh are
-enabled. Its saved value is retained when either checkbox is turned off. Missing
-or invalid values use 240 minutes. Restart the child bridge after changing it.
+Refresh defers while cloud requests or B01 map reads are outstanding. It also
+checks queued schedule batches and whole native pause/delay operations, including
+the gaps between their individual cloud calls. This check happens before closing
+the send gate. Commands can still use the ready session during deferral. A second
+check before replacement handles work that appeared while the refresh started.
 
-When enabled, a once-per-minute check refreshes sessions that have been ready for
-at least the configured interval. A reconnect or replacement restarts that age
-clock. This is a periodic age check, not a prediction of the next timeout.
-Refresh defers if any cloud request is
-outstanding, including a write or B01 map request, before closing the send gate.
-Commands arriving during that deferral can still use the ready session.
-It does not coordinate entire multi-command schedule transactions.
+A preventive refresh does not consume the thirty-minute failure-recovery budget.
+It uses the short trigger cooldown and waits for the next idle check when busy.
 
-Lifecycle logs contain reasons, generations, timing and cooldowns, not credentials
-or request payloads. The regression tests drive real connector callbacks and
-request-queue timeouts; upstream baseline tests are retained, with additional tests for overlapping triggers and the shared cooldown.
+## Replacement and failure behavior
 
-## Recovery diagnostics
+Concurrent optional triggers share one operation. Reactive/manual requests pause
+new cloud sends and allow up to 500 ms for outstanding requests to finish.
+Preventive requests defer instead of deliberately interrupting active work.
+Retired cloud requests and B01 map reads reject with `MQTT_SESSION_REPLACED`;
+writes are marked as potentially ambiguous. Nothing is replayed. LAN requests
+remain attached to their own transport. Schedule reconciliation handles uncertain
+write outcomes independently.
 
-The persisted `MqttSessionDiagnostics` snapshot includes a `recovery` object:
-`enabled`, `preventiveRefreshEnabled`, `preventiveRefreshMinutes`, `inProgress`, `lastReason`, `lastResult`,
-`consecutiveFailures`, `cooldownRemainingMs`, and `silenceCooldownRemainingMs`.
-The two remaining durations distinguish the general success/failure cooldown from
-the shared 30-minute silence cooldown. They are measured when the snapshot is
-written; a saved snapshot is not a live countdown.
+The old MQTT client is retired and force-closed through the connector's normal
+path. Stale callbacks cannot restore readiness or process messages. A fresh
+client opens after upstream's initial **10-second backoff**, growing by 1.5 for
+unsuccessful connections up to ten minutes. Connection resets the reconnect
+backoff, and actual SUBACK opens the send gate.
 
-Results are `never`, `in-progress`, `succeeded`, `failed`, `recovered` (the retained replacement later became ready), `deferred` (new traffic
-or an active request made recreation unnecessary), or `stopped` during teardown.
-Suppressed attempts do not replace the last actual attempt's reason/result.
-Snapshots are emitted when an attempt begins and finishes, including failed
-attempts. Diagnostics change neither trigger policy nor retry timing.
-With experimental recovery disabled, the object is `{ enabled: false }`; it does
-not claim that upstream's separate default cloud-silence rule is disabled.
+The optional layer observes readiness for at most thirty seconds, allowing the
+initial backoff plus connection and subscription time. If that observation fails,
+the replacement remains under ordinary connector management. No extra retry timer
+is started. The send-readiness change can request recovery after repeated
+connected-but-unsubscribed gate expiries. A later successful SUBACK records
+recovery. Optional trigger failures use a one-to-fifteen-minute cooldown; ordinary
+upstream reconnect attempts are not blocked by that optional trigger cooldown.
+Shutdown cancels waits and prevents further replacements.
 
-The ordinary startup watchdog and connection error/offline/closed/recovered logs
-also remain active in recovery mode. Client retirement preserves mqtt.js's own
-listeners and handshake cleanup; guarded callbacks ignore retired clients.
+## Diagnostics and validation
 
-The diagnostic `lastEligibleRead` records the most recent eligible timeout's
-`generation`, `rawSilenceDuringRequest` and `ageMs`, even across disconnect/reconnect.
-It is historical evidence only; current-generation correlation is still cleared.
+The persisted recovery snapshot includes the enabled flags, configured minutes,
+remaining age, waiting-for-idle state, current attempt, reason/result, failure
+count and the separate trigger/silence cooldowns. Saved remaining durations are
+snapshots, not live countdowns. Logs include reason, generation and timing;
+they do not include credentials or request payloads.
+
+Results are `never`, `in-progress`, `succeeded`, `failed`, `recovered`, `deferred`
+or `stopped`. With the option disabled, recovery diagnostics report
+`{ enabled: false }`; upstream's default recovery remains active.
+Historical `lastEligibleRead` preserves its generation across replacement, while
+current correlation evidence is cleared. Per-robot activity ages are diagnostic
+only and do not create another recovery policy.
+
+Automated regression tests cover real queue timeouts, replacement timing,
+request retirement, late SUBACK, shutdown, shared cooldowns, configured age and
+pending schedule batches. These do not replace tests on a physical Homebridge
+installation. This adapted home implementation does not imply that the parked
+PR #31 has been approved or that isolated-branch field evidence was collected.

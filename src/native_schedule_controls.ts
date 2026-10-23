@@ -47,6 +47,10 @@ export class NativeScheduleControls {
   private resetTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private delayPulses = new Set<string | null>();
   private commandTail: Promise<void> = Promise.resolve();
+  private queuedCommands = 0;
+  get busy(): boolean {
+    return this.queuedCommands > 0;
+  }
   private pending = new Map<string, { token: object; value: boolean }>();
   private failedValues = new Map<string, boolean>();
   private pendingPausePreference?: { token: object; value: boolean };
@@ -320,6 +324,7 @@ export class NativeScheduleControls {
     // GETs and refreshes use the requested state immediately, including the
     // aggregate tile. Serialize whole requests so all-vacuum and individual
     // presses execute in order; older completions cannot clear newer intent.
+    this.queuedCommands++;
     this.commandTail = this.commandTail
       .then(() => this.ready)
       .then(async () => {
@@ -378,13 +383,17 @@ export class NativeScheduleControls {
           `[SCHEDULE CONTROL FAILED] ${this.name(context.duid)}: ${action}: ${this.describeError(error)}. Switches refreshed from saved state.`
         );
       })
-      .finally(() => this.refresh());
+      .finally(() => {
+        this.queuedCommands--;
+        this.refresh();
+      });
   }
   private acceptPausePreference(value: boolean): void {
     const token = {};
     this.pendingPausePreference = { token, value };
     // Keep preference changes ordered with presses, but do not contact the cloud
     // for a local setting. Failed persistence restores its previous saved value.
+    this.queuedCommands++;
     this.commandTail = this.commandTail
       .then(() => this.ready)
       .then(async () => {
@@ -399,6 +408,7 @@ export class NativeScheduleControls {
         );
       })
       .finally(() => {
+        this.queuedCommands--;
         if (this.pendingPausePreference?.token === token)
           this.pendingPausePreference = undefined;
         this.refresh();

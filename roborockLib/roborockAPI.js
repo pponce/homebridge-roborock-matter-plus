@@ -1,4 +1,5 @@
 "use strict";
+const { inspectCloudJobs } = require("./lib/inspectCloudJobs");
 
 const path = require("path");
 const fs = require("fs");
@@ -8,7 +9,11 @@ const crypto = require("crypto");
 
 const roborockAuth = require("./lib/roborockAuth");
 
-const rrLocalConnector = require("./lib/localConnector").localConnector;
+const {
+  localConnector: rrLocalConnector,
+  LOCAL_MUTE_REMOTE_REASON,
+  LOCAL_MUTE_TIMEOUT_LIMIT,
+} = require("./lib/localConnector");
 const roborock_mqtt_connector =
   require("./lib/roborock_mqtt_connector").roborock_mqtt_connector;
 const rrMessage = require("./lib/message").message;
@@ -21,7 +26,6 @@ const messageQueueHandler =
   require("./lib/messageQueueHandler").messageQueueHandler;
 const { refusal } = require("./lib/messageQueueHandler");
 const hawkSignature = require("./lib/hawkSignature");
-const { inspectCloudJobs } = require("./lib/inspectCloudJobs");
 const { METHOD_REFUSED_CODE } = require("./lib/describeReplyRefusal");
 const {
   summariseCloudSceneSchedules,
@@ -31,12 +35,14 @@ const b01Q7Adapter = require("./lib/b01Q7Adapter");
 const b01Q10Adapter = require("./lib/b01Q10Adapter");
 const { describeDroppedFrames } = require("./lib/roborock_mqtt_connector");
 const { UnansweredMethodBreaker } = require("./lib/unansweredMethodBreaker");
+const { TransportTally } = require("./lib/transportTally");
 const { LateReplyTracker } = require("./lib/lateReplies");
 
-// v1 states in which the robot is actively doing something and state
-// transitions are imminent (cleaning, returning, spot/zone/segment runs,
-// docking, mop washing). Drives the adaptive B01 poll cadence.
-const B01_ACTIVE_V1_STATES = new Set([5, 6, 7, 11, 15, 16, 17, 18, 23, 26]);
+// The Q7 work statuses, in the v1 numbering mapStatusToV1 gives them, in
+// which the robot is actively doing something and state transitions are
+// imminent: cleaning (5), docking (15) and washing the mop (23). Drives the
+// adaptive Q7 poll cadence; no other value can reach it.
+const B01_ACTIVE_V1_STATES = new Set([5, 15, 23]);
 
 // v1 states in which the robot is physically moving through rooms, making
 // the SCMap currentPose worth fetching for live-room tracking (cleaning,
@@ -77,19 +83,6 @@ const CLOUD_ONLY_TRANSPORT_MARKERS = Object.freeze({
 // for robots the plugin never attempts a LAN connection to.
 const UNEXPLAINED_REMOTE_REASON = "remote-device";
 
-// A local socket that completed its TCP handshake and then answered nothing.
-// This is a different failure from a connect that failed, and conflating the
-// two is what made it invisible: the port is reachable, so nothing looks
-// broken, while every request still dies of silence at its timeout.
-const LOCAL_MUTE_REMOTE_REASON = "local-socket-connected-but-mute";
-
-// Consecutive local timeouts tolerated before the LAN is written off for a
-// robot. One is noise — a single lost frame on a healthy network is ordinary,
-// and exiling that robot to the cloud for it would be worse than the bug this
-// bound fixes. Three in a row on a socket that keeps reporting itself
-// connected is not noise.
-const LOCAL_MUTE_TIMEOUT_LIMIT = 3;
-
 // Minimum gap between live-room map fetch attempts while cleaning. The map
 // payload is an order of magnitude heavier than get_status, so it rides a
 // slower cadence than the active status polls — but 20s meant a robot could
@@ -97,6 +90,10 @@ const LOCAL_MUTE_TIMEOUT_LIMIT = 3;
 // opposite of what a "live" room display is for. 10s keeps the map traffic
 // modest while making the room track the robot closely enough to be useful.
 const B01_LIVE_ROOM_MIN_FETCH_GAP_MS = 10000;
+
+// A Q7 places itself by pushing live map frames while it cleans. As long as
+// one has arrived within this window, nothing is fetched for the live room.
+const B01_LIVE_FRAME_FRESH_MS = 30000;
 
 // A live-room fetch that keeps failing is a channel that is down for this
 // robot, not a lost frame. The request is heavy, it always rides the cloud
@@ -130,6 +127,12 @@ function liveRoomFetchGapMs(consecutiveFailures) {
 
 // Rooms rarely change, so a successful room-list refresh is good for 6 hours.
 const B01_ROOM_REFRESH_GAP_MS = 6 * 60 * 60 * 1000;
+
+// How long a B01 robot with no room list yet holds back the creation of its
+// Matter accessory, which can never gain a Service Area afterwards. A Q7's
+// first room read answered about 1 s after start in the field
+// (pi-roborock.log, 17 Oct 2026).
+const B01_FIRST_ROOMS_WAIT_MS = 8000;
 
 // The same reasoning as the live-room backoff above, one loop further out. The
 // 6-hour stamp is written only on success, so a robot whose map channel is down
@@ -177,7 +180,7 @@ function roomRefreshRetryGapMs(consecutiveFailures) {
  * row" could greet a new run's first failure with N already at 5. Resetting
  * has to happen even when no room was ever resolved — a run that failed every
  * attempt is precisely the run that left the counters high.
- * @param {{consecutiveFailures?: number, unresolvedPoseCount?: number, placeholderReported?: boolean} | null | undefined} liveState
+ * @param {{consecutiveFailures?: number, unresolvedPoseCount?: number, placeholderReported?: boolean, savedMapReported?: boolean} | null | undefined} liveState
  */
 function resetLiveRoomRunCounters(liveState) {
   if (!liveState) {
@@ -186,6 +189,7 @@ function resetLiveRoomRunCounters(liveState) {
   liveState.consecutiveFailures = 0;
   liveState.unresolvedPoseCount = 0;
   liveState.placeholderReported = false;
+  liveState.savedMapReported = false;
 }
 
 // Plain-language wording for each way a live-room lookup can come back empty.
@@ -201,11 +205,10 @@ const B01_LIVE_ROOM_MISS_REASONS = {
   "pose-outside-outlines":
     "the robot's position did not fall inside any known room outline (it may be between rooms, or the map may still be building)",
   // Not a miss the user can do anything about, and not the robot being
-  // between rooms: the map payload carried a placeholder where the position
-  // should be. Measured at 226 of 227 fetches on a Q7 during a 47-minute
-  // clean, always the same cell. See describeLiveRoomResolution.
+  // between rooms: the pose lies outside the map, which python-roborock's
+  // in_bounds rejects as a placeholder. See describeLiveRoomResolution.
   "pose-placeholder":
-    "the map payload carried a placeholder instead of the robot's position, so this fetch could not place it (the robot sends a real position only on some fetches)",
+    "the map frame carried a placeholder outside the map instead of the robot's position, so it could not place the robot",
 };
 
 /**
@@ -237,57 +240,14 @@ function describeOutlineBounds(resolution) {
 }
 
 /**
- * The raw SCMap fields behind a live-room miss.
- *
- * Two Q7s reported a position of exactly (1100, 1100) — the same value on two
- * robots, two maps and twelve minutes of active cleaning. A constant is not a
- * position, so the number being read as the robot's position is not the
- * robot's position.
- *
- * Rather than guess another field number, this prints what the payload
- * actually contains: the size of every top-level field and every scalar in
- * the small ones. Two consecutive lines are then a diff — the value that
- * changed while the robot was driving is the position, and the submessage
- * that grew is the trail it left. That turns the next fix into a reading
- * rather than a fourth guess.
- *
- * @param {{rawSurvey?: {fields?: Array<{field: number, count: number, bytes: number}>,
- *                      scalars?: Record<string, number>,
- *                      truncated?: boolean} | null}} parsed
- * @returns {string}
- */
-function describeRawMapFields(parsed) {
-  const survey = parsed?.rawSurvey;
-  const fields = survey?.fields;
-  if (!Array.isArray(fields) || fields.length === 0) {
-    return "";
-  }
-
-  const shape = fields
-    .map(
-      (entry) =>
-        `${entry.field}:${entry.bytes}B${entry.count > 1 ? `x${entry.count}` : ""}`
-    )
-    .join(" ");
-
-  const scalars = Object.entries(survey?.scalars || {})
-    .map(([path, value]) => `${path}=${formatSurveyScalar(value)}`)
-    .join(" ");
-
-  return `, map fields ${shape}${scalars ? `, scalars ${scalars}` : ""}${
-    survey?.truncated ? " (truncated)" : ""
-  }`;
-}
-
-/**
- * A survey value short enough to sit in a log line, precise enough to see a
+ * A map coordinate short enough to sit in a log line, precise enough to see a
  * robot move. Three decimals of a metre is a millimetre; three decimals of a
  * millimetre is far below anything a vacuum reports.
  *
  * @param {number} value
  * @returns {string}
  */
-function formatSurveyScalar(value) {
+function formatMapCoordinate(value) {
   if (!Number.isFinite(value)) {
     return String(value);
   }
@@ -304,6 +264,9 @@ const B01_STATUS_TICK_MS = 15000;
 const B01_STATUS_FORCED_GAP_MS = 1500;
 const B01_STATUS_ACTIVE_GAP_MS = 12000;
 const B01_STATUS_IDLE_GAP_MS = 25000;
+// How often a Q10 is asked to push its full status (dpRequestDps). It pushes
+// changes on its own; this is the resync, at Home Assistant's cadence.
+const B01_Q10_STATUS_REQUEST_GAP_MS = 60000;
 
 // The last path segment of the cloud schedule probe's negative control.
 //
@@ -433,7 +396,9 @@ const SIMPLE_VACUUM_COMMANDS = new Set([
   "load_multi_map",
 ]);
 
-const TRANSIENT_ERROR_LOG_THROTTLE_MS = 6 * 60 * 60 * 1000;
+// One warning per robot per kind per hour, the first of that hour; the hourly
+// transport summary (lib/transportTally.js) counts the rest.
+const TRANSIENT_ERROR_LOG_THROTTLE_MS = 60 * 60 * 1000;
 // python-roborock mqtt/health_manager.py: TIMEOUT_THRESHOLD, RESTART_COOLDOWN.
 const CLOUD_SILENCES_BEFORE_SESSION_RESTART = 3;
 const CLOUD_SESSION_RESTART_COOLDOWN_MS = 30 * 60 * 1000;
@@ -457,6 +422,11 @@ const MATTER_CLEAN_TYPE_PREP_LABELS = new Set(["water mode", "clean type"]);
 // return room segments. Retrying lets newly named/segmented maps appear without
 // switching maps on every poll cycle.
 const SERVICE_AREA_ROOM_MAP_REFRESH_TTL_MS = 6 * 60 * 60 * 1000;
+// How long to wait before logging in again after Roborock rejected a session
+// or blocked sign-in: python-roborock's maximum back-off after an MQTT
+// authorisation or rate-limit refusal (mqtt/roborock_session.py
+// MAX_BACKOFF_INTERVAL). Every login counts against Roborock's sign-in limits.
+const AUTH_FAILURE_BACKOFF_MS = 6 * 60 * 60 * 1000;
 
 class Roborock {
   constructor(options) {
@@ -468,8 +438,11 @@ class Roborock {
     // the second is a corpse it must not restart.
     /** @type {boolean} */
     this.stopped = false;
-    /** @type {ReturnType<typeof setTimeout> | null} */
-    this.loginRetryTimer = null;
+    // The current start; see beginRun().
+    this.currentRun = 0;
+    // Called every time a start succeeds; see setReadyListener.
+    /** @type {(() => unknown) | null} */
+    this.readyListener = null;
 
     this.config = {
       ...options,
@@ -507,12 +480,6 @@ class Roborock {
     // see markDeviceRemote.
     /** @type {Map<string, string>} */
     this.remoteDeviceReasons = new Map();
-    // Consecutive local request timeouts per robot, counted only while the
-    // local client still reports itself connected. Reset by any local reply:
-    // the count has to mean "this socket answers nothing", not "this socket has
-    // ever timed out".
-    /** @type {Map<string, number>} */
-    this.localMuteTimeouts = new Map();
 
     this.name = "roborock";
     this.deviceNotify = null;
@@ -536,20 +503,27 @@ class Roborock {
     // Consecutive unanswered cloud requests while MQTT says it is connected.
     // See noteCloudSilence().
     this.cloudSessionHealth = { consecutiveSilences: 0, lastRestartAt: 0 };
+    // How each robot's requests fared per transport, logged hourly when
+    // anything failed. See noteTransportOutcome().
+    this.transportTally = new TransportTally(this.log, (duid) =>
+      this.describeDevice(duid)
+    );
     this.baseURL = options.baseURL || "usiot.roborock.com";
 
     this.userData = options.userData || null;
-    this.authState = {
-      twoFactorRequired: false,
-      statusMessage: "",
-    };
-    this.pendingAuth = null;
+    /** @type {number[]} when this process sent its password logins */
+    this.passwordLogins = [];
     this.persistBasePath = null;
     this.errorLogThrottleMs =
       typeof options.errorLogThrottleMs === "number"
         ? options.errorLogThrottleMs
         : TRANSIENT_ERROR_LOG_THROTTLE_MS;
     this.errorLogThrottle = new Map();
+    /** @type {number} ms; see roborockAuth.CLOUD_REQUEST_TIMEOUT_MS */
+    this.cloudRestTimeoutMs =
+      typeof options.cloudRestTimeoutMs === "number"
+        ? options.cloudRestTimeoutMs
+        : roborockAuth.CLOUD_REQUEST_TIMEOUT_MS;
     this.now =
       typeof options.now === "function" ? options.now : () => Date.now();
   }
@@ -1015,23 +989,20 @@ class Roborock {
       .filter((device) => !this.shouldSkipDevice(device, ignoredSet));
   }
 
-  getManagedHomeDevices(homedata, ignoredSet = this.getIgnoredDeviceSet()) {
+  getManagedHomeDevices(homedata) {
     return this.getAllHomeDevices(homedata).filter(
       (device) => device && device.duid
     );
   }
 
-  getLocalKeyDevices(homedata, ignoredSet = this.getIgnoredDeviceSet()) {
-    return this.getManagedHomeDevices(homedata, ignoredSet).filter(
+  getLocalKeyDevices(homedata) {
+    return this.getManagedHomeDevices(homedata).filter(
       (device) => device.localKey
     );
   }
 
-  async refreshLocalKeysFromHomeData(
-    homedata,
-    ignoredSet = this.getIgnoredDeviceSet()
-  ) {
-    const localKeyDevices = this.getLocalKeyDevices(homedata, ignoredSet);
+  async refreshLocalKeysFromHomeData(homedata) {
+    const localKeyDevices = this.getLocalKeyDevices(homedata);
     const previousKeys =
       this.localKeys instanceof Map ? this.localKeys : new Map();
     const nextKeys = new Map(
@@ -1701,6 +1672,7 @@ class Roborock {
       "cloud-only-mode",
       "cloud-only-mqtt-unavailable",
       "network-info-cloud-only",
+      "cloud-only-method",
       "secure-command",
       "photo-command",
       "preferred-cloud-command",
@@ -1714,6 +1686,8 @@ class Roborock {
       "cloud-only-mode": "cloud-only mode is enabled",
       "cloud-only-mqtt-unavailable":
         "cloud-only mode is enabled but Roborock cloud MQTT is unavailable",
+      "cloud-only-method":
+        "this request is only ever sent through the Roborock cloud, as python-roborock sends it",
       "cloud-request": "cloud transport was selected for this command",
       "device-offline": "Roborock currently reports the vacuum offline",
       "device-offline-during-connect":
@@ -1742,7 +1716,7 @@ class Roborock {
       "marked-remote-after-connect-failure":
         "local TCP connection failed and the vacuum was marked remote",
       [LOCAL_MUTE_REMOTE_REASON]:
-        "the local TCP socket connected but the vacuum answered nothing on it, so the cloud is used instead",
+        "the vacuum stopped answering on its local TCP socket, so the plugin closed it and is reconnecting; the cloud is used until the vacuum answers on the LAN again",
       [b01Q7Adapter.B01_CLOUD_ONLY_REMOTE_REASON]:
         "this model speaks only Roborock's cloud protocol, which has no LAN control surface",
     };
@@ -1826,17 +1800,19 @@ class Roborock {
    * Bring the Roborock side up: log in (or reuse the stored session), fetch
    * the home details, start the MQTT session and the periodic health check
    * and home-data refresh, create a runtime per robot and take the first
-   * status. Called by the platform at launch, and again by the retry timers
-   * after a failed login or home-details fetch. `callback` runs once the
-   * home-details stage has been attempted, whether it succeeded or not
-   * (`isInited()` says which); a login that fails returns before that, so the
-   * callback does not run for that attempt.
+   * status. Called by the platform at launch and again by the one retry loop
+   * (scheduleStartServiceRetry) after a failure at any stage. Every start
+   * that succeeds ends in notifyReady(), so a retried start publishes the
+   * robots exactly as the first one would have.
    */
-  async startService(callback) {
+  async startService() {
     // A deliberate start clears the shutdown latch: Homebridge restarts a
     // child bridge in-process, and a stopped adapter that is started again
-    // must be allowed to retry.
+    // must be allowed to retry. Its other callers, the retry timer and
+    // restartService, read the latch immediately before calling, so a start
+    // can never clear a latch set after whatever asked for it.
     this.stopped = false;
+    const run = this.beginRun();
     this.log.info(`Connecting to your Roborock account…`);
     this.translations = require(
       `./i18n/${this.language || "en"}/translations.json`
@@ -1869,12 +1845,29 @@ class Roborock {
 
     this.instance = clientID;
 
+    // A custom server (#43) replaces the region for the login and the account
+    // API; everything after the login follows the URLs its answer carries.
+    // An invalid one stops here: falling back to Roborock's own servers would
+    // send the account's email there.
+    this.loginServer = this.baseURL;
+    if (this.config.serverURL) {
+      try {
+        this.loginServer = roborockAuth.parseServerURL(this.config.serverURL);
+      } catch (error) {
+        this.log.error(
+          `${/** @type {any} */ (error)?.message || error} The plugin stays idle until the custom server URL is fixed in the plugin settings.`
+        );
+        return;
+      }
+    }
+
     // Initialize the login API (which is needed to get access to the real API).
     this.loginApi = roborockAuth.createLoginApi({
-      baseURL: this.baseURL,
+      baseURL: this.loginServer,
       username: this.config.username,
       clientID,
       language: this.language,
+      timeout: this.cloudRestTimeoutMs,
     });
     // api/v1/getUrlByEmail(email = ...)
 
@@ -1887,50 +1880,44 @@ class Roborock {
     try {
       userdata = await this.getUserData(this.loginApi);
     } catch (error) {
+      if (!this.isCurrentRun(run)) {
+        return;
+      }
       const message = error?.message || String(error);
-
-      const isCredentialError =
-        /"code":\s*(2012|2008|2018)/.test(message) ||
-        /username or password/i.test(message);
-      if (isCredentialError) {
-        this.log.error(
-          `Roborock login rejected: ${message}. Check the email and password in the plugin settings; the plugin stays idle until the configuration is fixed.`
-        );
-        this.authState.statusMessage =
-          "Login rejected - check email and password.";
+      if (error?.retryInMs) {
+        this.log.warn(message);
+        this.armStartServiceRetry(error.retryInMs);
         return;
       }
 
-      this._startupLoginAttempts = (this._startupLoginAttempts || 0) + 1;
-      if (this._startupLoginAttempts <= 10) {
-        const delayMs = Math.min(
-          60000 * this._startupLoginAttempts,
-          10 * 60000
-        );
-        this.log.warn(
-          `Could not reach the Roborock cloud (attempt ${this._startupLoginAttempts}/10): ${message}. Retrying in ${Math.round(delayMs / 60000)} minute(s).`
-        );
-        // The handle goes on the instance, not in a local const: shutdown
-        // clears what it can reach, and a local was unreachable by
-        // construction. The guard inside covers the case the clear cannot —
-        // a timer the event loop had already picked up when stopService ran.
-        const retryTimer = this.setTimeout(() => {
-          this.loginRetryTimer = null;
-          if (this.stopped) {
-            return;
-          }
-          this.startService(callback).catch((retryError) => {
-            this.log.error(
-              `Roborock startup retry failed unexpectedly: ${retryError?.message || retryError}`
-            );
-          });
-        }, delayMs);
-        this.loginRetryTimer = retryTimer;
-      } else {
+      // A refusal that asking again cannot change stops here with what to
+      // do about it; a sign-in block is waited out, because every attempt
+      // counts against the limit that caused it. Retrying either on the
+      // short loop would only repeat or deepen it.
+      const refusal = error?.refusal;
+      if (refusal?.later) {
         this.log.error(
-          `Could not reach the Roborock cloud after ${this._startupLoginAttempts - 1} attempts: ${message}. Giving up until the next Homebridge restart.`
+          `Roborock refused the login (code ${refusal.code}): ${refusal.hint} The plugin tries again in ${AUTH_FAILURE_BACKOFF_MS / 3600000} hours.`
         );
+        this.armStartServiceRetry(AUTH_FAILURE_BACKOFF_MS);
+        return;
       }
+      if (refusal || /username or password/i.test(message)) {
+        this.log.error(
+          `Roborock refused the login${refusal ? ` (code ${refusal.code})` : ""}: ${refusal ? refusal.hint : message} The plugin stays idle until that is fixed.`
+        );
+        return;
+      }
+
+      // The same loop as a failed home-details fetch: one policy, one timer
+      // that shutdown clears, and a success at the end that publishes.
+      this.scheduleStartServiceRetry(error);
+      return;
+    }
+    // Shutdown, or a newer start, can land during any wait below; a start
+    // that carried on built a new MQTT client and intervals on an adapter
+    // that had moved on.
+    if (!this.isCurrentRun(run)) {
       return;
     }
     if (!userdata) {
@@ -1939,24 +1926,14 @@ class Roborock {
       );
       return;
     }
-    this._startupLoginAttempts = 0;
 
-    try {
-      this.loginApi.defaults.headers.common["Authorization"] = userdata.token;
-    } catch (error) {
-      this.log.error(
-        "Failed to login. Most likely wrong token! Deleting HomeData and UserData. Try again! " +
-          error
-      );
-
-      this.deleteStateAsync("HomeData");
-      this.deleteStateAsync("UserData");
-    }
+    this.loginApi.defaults.headers.common["Authorization"] = userdata.token;
     const rriot = userdata.rriot;
 
     // Initialize the real API.
     this.api = axios.create({
       baseURL: rriot.r.a,
+      timeout: this.cloudRestTimeoutMs,
     });
     // Every request is signed over its path AND its body (see
     // lib/hawkSignature.js for the measured formula). Until 3.29.0 the body
@@ -1977,184 +1954,149 @@ class Roborock {
 
     // Get home details.
     try {
-      const homeDetail = await this.loginApi.get("api/v1/getHomeDetail");
-      if (homeDetail) {
-        const homeId = homeDetail.data.data.rrHomeId;
+      const homeId = await roborockAuth.getHomeId(this.loginApi);
+      if (!this.isCurrentRun(run)) {
+        return;
+      }
+      const homedataResult = await this.fetchHomeData(homeId);
+      if (!this.isCurrentRun(run)) {
+        return;
+      }
+      // Owned AND shared robots, room names, products and local keys, the
+      // same way the periodic refresh applies them.
+      const { localKeyDevices } = await this.applyHomeData(homedataResult);
+      const managedDevicesForDiagnostics = this.devices;
 
-        if (this.api) {
-          const homedata = await this.api.get(`v2/user/homes/${homeId}`);
-          const homedataResult = homedata.data.result;
+      const cloudOnly = this.isCloudOnlyModeEnabled();
+      if (cloudOnly) {
+        this.log.info(
+          "Roborock cloud-only mode is enabled; local LAN discovery and TCP connections will be skipped."
+        );
+      }
 
-          // Guard the persisted copy the same way updateHomeData already does.
-          // Roborock occasionally answers 200 with an envelope that carries no
-          // `result` (maintenance windows, rate limiting). Writing that through
-          // stores `{"ack":true}` over the cached device list on disk, so the
-          // next restart starts from a destroyed HomeData as well — turning a
-          // transient cloud hiccup into a persistent failure.
-          if (!homedataResult) {
-            throw new Error(
-              `The Roborock cloud returned no home data for home ${homeId}. Keeping the previously cached device list.`
+      for (const device of managedDevicesForDiagnostics) {
+        if (cloudOnly) {
+          await this.updateTransportDiagnostics(device.duid, {
+            lastTransport: "cloud",
+            localIp: null,
+          });
+        } else if (!device.localKey) {
+          await this.updateTransportDiagnostics(device.duid, {
+            lastTransport: "cloud",
+            lastTransportReason: "missing-local-key",
+          });
+        }
+
+        // Runs in BOTH directions: switching the mode off has to retract
+        // the markers it wrote, or they stay on disk for good and the
+        // device keeps reporting itself as cloud-only.
+        await this.syncCloudOnlyTransportMarkers(device.duid, cloudOnly);
+      }
+
+      if (!this.isCurrentRun(run)) {
+        return;
+      }
+      await this.rr_mqtt_connector.initUser(userdata);
+      await this.rr_mqtt_connector.initMQTT_Subscribe();
+      await this.rr_mqtt_connector.initMQTT_Message();
+
+      // Perform a periodic MQTT health check. Reconnect only if needed.
+      // A retried start reaches this line again; the timers of the
+      // attempt that failed after it must not keep running beside these.
+      if (this.reconnectIntervall) {
+        this.clearInterval(this.reconnectIntervall);
+      }
+      if (this.homedataInterval) {
+        this.clearInterval(this.homedataInterval);
+      }
+      this.reconnectIntervall = this.setInterval(async () => {
+        this.log.debug(`Running MQTT health check.`);
+
+        await this.rr_mqtt_connector.ensureConnected();
+      }, 3600 * 1000);
+
+      this.homedataInterval = this.setInterval(
+        this.updateHomeData.bind(this),
+        this.updateInterval * 1000,
+        homeId
+      );
+
+      // LAN discovery listens for UDP broadcasts for a fixed window, so
+      // awaiting it here used to stall startup for the full timeout with
+      // the CPU idle. Its results are only needed at the merge below, and
+      // the local keys it matches against are already loaded, so start it
+      // now and let the home-data refresh, device creation and network
+      // probes run inside that window instead.
+      const localDiscovery = this.isCloudOnlyModeEnabled()
+        ? Promise.resolve({})
+        : this.localConnector.getLocalDevices().catch((error) => {
+            this.log.debug(
+              `LAN discovery failed; continuing with cloud transport: ${error?.message || error}`
             );
-          }
-
-          await this.setStateAsync("HomeData", {
-            val: JSON.stringify(homedataResult),
-            ack: true,
+            return {};
           });
 
-          // Skip devices matching either their serial number or Roborock DUID.
-          const ignoredSet = this.getIgnoredDeviceSet();
-          // create devices and set states
-          this.products = homedataResult.products;
-          this.devices = homedataResult.devices || [];
-          this.devices = this.devices.filter(
-            (device) => !this.shouldSkipDevice(device, ignoredSet)
-          );
-
-          const managedDevicesForDiagnostics = this.getManagedHomeDevices(
-            homedataResult,
-            ignoredSet
-          );
-          const localKeyDevices = await this.refreshLocalKeysFromHomeData(
-            homedataResult,
-            ignoredSet
-          );
-
-          const cloudOnly = this.isCloudOnlyModeEnabled();
-          if (cloudOnly) {
-            this.log.info(
-              "Roborock cloud-only mode is enabled; local LAN discovery and TCP connections will be skipped."
-            );
-          }
-
-          for (const device of managedDevicesForDiagnostics) {
-            if (cloudOnly) {
-              await this.updateTransportDiagnostics(device.duid, {
-                lastTransport: "cloud",
-                localIp: null,
-              });
-            } else if (!device.localKey) {
-              await this.updateTransportDiagnostics(device.duid, {
-                lastTransport: "cloud",
-                lastTransportReason: "missing-local-key",
-              });
-            }
-
-            // Runs in BOTH directions: switching the mode off has to retract
-            // the markers it wrote, or they stay on disk for good and the
-            // device keeps reporting itself as cloud-only.
-            await this.syncCloudOnlyTransportMarkers(device.duid, cloudOnly);
-          }
-
-          await this.rr_mqtt_connector.initUser(userdata);
-          await this.rr_mqtt_connector.initMQTT_Subscribe();
-          await this.rr_mqtt_connector.initMQTT_Message();
-
-          // store name of each room via ID
-          const rooms = homedataResult.rooms;
-          for (const room in rooms) {
-            const roomID = rooms[room].id;
-            const roomName = rooms[room].name;
-
-            this.roomIDs[roomID] = roomName;
-          }
-          this.log.debug(`RoomIDs debug: ${JSON.stringify(this.roomIDs)}`);
-
-          // Perform a periodic MQTT health check. Reconnect only if needed.
-          // A retried start reaches this line again; the timers of the
-          // attempt that failed after it must not keep running beside these.
-          if (this.reconnectIntervall) {
-            this.clearInterval(this.reconnectIntervall);
-          }
-          if (this.homedataInterval) {
-            this.clearInterval(this.homedataInterval);
-          }
-          this.reconnectIntervall = this.setInterval(async () => {
-            this.log.debug(`Running MQTT health check.`);
-
-            try {
-              await this.rr_mqtt_connector.ensureConnected();
-            } catch (error) {
-              this.log.warn(
-                `MQTT health check failed: ${error?.message || error}.`
-              );
-            }
-          }, 3600 * 1000);
-
-          this.homedataInterval = this.setInterval(
-            this.updateHomeData.bind(this),
-            this.updateInterval * 1000,
-            homeId
-          );
-
-          // LAN discovery listens for UDP broadcasts for a fixed window, so
-          // awaiting it here used to stall startup for the full timeout with
-          // the CPU idle. Its results are only needed at the merge below, and
-          // the local keys it matches against are already loaded, so start it
-          // now and let the home-data refresh, device creation and network
-          // probes run inside that window instead.
-          const localDiscovery = this.isCloudOnlyModeEnabled()
-            ? Promise.resolve({})
-            : this.localConnector.getLocalDevices().catch((error) => {
-                this.log.debug(
-                  `LAN discovery failed; continuing with cloud transport: ${error?.message || error}`
-                );
-                return {};
-              });
-
-          await this.updateHomeData(homeId, homedataResult);
-
-          await this.createDevices();
-
-          // Cloud requests fail outright until the MQTT session is up, and
-          // the very first ones (the per-robot network probe, then each
-          // robot's initial poll) used to be issued a second after the
-          // broker handshake started. Wait for the real signal instead of
-          // hoping an unrelated delay covers it; a broker that never comes
-          // up releases the wait and the requests fail as they would have.
-          await this.rr_mqtt_connector.waitUntilConnected();
-
-          // First on the wire once the session is up, because it is the one
-          // request an Apple Home tile is waiting for: until a Q7's real
-          // status lands, the tile shows the registration snapshot from the
-          // Matter store. Started here rather than at the end of
-          // createDevices() so the boot poll cannot precede the wait above.
-          this.startB01StatusLoop();
-
-          // Independent, so concurrent: the network probe feeds the LAN
-          // attach that runs later in the background, and the first status
-          // feeds the tile. Neither needs the other, and serially they were
-          // two full round-trip waits where one is enough.
-          await Promise.allSettled([
-            this.getNetworkInfo(),
-            this.initializeDeviceUpdates(),
-          ]);
-
-          this.bInited = true;
-          // A success ends the retry chain and forgets the backoff, so a
-          // later outage starts from one minute again rather than ten.
-          if (this.startServiceRetryTimer) {
-            this.clearTimeout(this.startServiceRetryTimer);
-            this.startServiceRetryTimer = null;
-          }
-          this.startServiceRetryAttempts = 0;
-          this.log.info(
-            `Roborock connection ready; ${this.getVacuumList().length} robot(s) available.`
-          );
-
-          // LAN attach runs to completion in the background. Everything above
-          // works over the cloud, and the transport layer already falls back
-          // to it, so holding accessory registration hostage to a fixed-length
-          // broadcast listen only delayed the Apple Home tiles.
-          void this.attachLocalTransports(localDiscovery, localKeyDevices);
-        } else {
-          this.log.warn(
-            `Roborock returned no home details, so the saved session has been cleared and the plugin will log in from scratch on the next start. If this repeats, re-enter your credentials in the plugin settings.`
-          );
-          await this.deleteStateAsync(`UserData`);
-        }
+      await this.createDevices();
+      if (!this.isCurrentRun(run)) {
+        return;
       }
+
+      // Cloud requests fail outright until the MQTT session is up, and
+      // the very first ones (the per-robot network probe, then each
+      // robot's initial poll) used to be issued a second after the
+      // broker handshake started. Wait for the real signal instead of
+      // hoping an unrelated delay covers it; a broker that never comes
+      // up releases the wait and the requests fail as they would have.
+      await this.rr_mqtt_connector.waitUntilConnected();
+      if (!this.isCurrentRun(run)) {
+        return;
+      }
+
+      // First on the wire once the session is up, because it is the one
+      // request an Apple Home tile is waiting for: until a Q7's real
+      // status lands, the tile shows the registration snapshot from the
+      // Matter store. Started here rather than at the end of
+      // createDevices() so the boot poll cannot precede the wait above.
+      this.startB01StatusLoop();
+
+      // Independent, so concurrent: the network probe feeds the LAN
+      // attach that runs later in the background, and the first status
+      // feeds the tile. Neither needs the other, and serially they were
+      // two full round-trip waits where one is enough.
+      await Promise.allSettled([
+        this.getNetworkInfo(),
+        this.initializeDeviceUpdates(),
+      ]);
+      if (!this.isCurrentRun(run)) {
+        return;
+      }
+
+      this.bInited = true;
+      // A success ends the retry chain and forgets the backoff, so a
+      // later outage starts from one minute again rather than ten.
+      if (this.startServiceRetryTimer) {
+        this.clearTimeout(this.startServiceRetryTimer);
+        this.startServiceRetryTimer = null;
+      }
+      this.startServiceRetryAttempts = 0;
+      this.log.info(
+        `Roborock connection ready; ${this.getVacuumList().length} robot(s) available.`
+      );
+      this.notifyReady();
+
+      // LAN attach runs to completion in the background. Everything above
+      // works over the cloud, and the transport layer already falls back
+      // to it, so holding accessory registration hostage to a fixed-length
+      // broadcast listen only delayed the Apple Home tiles.
+      void this.attachLocalTransports(localDiscovery, localKeyDevices, run);
     } catch (error) {
+      if (!this.isCurrentRun(run)) {
+        return;
+      }
+      if (roborockAuth.isSessionRejected(error)) {
+        await this.handleRejectedSession(error);
+        return;
+      }
       // Not an error with a stack: this catch is reached by Roborock
       // maintenance, a rate-limited response and plain DNS failure. The stack
       // tells the user nothing and the line used to end without saying what
@@ -2173,9 +2115,42 @@ class Roborock {
       // restarted Homebridge.
       this.scheduleStartServiceRetry(error);
     }
+  }
 
-    if (callback) {
-      callback();
+  /**
+   * Room names for robots shared with this account. Their rooms belong to the
+   * owner's home, which this account's home data does not carry, so they
+   * would all read "Room <id>". `user/deviceshare/query/{duid}/rooms` has
+   * them (python-roborock's get_shared_device_rooms, which reads `roomId` as
+   * the id). Best effort: a robot whose rooms cannot be read keeps the
+   * numbered names, as before.
+   *
+   * @param {{receivedDevices?: Array<{duid?: string}>}} homedata
+   */
+  async addSharedRobotRoomNames(homedata) {
+    const shared = new Set(
+      this.normalizeArray(homedata?.receivedDevices).map((d) => d?.duid)
+    );
+    for (const device of this.getManagedHomeDevices(homedata)) {
+      if (!shared.has(device.duid) || !this.api) {
+        continue;
+      }
+      try {
+        const response = await this.api.get(
+          `user/deviceshare/query/${device.duid}/rooms`
+        );
+        const rooms = response?.data?.success ? response.data.result : [];
+        for (const room of this.normalizeArray(rooms)) {
+          const id = room?.id ?? room?.roomId;
+          if (id !== undefined && typeof room?.name === "string") {
+            this.roomIDs[id] = room.name;
+          }
+        }
+      } catch (error) {
+        this.log.debug(
+          `Could not read the room names of ${this.describeDevice(device.duid)}, which is shared with this account: ${/** @type {any} */ (error)?.message || error}`
+        );
+      }
     }
   }
 
@@ -2187,14 +2162,23 @@ class Roborock {
    *
    * @param {Promise<Record<string, string>>} localDiscovery
    * @param {Array<{duid: string}>} localKeyDevices
+   * @param {number} [run] the start this attach belongs to
    */
-  async attachLocalTransports(localDiscovery, localKeyDevices) {
+  async attachLocalTransports(
+    localDiscovery,
+    localKeyDevices,
+    run = this.currentRun
+  ) {
     if (this.isCloudOnlyModeEnabled()) {
       return;
     }
 
     try {
       const discoveredDevices = await localDiscovery;
+      // Shutdown ends the discovery window early, and resolves it.
+      if (!this.isCurrentRun(run)) {
+        return;
+      }
 
       // merge udp discovered devices with local devices found via mqtt
       Object.entries(discoveredDevices).forEach(([duid, ip]) => {
@@ -2204,24 +2188,28 @@ class Roborock {
       });
       this.log.debug(`localDevices: ${JSON.stringify(this.localDevices)}`);
 
+      // Only the robots on the account with a local key. Discovery hears
+      // every robot on the LAN, and `localDevices` keeps every address ever
+      // heard, so iterating it opened a socket to a robot just removed from
+      // the account, or skipped in the settings, and pinged it for good.
       for (const device of this.normalizeArray(localKeyDevices)) {
-        if (
-          !Object.prototype.hasOwnProperty.call(this.localDevices, device.duid)
-        ) {
-          await this.updateTransportDiagnostics(device.duid, {
+        const duid = device.duid;
+        if (!Object.prototype.hasOwnProperty.call(this.localDevices, duid)) {
+          await this.updateTransportDiagnostics(duid, {
             localDiscoveryState: "not-discovered",
             lastTransportReason: "missing-local-ip",
           });
+          continue;
         }
-      }
-
-      for (const duid in this.localDevices) {
         const ip = this.localDevices[duid];
 
         await this.updateTransportDiagnostics(duid, {
           localIp: ip,
           localDiscoveryState: "discovered",
         });
+        if (!this.isCurrentRun(run)) {
+          return;
+        }
         await this.localConnector.createClient(duid, ip);
       }
     } catch (error) {
@@ -2237,7 +2225,6 @@ class Roborock {
       // Latched before anything is torn down, so a retry callback that fires
       // mid-shutdown reads it as already set.
       this.stopped = true;
-      // Clear synchronously so transport teardown starts in this shutdown turn.
       this.clearTimersAndIntervals();
       // Timers were the only thing shutdown used to stop. Both transports
       // stayed open, so frames kept arriving into disposed accessories and
@@ -2247,6 +2234,8 @@ class Roborock {
       // Teardown publishes the final disconnected diagnostics. Flush after it
       // so that snapshot reaches disk and its debounce timer is cleared too.
       this.flushPendingPersistedStates();
+      // The hour not yet over is reported too, and its timer cleared.
+      this.transportTally?.flush();
       // Nothing is coming back for these, and leaving them means every
       // caller still awaiting one hangs until Homebridge is killed.
       for (const [messageID, pending] of this.pendingRequests) {
@@ -2389,41 +2378,53 @@ class Roborock {
         return null;
       }
 
-      const signData = await this.ensureAuthSignature();
-      if (!signData) {
-        throw new Error("Failed to obtain login signature.");
+      // The start retry has no attempt cap, so its logins are capped here,
+      // at python-roborock's rates: an outage on the login endpoint used to
+      // cost one password login every 10 minutes for as long as it lasted.
+      const now = this.now();
+      const waitMs = roborockAuth.loginWaitMs(this.passwordLogins, now);
+      if (waitMs > 0) {
+        const wait =
+          waitMs >= 2 * 3600000
+            ? `${Math.ceil(waitMs / 3600000)} hour(s)`
+            : `${Math.ceil(waitMs / 60000)} minute(s)`;
+        throw Object.assign(
+          new Error(
+            `The plugin has logged in to Roborock with your password as often as is safe for now (too many attempts get sign-in blocked for 7 days), so it tries again in ${wait}.`
+          ),
+          { retryInMs: waitMs }
+        );
       }
-
-      const loginResult = await roborockAuth.loginByPassword(loginApi, {
+      const loginResult = await roborockAuth.signedLogin(loginApi, {
         email: this.config.username,
         password: this.config.password,
-        k: signData.k,
-        s: signData.s,
+        server: this.loginServer,
       });
+      // Only a login Roborock answered counts toward its limits: an attempt
+      // that died on the network or on a proxy's error page never reached
+      // the server that blocks sign-ins, and counting it let a three-hour
+      // outage use up the day's budget.
+      if (typeof loginResult?.code === "number") {
+        this.passwordLogins = this.passwordLogins
+          .filter((at) => now - at < 24 * 60 * 60 * 1000)
+          .concat(now);
+      }
 
       if (loginResult && loginResult.code === 200 && loginResult.data) {
         this.userData = loginResult.data;
-        this.pendingAuth = null;
         await this.setStateAsync("UserData", {
           val: JSON.stringify(this.userData),
           ack: true,
         });
-        this.authState.twoFactorRequired = false;
-        this.authState.statusMessage = "";
         return this.userData;
       }
 
-      if (loginResult && loginResult.code === 2031) {
-        this.authState.twoFactorRequired = true;
-        this.authState.statusMessage = "Two-factor authentication required.";
-        this.log.error(
-          "Two-factor authentication required. Use the Config UI to continue."
-        );
-        return null;
-      }
-
-      throw new Error(`Login failed: ${JSON.stringify(loginResult)}`);
+      throw roborockAuth.loginRefusedError(loginResult);
     } catch (error) {
+      if (error?.retryInMs) {
+        // Nothing was sent, so there is nothing to judge.
+        throw error;
+      }
       this.log.error(`Error in getUserData: ${error.message}`);
       // DO NOT THROW AWAY THE CACHED SESSION BECAUSE DNS WAS NOT UP YET.
       //
@@ -2458,6 +2459,10 @@ class Roborock {
    * @param {any} error
    */
   isCredentialRejection(error) {
+    // A login answer (loginRefusedError): only a known credential refusal.
+    if (error?.refusal !== undefined) {
+      return Boolean(error.refusal?.credentials);
+    }
     const code = Number(error?.code ?? error?.status);
     if ([2012, 2008, 2018, 2010].includes(code)) {
       return true;
@@ -2477,84 +2482,6 @@ class Roborock {
 
   isValidUserData(userdata) {
     return userdata && userdata.token && userdata.rriot;
-  }
-
-  async ensureAuthSignature() {
-    if (this.pendingAuth && this.pendingAuth.k && this.pendingAuth.s) {
-      return this.pendingAuth;
-    }
-
-    if (!this.loginApi) {
-      throw new Error("Login API is not initialized.");
-    }
-
-    const s = crypto
-      .randomBytes(12)
-      .toString("base64")
-      .substring(0, 16)
-      .replace(/\+/g, "X")
-      .replace(/\//g, "Y");
-    const signData = await roborockAuth.signRequest(this.loginApi, s);
-    if (!signData || !signData.k) {
-      return null;
-    }
-
-    this.pendingAuth = { k: signData.k, s };
-    return this.pendingAuth;
-  }
-
-  async sendTwoFactorEmail() {
-    if (!this.loginApi) {
-      throw new Error("Login API is not initialized.");
-    }
-
-    try {
-      await roborockAuth.requestEmailCode(this.loginApi, this.config.username);
-    } catch (error) {
-      this.log.error(`2FA email request failed: ${error.message}`);
-      throw error;
-    }
-    this.authState.twoFactorRequired = true;
-    this.authState.statusMessage = "Verification email sent.";
-    return { ok: true };
-  }
-
-  async verifyTwoFactorCode(code) {
-    if (!this.loginApi) {
-      throw new Error("Login API is not initialized.");
-    }
-
-    const signData = await this.ensureAuthSignature();
-    if (!signData) {
-      throw new Error("Missing login signature.");
-    }
-
-    const region = roborockAuth.getRegionConfig(this.baseURL);
-    const loginResult = await roborockAuth.loginWithCode(this.loginApi, {
-      email: this.config.username,
-      code,
-      country: region.country,
-      countryCode: region.countryCode,
-      k: signData.k,
-      s: signData.s,
-    });
-
-    if (loginResult && loginResult.code === 200 && loginResult.data) {
-      this.userData = loginResult.data;
-      this.pendingAuth = null;
-      await this.setStateAsync("UserData", {
-        val: JSON.stringify(this.userData),
-        ack: true,
-      });
-      this.authState.twoFactorRequired = false;
-      this.authState.statusMessage = "Two-factor authentication completed.";
-      return this.userData;
-    }
-
-    this.log.error(`2FA verification failed: ${JSON.stringify(loginResult)}`);
-    throw new Error(
-      `2FA verification failed: ${loginResult?.msg || "Unknown error"}`
-    );
   }
 
   async getNetworkInfo() {
@@ -2577,6 +2504,13 @@ class Roborock {
   async createDevices() {
     const devices = this.devices;
     this.initializedVacuumDuids.clear();
+    // A robot no longer on the account keeps no runtime. Its intervals were
+    // cleared before this start; nothing may poll it again.
+    for (const duid of Object.keys(this.vacuums)) {
+      if (!devices.some((device) => device.duid === duid)) {
+        delete this.vacuums[duid];
+      }
+    }
 
     for (const device of devices) {
       const duid = device.duid;
@@ -2729,16 +2663,6 @@ class Roborock {
     }
 
     await Promise.allSettled(initialPolls);
-  }
-
-  async executeScene(sceneID) {
-    if (this.api) {
-      try {
-        await this.api.post(`user/scene/${sceneID.val}/execute`);
-      } catch (error) {
-        this.catchError(error.stack, "executeScene");
-      }
-    }
   }
 
   getProductAttribute(duid, attribute) {
@@ -3412,7 +3336,9 @@ class Roborock {
   }
 
   /**
-   * Any reply came back over the cloud: the session delivers.
+   * A V1 request was answered over the cloud: python-roborock's
+   * `HealthManager.on_success`. B01 replies and refusals do not get here, so
+   * a Q7 answering every 15 seconds cannot hide a V1 robot's silence.
    *
    * @returns {void}
    */
@@ -3421,7 +3347,7 @@ class Roborock {
   }
 
   /**
-   * A cloud request timed out while MQTT reported itself connected.
+   * A V1 cloud request timed out while MQTT reported itself connected.
    *
    * python-roborock's HealthManager exists for exactly this — "the MQTT
    * connection appears to be alive but no messages are being received" — and
@@ -3443,6 +3369,17 @@ class Roborock {
     if (health.consecutiveSilences < CLOUD_SILENCES_BEFORE_SESSION_RESTART) {
       return false;
     }
+    const restarted = this.restartCloudSession(
+      `${health.consecutiveSilences} cloud requests in a row went unanswered while the MQTT connection reported itself up`
+    );
+    if (restarted) health.consecutiveSilences = 0;
+    return restarted;
+  }
+
+  /** @param {string} reason @returns {boolean} whether a restart was started */
+  restartCloudSession(reason) {
+    if (this.stopped) return false;
+    const health = this.cloudSessionHealth;
     const now = Date.now();
     if (
       health.lastRestartAt !== 0 &&
@@ -3450,19 +3387,9 @@ class Roborock {
     ) {
       return false;
     }
-    // The experimental lifecycle owns teardown and the shared silence cooldown.
-    // Keep the v3.36 baseline active even without cross-robot evidence.
-    const recovery = this.rr_mqtt_connector?.recovery;
-    if (recovery) {
-      if (!recovery.canRecoverSilence()) return false;
-      void recovery.recreate("cloud-silence");
-      return true;
-    }
-    const silences = health.consecutiveSilences;
     health.lastRestartAt = now;
-    health.consecutiveSilences = 0;
     this.log.info(
-      `${silences} cloud requests in a row went unanswered while the MQTT connection reported itself up, so the plugin is starting a fresh MQTT session — the same rule python-roborock applies (3 in a row, at most once every 30 minutes). A request in flight at this moment may fail once.`
+      `${reason}, so the plugin is starting a fresh MQTT session (at most once every 30 minutes). A request in flight at this moment may fail once.`
     );
     void Promise.resolve()
       .then(() => this.rr_mqtt_connector?.reconnectClient?.(true))
@@ -3472,6 +3399,18 @@ class Roborock {
         );
       });
     return true;
+  }
+
+  /**
+   * One request outcome on one transport, for the hourly summary.
+   *
+   * @param {string} duid
+   * @param {"local" | "cloud"} transport
+   * @param {import("./lib/transportTally").Outcome} outcome
+   * @returns {void}
+   */
+  noteTransportOutcome(duid, transport, outcome) {
+    this.transportTally.note(duid, transport, outcome);
   }
 
   /**
@@ -3652,7 +3591,7 @@ class Roborock {
     }
 
     this.log.info(
-      `${this.describeDevice(duid)} has not answered ${method} ${outcome.failures} times in a row, so the plugin stops asking for about ${hours} hour(s) and then tries once more. Everything else about this robot is unaffected, and one answer puts it straight back in the normal cycle. This is the robot or the Roborock cloud declining to reply, not a connection failure — those are reported separately.${verdict}`
+      `${this.describeDevice(duid)} has not answered ${method} ${outcome.failures} times in a row, so the plugin stops asking for about ${hours} hour(s) and then tries once more. Everything else about this robot is unaffected, and one answer puts it straight back in the normal cycle. Each of those requests went out on a connection that stayed up until it timed out, so this is the robot or the Roborock cloud not replying, not a connection failure — those are reported separately.${verdict}`
     );
     return true;
   }
@@ -3740,63 +3679,6 @@ class Roborock {
       isRemote: true,
       remoteReason,
     });
-  }
-
-  /**
-   * A local reply arrived, so the socket is not mute. Called from the one place
-   * a local response lands, so the count measures the socket's current silence
-   * rather than its history.
-   *
-   * @param {string} duid
-   * @returns {void}
-   */
-  noteLocalRequestSucceeded(duid) {
-    if (!duid) {
-      return;
-    }
-
-    this.localMuteTimeouts.delete(duid);
-  }
-
-  /**
-   * A local request timed out on a socket that reported itself connected. After
-   * LOCAL_MUTE_TIMEOUT_LIMIT of those in a row the LAN is written off for this
-   * robot and the cloud is used instead, because the alternative is paying the
-   * full timeout on every poll and every command for the life of the process.
-   *
-   * @param {string} duid
-   * @param {string} [method] the request that died, for the log line
-   * @returns {Promise<void>}
-   */
-  async noteLocalRequestTimedOut(duid, method) {
-    if (!duid) {
-      return;
-    }
-
-    const failures = (this.localMuteTimeouts.get(duid) || 0) + 1;
-    this.localMuteTimeouts.set(duid, failures);
-
-    if (failures < LOCAL_MUTE_TIMEOUT_LIMIT) {
-      return;
-    }
-
-    // Already written off: say it once, then stay quiet. The timeouts keep
-    // coming until something upstream changes, and a warning per poll would
-    // bury the one line that explains the switch.
-    if (this.remoteDevices.has(duid)) {
-      return;
-    }
-
-    this.log.warn(
-      `The local connection to ${this.describeDevice(duid)} connected but answered nothing: ` +
-        `${failures} requests in a row timed out${method ? ` (last: ${method})` : ""}. ` +
-        `Using the Roborock cloud for this robot instead. The LAN port is reachable, ` +
-        `so this is not a blocked port — the robot is not replying on it. On a segmented ` +
-        `network, check that the reply path back to Homebridge is open, not just the ` +
-        `outbound one.`
-    );
-
-    await this.markDeviceRemote(duid, LOCAL_MUTE_REMOTE_REASON);
   }
 
   /**
@@ -4220,14 +4102,15 @@ class Roborock {
   }
 
   /**
-   * Try `startService` again after a failure that left nothing running.
+   * Try `startService` again after a failure that left nothing running, at
+   * the login stage or the home-details stage alike.
    *
    * Backoff doubles from 1 minute to a 10-minute ceiling and then keeps
    * going, deliberately without an attempt cap: the failure this recovers
    * from is "the network was not ready yet", and the device it runs on is
    * unattended. Giving up would mean a human has to notice. One timer at a
    * time, unref'd so it can never hold Homebridge open, and cleared on
-   * shutdown.
+   * shutdown. The retried start publishes the robots itself (notifyReady).
    *
    * @param {unknown} [error]
    */
@@ -4241,12 +4124,24 @@ class Roborock {
       600000
     );
     this.log.warn(
-      `Could not fetch your Roborock home details: ${
+      `Could not connect to your Roborock account: ${
         /** @type {any} */ (error)?.message || error
       }. This is almost always a temporary Roborock cloud or network problem. Retrying in ${Math.round(
         delay / 60000
-      )} minute(s); no robots will load until it succeeds.`
+      )} minute(s); the robots appear in Apple Home as soon as it succeeds, without a restart.`
     );
+    this.armStartServiceRetry(delay);
+  }
+
+  /**
+   * Arm the one retry timer, unless one is armed or the adapter is stopped.
+   *
+   * @param {number} delay ms
+   */
+  armStartServiceRetry(delay) {
+    if (this.startServiceRetryTimer || this.stopped) {
+      return;
+    }
     const timer = setTimeout(() => {
       this.startServiceRetryTimer = null;
       // `bInited` alone let a cleared-too-late timer restart a shut-down
@@ -4273,14 +4168,119 @@ class Roborock {
     this.startServiceRetryTimer = timer;
   }
 
+  /**
+   * Roborock no longer accepts the session (getHomeDetail code 2010).
+   *
+   * python-roborock raises RoborockInvalidCredentials for this answer and Home
+   * Assistant starts re-authentication; nothing retries with the same session.
+   * This plugin used to: every 10 minutes for good, under a "temporary
+   * problem" label, never trying the configured password because the stored
+   * session always won — and at runtime MQTT kept reconnecting every second
+   * with credentials derived from it.
+   *
+   * So the dead session is dropped everywhere it could be picked up again
+   * (memory, which also holds the copy from the plugin settings, and disk),
+   * the cloud side stops using it (the refresh, the hourly MQTT check, MQTT
+   * itself), and then:
+   * - with a password configured, one fresh login, and the start runs again
+   *   with the new session; at most once per AUTH_FAILURE_BACKOFF_MS,
+   *   python's maximum back-off after an authorisation failure, because each
+   *   login counts against Roborock's sign-in limits (9004 blocks sign-in for
+   *   7 days);
+   * - without one, one error that says what to do. Nothing in this process
+   *   could make the session good again, so nothing retries.
+   *
+   * Also the entry point for any other place that learns the session is dead.
+   *
+   * @param {unknown} error the rejection
+   */
+  async handleRejectedSession(error) {
+    if (this.stopped) {
+      return;
+    }
+    const reason = /** @type {any} */ (error)?.message || String(error);
+
+    this.userData = null;
+    await this.deleteStateAsync("UserData");
+    for (const interval of ["homedataInterval", "reconnectIntervall"]) {
+      if (this[interval]) {
+        this.clearInterval(this[interval]);
+        this[interval] = null;
+      }
+    }
+    this.rr_mqtt_connector?.disconnect?.();
+
+    if (!this.config.password) {
+      this.log.error(
+        `${reason}, so the plugin has stopped using the Roborock cloud. To continue, log out and log in again in the plugin settings, then restart the Roborock bridge.`
+      );
+      return;
+    }
+
+    const sinceLastLogin =
+      this.now() - (this.lastSessionReloginAt ?? -Infinity);
+    if (sinceLastLogin < AUTH_FAILURE_BACKOFF_MS) {
+      const waitMs = AUTH_FAILURE_BACKOFF_MS - sinceLastLogin;
+      this.log.error(
+        `${reason}, ${Math.round(sinceLastLogin / 60000)} minute(s) after the plugin last logged in with your password. It logs in again in ${Math.ceil(waitMs / 3600000)} hour(s); if this keeps happening, log out and log in again in the plugin settings.`
+      );
+      this.bInited = false;
+      this.armStartServiceRetry(waitMs);
+      return;
+    }
+
+    this.lastSessionReloginAt = this.now();
+    this.log.warn(
+      `${reason}; logging in again with the password from the plugin settings.`
+    );
+    await this.restartService();
+  }
+
+  /**
+   * After a failed cloud read, ask the account API whether the session is
+   * still good, which is the question python-roborock asks to decide that a
+   * session is dead. A failed read alone does not say: the network may be
+   * down, or the IoT API may refuse for its own reasons.
+   *
+   * @param {unknown} error what the read failed with
+   * @returns {Promise<unknown>} the rejection, or null when the session is
+   *   fine or the question could not be answered
+   */
+  async findSessionRejection(error) {
+    if (roborockAuth.isSessionRejected(error)) {
+      return error;
+    }
+    if (!this.loginApi) {
+      return null;
+    }
+    try {
+      await roborockAuth.getHomeId(this.loginApi);
+      return null;
+    } catch (check) {
+      return roborockAuth.isSessionRejected(check) ? check : null;
+    }
+  }
+
+  /**
+   * Shutdown: what a start armed, and the local transport's own timers.
+   */
   clearTimersAndIntervals() {
+    this.clearRunTimers();
+    this.localConnector.clearLocalDevicedTimeout();
+  }
+
+  /**
+   * Stop what a start armed: its retry, the hourly MQTT check, the home-data
+   * refresh, the MQTT startup watchdog, every robot's polling and the B01
+   * status loop. A restart stops only these. The local sockets belong to
+   * their robots, not to a start: one still up keeps its keep-alive across a
+   * restart, which used to stop it for good (the start that followed found
+   * the socket connected and left it alone).
+   */
+  clearRunTimers() {
     if (this.startServiceRetryTimer) {
       this.clearTimeout(this.startServiceRetryTimer);
       this.startServiceRetryTimer = null;
-    }
-    if (this.loginRetryTimer) {
-      this.clearTimeout(this.loginRetryTimer);
-      this.loginRetryTimer = null;
     }
     if (this.reconnectIntervall) {
       this.clearInterval(this.reconnectIntervall);
@@ -4288,8 +4288,6 @@ class Roborock {
     if (this.homedataInterval) {
       this.clearInterval(this.homedataInterval);
     }
-
-    this.localConnector.clearLocalDevicedTimeout();
 
     // The MQTT startup watchdog is armed in initMQTT_Subscribe and would
     // otherwise survive shutdown and fire into a torn-down adapter.
@@ -4309,47 +4307,284 @@ class Roborock {
   }
 
   /**
-   * Refresh the home snapshot - devices, products, local keys - and let every
-   * robot's polling intervals re-check themselves against it.
+   * Read the home snapshot: `v2/user/homes/{id}`, the endpoint startup has
+   * always used. The refresh used to read v1, whose device list can differ,
+   * so comparing the two would have seen changes that were not there.
+   *
+   * Roborock occasionally answers 200 with an envelope that carries no
+   * `result` (maintenance windows, rate limiting). That is an error here, so
+   * it can never be stored over the cached device list on disk and turn a
+   * transient cloud hiccup into a persistent failure.
    *
    * @param {string | number} homeId
-   * @param {Record<string, any>} [prefetched] a home payload already fetched
-   *   by the caller. Startup fetched `v2/user/homes/{id}` seconds earlier,
-   *   built the device list from it, and then called this, which fetched
-   *   `user/homes/{id}` again before the Matter accessories could register:
-   *   2 cloud round-trips for one snapshot, back to back, on the critical
-   *   path. With the payload handed in, this consumes it. The periodic
-   *   caller passes nothing and fetches fresh, as before.
    */
-  async updateHomeData(homeId, prefetched) {
+  async fetchHomeData(homeId) {
+    const response = await this.api.get(`v2/user/homes/${homeId}`);
+    const homedata = response?.data?.result;
+    if (!homedata) {
+      throw new Error(
+        `The Roborock cloud returned no home data for home ${homeId}. Keeping the previously cached device list.`
+      );
+    }
+    return homedata;
+  }
+
+  /**
+   * Make one home snapshot the plugin's view of the account: products, the
+   * robot list (owned and shared), room names, the room labels already cached
+   * for each robot's maps, local keys, and the stored copy. Startup and the
+   * periodic refresh both apply a snapshot through here, so the refresh is no
+   * longer a partial copy of the startup that stored room names it never
+   * applied.
+   *
+   * The room labels are rewritten BEFORE the snapshot is stored, because
+   * storing it is what tells the Matter accessories to republish (their
+   * Service Area included).
+   *
+   * @param {Record<string, any>} homedata
+   * @param {{refresh?: boolean}} [options] `refresh`: the reading of a
+   *   periodic refresh, the only kind that can confirm a removal
+   * @returns {Promise<{localKeyDevices: Array<{duid: string}>, added: string[], removed: string[], renamed: string[]}>}
+   *   robot names added, removed and renamed relative to the previous list
+   */
+  async applyHomeData(homedata, { refresh = false } = {}) {
+    homedata = this.keepRobotsNotYetGone(homedata, refresh);
+    const before = new Map(
+      this.normalizeArray(this.devices).map((device) => [
+        device.duid,
+        device.name,
+      ])
+    );
+
+    this.products = homedata.products;
+    this.devices = this.getManagedHomeDevices(homedata);
+    // Merged into, never emptied: a reading without rooms used to make the
+    // robot's next room report name every room "Room <id>" in Apple Home
+    // until a reading with rooms came. A room's id keeps its last name.
+    for (const room of this.normalizeArray(homedata.rooms)) {
+      if (room && room.id !== undefined) {
+        this.roomIDs[room.id] = room.name;
+      }
+    }
+    await this.addSharedRobotRoomNames(homedata);
+    this.log.debug(`RoomIDs debug: ${JSON.stringify(this.roomIDs)}`);
+    this.relabelRoomMappings();
+
+    const localKeyDevices = await this.refreshLocalKeysFromHomeData(homedata);
+    await this.setStateAsync("HomeData", {
+      val: JSON.stringify(homedata),
+      ack: true,
+    });
+
+    const after = new Map(
+      this.devices.map((device) => [device.duid, device.name])
+    );
+    const name = (duid, names) => names.get(duid) || duid;
+    return {
+      localKeyDevices,
+      added: [...after.keys()]
+        .filter((duid) => !before.has(duid))
+        .map((duid) => name(duid, after)),
+      removed: [...before.keys()]
+        .filter((duid) => !after.has(duid))
+        .map((duid) => name(duid, before)),
+      renamed: [...after.keys()].filter(
+        (duid) => before.has(duid) && before.get(duid) !== after.get(duid)
+      ),
+    };
+  }
+
+  /**
+   * One reading of the account does not remove a robot. A robot this process
+   * has and a reading lacks is carried over from the previous snapshot, with
+   * its product, until two refreshes in a row (an interval apart) have
+   * lacked it; a reading that lists no robot at all removes nothing. A
+   * start's own reading never confirms a removal: the restart after a refresh
+   * reads again within a second, so one bad answer lasting a few seconds was
+   * enough to unregister a robot's Apple Home accessories, which come back
+   * as new ones without their rooms, names and automations. Additions and
+   * renames still apply at once.
+   *
+   * @param {Record<string, any>} homedata
+   * @param {boolean} refresh whether this is a periodic refresh's reading
+   * @returns {Record<string, any>} the reading with those robots kept
+   */
+  keepRobotsNotYetGone(homedata, refresh) {
+    const previous = this.devices ? this.getStoredHomeData() : null;
+    if (!previous) {
+      return homedata;
+    }
+    const listed = new Set(
+      this.normalizeArray(homedata.devices)
+        .concat(this.normalizeArray(homedata.receivedDevices))
+        .map((device) => device?.duid)
+    );
+    const counts = refresh && listed.size > 0;
+    const kept = {
+      ...homedata,
+      devices: [...this.normalizeArray(homedata.devices)],
+      receivedDevices: [...this.normalizeArray(homedata.receivedDevices)],
+      products: [...this.normalizeArray(homedata.products)],
+    };
+    if (!this.missedReadings) {
+      /** @type {Map<string, number>} duid -> refreshes in a row that lacked it */
+      this.missedReadings = new Map();
+    }
+    for (const list of ["devices", "receivedDevices"]) {
+      for (const device of this.normalizeArray(previous[list])) {
+        const duid = device?.duid;
+        if (!duid || listed.has(duid)) {
+          continue;
+        }
+        const misses = (this.missedReadings.get(duid) ?? 0) + (counts ? 1 : 0);
+        if (misses >= 2) {
+          this.missedReadings.delete(duid);
+          continue;
+        }
+        this.missedReadings.set(duid, misses);
+        this.log.debug(
+          `${device.name || duid} is missing from this reading of your Roborock account; it is kept until two refreshes in a row lack it.`
+        );
+        kept[list].push(device);
+        const productId = device.productId;
+        if (!kept.products.some((product) => product?.id == productId)) {
+          const product = this.normalizeArray(previous.products).find(
+            (entry) => entry?.id == productId
+          );
+          if (product) {
+            kept.products.push(product);
+          }
+        }
+      }
+    }
+    for (const duid of listed) {
+      this.missedReadings.delete(duid);
+    }
+    return kept;
+  }
+
+  /**
+   * Give every cached room its current name from `roomIDs`. The cache keeps
+   * the name it was given when the robot reported the room, so a room renamed
+   * in the app kept its old name until the robot reported its rooms again.
+   */
+  relabelRoomMappings() {
+    let changed = false;
+    for (const mapping of Object.values(this.roomMappings || {})) {
+      for (const rooms of Object.values(mapping?.roomsByMap || {})) {
+        for (const room of this.normalizeArray(rooms)) {
+          const current = this.roomIDs[room?.roomId];
+          if (typeof current === "string" && current && room.name !== current) {
+            room.name = current;
+            changed = true;
+          }
+        }
+      }
+      if (mapping?.roomsByMap) {
+        mapping.rooms = this.getFlattenedRoomMappings(mapping);
+      }
+    }
+    if (changed) {
+      this.persistRoomMappings();
+    }
+  }
+
+  /**
+   * Run the whole start again on the session in hand: the same path as a
+   * retried start, so a robot added to or removed from the account, or a new
+   * session, ends with a runtime for exactly the robots on the account and a
+   * ready signal that publishes them.
+   *
+   * Its callers get here after a wait (a refresh's reading, a rejected
+   * session's cleanup). A shutdown that landed in that wait is final: the
+   * start would clear the latch and bring a stopped adapter back.
+   */
+  async restartService() {
     if (this.stopped) {
+      return;
+    }
+    await this.startService();
+  }
+
+  /**
+   * Make a new start the current one. Every start is a run: the platform's,
+   * a retry and a restart alike. Shutdown and the next start end the run
+   * before it, and a run checks isCurrentRun after every wait, so a start
+   * overtaken by either stops at its next step instead of building an MQTT
+   * client, arming polling, opening LAN sockets or publishing robots on an
+   * adapter that has moved on. What the previous run armed is stopped here,
+   * so no start can leave the last one's polling running beside its own (the
+   * 6-hour re-login retry started without that, and every robot was polled
+   * twice from then on).
+   *
+   * @returns {number} the new run
+   */
+  beginRun() {
+    this.currentRun += 1;
+    this.bInited = false;
+    this.clearRunTimers();
+    return this.currentRun;
+  }
+
+  /**
+   * @param {number} run a run from beginRun
+   * @returns {boolean} whether it is still the run to carry on
+   */
+  isCurrentRun(run) {
+    return !this.stopped && run === this.currentRun;
+  }
+
+  /**
+   * The periodic refresh: read the home snapshot, apply it, and act on what
+   * changed. A renamed robot is published again (the platform's discovery
+   * updates names); a robot added or removed restarts the start sequence.
+   *
+   * @param {string | number} homeId
+   */
+  async updateHomeData(homeId) {
+    // The refresh belongs to the start that armed it; see beginRun.
+    const run = this.currentRun;
+    if (!this.isCurrentRun(run)) {
       return;
     }
     this.log.debug(`Updating HomeData with homeId: ${homeId}`);
     if (this.api) {
       try {
-        const homedata = prefetched
-          ? prefetched
-          : (await this.api.get(`user/homes/${homeId}`)).data.result;
+        const homedata = await this.fetchHomeData(homeId);
 
         // A refresh still on the wire when Homebridge stops lands here after
         // stopService, and superviseDeviceIntervals would start the polling
         // loops again against transports that are already closed.
-        if (this.stopped) {
+        if (!this.isCurrentRun(run)) {
           return;
         }
-        if (homedata) {
-          this.superviseDeviceIntervals();
-          await this.refreshLocalKeysFromHomeData(homedata);
-          await this.setStateAsync("HomeData", {
-            val: JSON.stringify(homedata),
-            ack: true,
-          });
-          this.log.debug(`homedata successfully updated`);
-        } else {
-          this.log.warn("homedata failed to download");
+        this.superviseDeviceIntervals();
+        const change = await this.applyHomeData(homedata, { refresh: true });
+        this.log.debug(`homedata successfully updated`);
+        if (!this.isCurrentRun(run)) {
+          return;
+        }
+
+        if (change.added.length > 0 || change.removed.length > 0) {
+          const parts = [
+            change.added.length ? `added: ${change.added.join(", ")}` : "",
+            change.removed.length
+              ? `removed: ${change.removed.join(", ")}`
+              : "",
+          ].filter(Boolean);
+          this.log.info(
+            `The robots on your Roborock account changed (${parts.join("; ")}); reconnecting so each robot on the account has a runtime and appears in Apple Home.`
+          );
+          await this.restartService();
+        } else if (change.renamed.length > 0) {
+          this.notifyReady();
         }
       } catch (error) {
+        const rejection = await this.findSessionRejection(error);
+        if (rejection && this.isCurrentRun(run)) {
+          await this.handleRejectedSession(rejection);
+          return;
+        }
         this.log.error(`Failed to update updateHomeData with error: ${error}`);
       }
     }
@@ -4413,8 +4648,6 @@ class Roborock {
       if (waitForResult) {
         await commandPromise;
       }
-    } else if (command === "get_photo") {
-      this.vacuums[duid].getParameter(duid, "get_photo", parameters);
     } else {
       this.log.warn(`Command ${command} not found.`);
     }
@@ -4618,7 +4851,7 @@ class Roborock {
         suppressedAttributes: {},
       });
 
-      const throttleNote = ` Future transient ${kind} warnings for this robot will be logged at most once every ${this.formatThrottleDuration(this.errorLogThrottleMs)}.`;
+      const throttleNote = ` Future transient ${kind} warnings for this robot will be logged at most once every ${this.formatThrottleDuration(this.errorLogThrottleMs)}; an hourly line counts every request per transport.`;
       const summaryNote =
         suppressedCount > 0
           ? ` ${suppressedCount} similar warning(s) across ${this.formatSuppressedAttributes(suppressedAttributes)} were suppressed.`
@@ -4731,19 +4964,23 @@ class Roborock {
   /**
    * Whether this robot can be told to continue a paused room clean.
    *
-   * Classic v1 robots can. The B01/Q7 dialect has no measured verb for it:
-   * room cleaning there is `service.set_room_clean` with a `ctrl_value`, and
-   * the only three values read out of the protocol are STOP 0, START 1 and
-   * PAUSE 2 (`b01Q7Adapter.js`). There may well be a continue value — nobody
-   * has seen one, and a guessed control code sent to a paused robot is how
-   * the play button breaks for every B01 owner at once. So a B01 keeps
-   * today's behaviour and the limitation gets said out loud instead.
+   * Classic v1 robots can, and so can a Q10: dpResume (205) continues any
+   * paused task (python-roborock `resume_clean`, verified live). The Q7
+   * dialect has no measured verb for it: room cleaning there is
+   * `service.set_room_clean` with a `ctrl_value`, and the only three values
+   * read out of the protocol are STOP 0, START 1 and PAUSE 2
+   * (`b01Q7Adapter.js`). There may well be a continue value — nobody has seen
+   * one, and a guessed control code sent to a paused robot is how the play
+   * button breaks for every Q7 owner at once. So a Q7 keeps today's behaviour.
    *
    * @param {string} duid
    * @returns {boolean}
    */
   supportsSegmentResume(duid) {
-    return !this.isB01Device(duid);
+    return (
+      !this.isB01Device(duid) ||
+      this.b01Family(duid) === b01Q7Adapter.B01_FAMILY.Q10
+    );
   }
 
   async load_multi_map(duid, mapId, options = {}) {
@@ -5483,64 +5720,188 @@ class Roborock {
    * newly usable accessory start from the robot's real status instead of the
    * pairing-day snapshot.
    *
-   * Only the cloud-only B01 dialect keeps such a store; classic robots stream
-   * their status over MQTT and have no equivalent gap, so this answers `null`
-   * for them and callers must treat that as "nothing known", never as a value.
+   * A classic robot has the same gap: startup waits for its first
+   * `get_status` before the accessories register, and that reply was dropped
+   * the same way. Its last reply is kept by its vacuum. `null` means nothing
+   * is known, never a value.
    *
    * @param {string} duid
    * @returns {Record<string, unknown> | null}
    */
   getLastKnownLiveStatus(duid) {
-    return this._b01StatusState?.get(duid)?.lastV1Status || null;
-  }
-
-  /**
-   * Say once per Q10 robot that its status does not come from this loop.
-   *
-   * Once per robot rather than once per poll: at the idle cadence the loop
-   * reaches this 144 times an hour, and a line repeated that often stops
-   * being read. The reader's question is not "was a request skipped" but
-   * "why is my tile not updating and where does its state come from" — so the
-   * notice answers that and points at the issue tracking the remaining half.
-   *
-   * @param {string} duid
-   * @returns {void}
-   */
-  noteB01Q10StatusPollNotAttempted(duid) {
-    if (!this._b01Q10StatusNoticed) {
-      this._b01Q10StatusNoticed = new Set();
-    }
-    if (this._b01Q10StatusNoticed.has(duid)) {
-      return;
-    }
-    this._b01Q10StatusNoticed.add(duid);
-    this.log.info(
-      `${this.describeDevice(duid)} speaks the B01 Q10 dialect, which sends no reply to a status read, so the dedicated B01 status loop does not poll it. Its state comes from the home data snapshot over HTTPS instead. This is a property of the dialect and not a fault; reading state from the datapoint updates the robot pushes is tracked in issue #19.`
+    return (
+      this._b01StatusState?.get(duid)?.lastV1Status ||
+      this.vacuums[duid]?.lastStatusReply?.get(duid) ||
+      null
     );
   }
 
+  /**
+   * Ask a Q10 to push its full status (dpRequestDps), at most once a minute.
+   *
+   * A Q10 has no status read: the dialect sends no reply. It does push its
+   * datapoints, on change and on this request, and the push path reads them
+   * (onB01DatapointPush). The request is fire-and-forget, so it resolves to
+   * nothing, publishes nothing and is never counted as a failed read; a
+   * request the cloud could not carry is only noted at debug level.
+   *
+   * @param {string} duid
+   * @param {{force?: boolean}} [options]
+   * @returns {Promise<null>}
+   */
+  async requestB01Q10StatusPush(duid, options = {}) {
+    if (!this._b01Q10StatusRequestAt) {
+      this._b01Q10StatusRequestAt = new Map();
+    }
+    const gapMs = options.force
+      ? B01_STATUS_FORCED_GAP_MS
+      : B01_Q10_STATUS_REQUEST_GAP_MS;
+    if (Date.now() - (this._b01Q10StatusRequestAt.get(duid) || 0) < gapMs) {
+      return null;
+    }
+    this._b01Q10StatusRequestAt.set(duid, Date.now());
+
+    if (!this._b01Q10StatusNoticed) {
+      this._b01Q10StatusNoticed = new Set();
+    }
+    if (!this._b01Q10StatusNoticed.has(duid)) {
+      this._b01Q10StatusNoticed.add(duid);
+      this.log.info(
+        `${this.describeDevice(duid)} speaks the B01 Q10 dialect, which has no status read, so its state comes from the datapoints it pushes. The plugin asks it to push a full status once a minute.`
+      );
+    }
+
+    try {
+      await this.messageQueueHandler.sendRequest(
+        duid,
+        b01Q10Adapter.REQUEST_STATUS_PUSH,
+        {}
+      );
+    } catch (error) {
+      this.log.debug(
+        `The Q10 status request for ${this.describeDevice(duid)} was not sent: ${error?.message || error}`
+      );
+    }
+    return null;
+  }
+
+  /**
+   * Say once per robot that its B01 model names neither dialect family, and
+   * what that means for the user. Every request to it is refused at the send
+   * choke point; this is the one line that explains why.
+   *
+   * @param {string} duid
+   */
+  noteB01FamilyUnknown(duid) {
+    if (!this._b01FamilyUnknownNoticed) {
+      this._b01FamilyUnknownNoticed = new Set();
+    }
+    const model = this.getProductAttribute(duid, "model");
+    const key = `${duid}:${model}`;
+    if (this._b01FamilyUnknownNoticed.has(key)) {
+      return;
+    }
+    this._b01FamilyUnknownNoticed.add(key);
+    this.log.info(
+      `${this.describeDevice(duid)} speaks the B01 protocol, but its model (${model ? `'${model}'` : "missing from the Roborock home data"}) is neither a Q7 (sc*) nor a Q10 (ss*), so the plugin cannot tell which of the two B01 dialects it speaks and sends it nothing. Its tile follows the Roborock cloud snapshot, and commands from Apple Home fail until the model is known. python-roborock refuses such a model too; please report the model in issue #19.`
+    );
+  }
+
+  /**
+   * Name a Q7 work status the adapter has no translation for, once per robot
+   * and code. The answer is published without a state rather than as Idle, so
+   * this line is the only place the number shows up.
+   *
+   * @param {string} duid
+   * @param {unknown} status
+   */
+  noteUnknownB01WorkStatus(duid, status) {
+    if (!this._b01UnknownWorkStatuses) {
+      this._b01UnknownWorkStatuses = new Set();
+    }
+    const key = `${duid}:${status}`;
+    if (this._b01UnknownWorkStatuses.has(key)) {
+      return;
+    }
+    this._b01UnknownWorkStatuses.add(key);
+    this.log.info(
+      `${this.describeDevice(duid)} reports work status ${status}, which this plugin has no translation for, so its tile keeps the last known state. If it persists, please report the number and what the Roborock app shows.`
+    );
+  }
+
+  /**
+   * Follow a Q7's `current_map_id` from its status. A change means the robot
+   * switched maps, so the room list (room ids are per map) and the map id the
+   * live-room fallback asks for are both stale: the cached id is dropped and
+   * the rooms are refreshed at once rather than at the next 6-hour refresh.
+   *
+   * The status id is used only as this signal. The map asked for is still the
+   * one `service.get_map_list` marks current, because nothing documents that
+   * the two numberings are the same.
+   *
+   * @param {string} duid
+   * @param {{currentMapId?: unknown}} refreshState
+   * @param {unknown} currentMapId
+   */
+  noteB01CurrentMapId(duid, refreshState, currentMapId) {
+    if (currentMapId === undefined || currentMapId === null) {
+      return;
+    }
+    const previous = refreshState.currentMapId;
+    refreshState.currentMapId = currentMapId;
+    if (previous === undefined || previous === currentMapId) {
+      return;
+    }
+    this.log.info(
+      `${this.describeDevice(duid)} switched maps (${previous} -> ${currentMapId}); refreshing its rooms.`
+    );
+    this._b01MapIds?.delete(duid);
+    void this.refreshB01Rooms(duid, { force: true }).catch((error) => {
+      this.log.debug(
+        `Room refresh after a map switch failed for ${duid}: ${error?.message || error}`
+      );
+    });
+  }
+
+  /**
+   * The id of the map a Q7 marks current, from `service.get_map_list`, asked
+   * once and then reused until the robot reports a map switch.
+   *
+   * @param {string} duid
+   * @returns {Promise<number | null>}
+   */
+  async b01CurrentMapId(duid) {
+    if (!this._b01MapIds) {
+      this._b01MapIds = new Map();
+    }
+    if (this._b01MapIds.has(duid)) {
+      return this._b01MapIds.get(duid);
+    }
+    const mapListData = await this.messageQueueHandler.sendRequest(
+      duid,
+      "get_map_list",
+      {}
+    );
+    // Acknowledged here, not after the map upload: a robot that answers the
+    // list in 200 ms must not have its counter held open by a silent upload.
+    this.noteMethodAnswered(duid, "get_map_list");
+    const mapId = b01Q7Adapter.findCurrentMapId(mapListData);
+    if (mapId !== null) {
+      this._b01MapIds.set(duid, mapId);
+    }
+    return mapId;
+  }
+
   async refreshB01Status(duid, options = {}) {
-    // A Q10 (`ss*`) IS NOT POLLED AT ALL, and that gate belongs here rather
-    // than at the send choke point. The choke point already refuses
-    // `get_status` for a Q10 by name — correctly, since a fire-and-forget
-    // dialect cannot answer a read — but a request refused is still a request
-    // counted: the catch below incremented `consecutiveFailures` on every one
-    // and warned "B01 status has failed N times in a row" every tenth. At the
-    // 25-second idle cadence that is a warning every four minutes about a
-    // robot that is working exactly as designed, which is the same false alarm
-    // #14 spent three rounds chasing. Asking a question whose refusal is
-    // certain before it is asked is not a diagnostic.
-    //
-    // Returning null is what the throttle below already returns, so every
-    // caller handles it; no state entry is allocated either, and
-    // `getLastKnownLiveStatus` answers null for a Q10 as it does for a classic
-    // robot — "nothing known", never a value.
-    if (
-      b01Q7Adapter.b01FamilyForModel(
-        this.getProductAttribute(duid, "model")
-      ) === b01Q7Adapter.B01_FAMILY.Q10
-    ) {
-      this.noteB01Q10StatusPollNotAttempted(duid);
+    // A Q10 (`ss*`) is never sent a status READ: the dialect has no reply,
+    // so a read could only be refused, and a refused read counted as a
+    // failure warned about a healthy robot every few minutes (#14). It is
+    // asked to push instead, and what it pushes is read on the push path.
+    if (this.b01Family(duid) === b01Q7Adapter.B01_FAMILY.Q10) {
+      return this.requestB01Q10StatusPush(duid, options);
+    }
+    if (this.b01Family(duid) === null) {
+      this.noteB01FamilyUnknown(duid);
       return null;
     }
 
@@ -5601,12 +5962,20 @@ class Roborock {
           "get_status",
           []
         );
-        const v1Status = b01Q7Adapter.mapStatusToV1(
-          data,
-          b01Q7Adapter.b01FamilyForModel(
-            this.getProductAttribute(duid, "model")
-          )
-        );
+        // python-roborock refuses a prop.get answer that is not an object
+        // (b01_q7_channel.find_response). Read as an empty status it would
+        // publish nothing true and reset the failure streak, so it is a
+        // failed read like any other.
+        if (data === null || typeof data !== "object" || Array.isArray(data)) {
+          throw new Error(
+            `The robot answered the status read without a status (${JSON.stringify(data)}).`
+          );
+        }
+        const v1Status = b01Q7Adapter.mapStatusToV1(data, this.b01Family(duid));
+        if (v1Status.state === undefined && data.status !== undefined) {
+          this.noteUnknownB01WorkStatus(duid, data.status);
+        }
+        this.noteB01CurrentMapId(duid, refreshState, data.current_map_id);
         // A run that has just started is the moment the user is watching, and
         // it was also the slowest: the live-room fetch below rides its own
         // throttle, counted from the last attempt, so the first room of a run
@@ -5624,8 +5993,9 @@ class Roborock {
             liveState.lastAttemptAt = 0;
           }
         }
-        refreshState.lastKnownV1State = v1Status.state;
-        refreshState.lastV1Status = v1Status;
+        // An answer without a known work status leaves the last known one
+        // standing, here as on the tile.
+        this.rememberB01LiveStatus(duid, v1Status);
 
         if (refreshState.consecutiveFailures > 0) {
           // ANNOUNCE A RECOVERY ONLY FROM A FAILURE THE LOG ANNOUNCED.
@@ -5651,7 +6021,7 @@ class Roborock {
         if (!refreshState.firstSuccessLogged) {
           refreshState.firstSuccessLogged = true;
           this.log.info(
-            `B01 status online for ${this.describeDevice(duid)}: state=${v1Status.state}, battery=${v1Status.battery ?? "?"}%, charging=${v1Status.charge_status === 1 ? "yes" : "no"}.`
+            `B01 status online for ${this.describeDevice(duid)}: state=${v1Status.state ?? "unknown"}, battery=${v1Status.battery ?? "?"}%, charging=${v1Status.charge_status === undefined ? "unknown" : v1Status.charge_status === 1 ? "yes" : "no"}.`
           );
         }
 
@@ -5836,6 +6206,67 @@ class Roborock {
       val: JSON.stringify(all),
       ack: true,
     });
+    this.endFirstB01RoomWaits(duid);
+  }
+
+  /**
+   * Wait, at most B01_FIRST_ROOMS_WAIT_MS, for the first room list of an
+   * online B01 robot that has none yet, before its Matter accessory is
+   * created. Homebridge fixes an accessory's clusters when it registers it,
+   * so a robot registered without rooms shows none until Homebridge restarts;
+   * a Q7's room read at start (refreshMatterServiceAreaRoomMappings) and a
+   * Q10's map push usually answer within a second or two.
+   *
+   * @param {string} duid
+   * @returns {Promise<void>}
+   */
+  waitForFirstB01Rooms(duid) {
+    if (!this._b01FirstRoomWaited) {
+      this._b01FirstRoomWaited = new Map();
+    }
+    // One wait per robot per process: discovery starts every robot's wait
+    // at once, and the robot's own registration then joins it instead of
+    // waiting again.
+    const started = this._b01FirstRoomWaited.get(duid);
+    if (started) {
+      return started;
+    }
+    if (
+      !this.config.enableMatterServiceArea ||
+      !this.isB01Device(duid) ||
+      !this.getVacuumDeviceInfo(duid, "online") ||
+      this.getB01RoomCache(duid).length > 0
+    ) {
+      return Promise.resolve();
+    }
+    if (!this._b01FirstRoomWaits) {
+      this._b01FirstRoomWaits = new Map();
+    }
+    const waits = this._b01FirstRoomWaits.get(duid) || new Set();
+    this._b01FirstRoomWaits.set(duid, waits);
+    const waiting = new Promise((resolve) => {
+      const end = () => {
+        clearTimeout(timer);
+        waits.delete(end);
+        resolve();
+      };
+      const timer = setTimeout(end, B01_FIRST_ROOMS_WAIT_MS);
+      timer.unref?.();
+      waits.add(end);
+    });
+    this._b01FirstRoomWaited.set(duid, waiting);
+    return waiting;
+  }
+
+  /**
+   * End the waits for a robot's first rooms: a list arrived, or the room
+   * read has concluded without one.
+   * @param {string} duid
+   */
+  endFirstB01RoomWaits(duid) {
+    for (const end of [...(this._b01FirstRoomWaits?.get(duid) || [])]) {
+      end();
+    }
   }
 
   /**
@@ -5853,26 +6284,18 @@ class Roborock {
    * @returns {Promise<any[]>}
    */
   async refreshB01Rooms(duid, options = {}) {
-    // A Q10 (`ss*`) IS NOT FETCHED AT ALL — the third loop of this shape, after
-    // the status loop (3.19.0) and the live-room loop (3.19.1). `get_map_list`
-    // is not in NEUTRAL_RESPONSES and has no Q10 translation, so the send choke
-    // point refuses it by name and throws B01_METHOD_UNSUPPORTED. The caller
-    // catches that at debug level, so it is quiet — but the refusal is certain
-    // before the request is asked, and because it never succeeds the 6-hour
-    // throttle below is never stamped. A Q10 therefore repeats a designed
-    // refusal on every poll for as long as the plugin runs.
-    //
-    // Gated at the entry rather than at the two call sites for the same reason
-    // `refreshB01LiveRoom` is: both of them reach here through
-    // `refreshMatterServiceAreaRoomMappings`, which gates on `isB01Protocol` —
-    // and that is BOTH dialects, the premise of #19. Returning the cache is
-    // what the throttled path above already returns, so every caller handles
-    // it, and no failure state is allocated for a request never made.
-    if (
-      b01Q7Adapter.b01FamilyForModel(
-        this.getProductAttribute(duid, "model")
-      ) === b01Q7Adapter.B01_FAMILY.Q10
-    ) {
+    // A Q10 is never sent the Q7 map reads: its dialect cannot answer them,
+    // and a refusal that never succeeds would never stamp the throttle below
+    // either, repeating on every poll.
+    if (this.b01Family(duid) === b01Q7Adapter.B01_FAMILY.Q10) {
+      // A Q10's rooms arrive in the map it pushes (onB01MapFrame). One that
+      // has none yet is asked to push; the answer fills the cache.
+      if (this.getB01RoomCache(duid).length === 0) {
+        await this.requestB01Q10StatusPush(duid, { force: true });
+      }
+      return this.getB01RoomCache(duid);
+    }
+    if (this.b01Family(duid) !== b01Q7Adapter.B01_FAMILY.Q7) {
       return this.getB01RoomCache(duid);
     }
 
@@ -5898,12 +6321,9 @@ class Roborock {
     }
 
     try {
-      const mapListData = await this.messageQueueHandler.sendRequest(
-        duid,
-        "get_map_list",
-        {}
-      );
-      const mapId = b01Q7Adapter.findCurrentMapId(mapListData);
+      // A room refresh re-reads the map list: it is what notices a new map.
+      this._b01MapIds?.delete(duid);
+      const mapId = await this.b01CurrentMapId(duid);
       if (mapId === null) {
         // A reply arrived, so the channel is up; there is simply no map yet.
         // That is not a failure and must not accrue a backoff, or a robot
@@ -5911,15 +6331,11 @@ class Roborock {
         // precisely while the answer is about to become available.
         this._b01RoomRefreshFailures.delete(duid);
         this.log.debug(`No B01 map available yet for ${duid}; rooms deferred.`);
+        this.endFirstB01RoomWaits(duid);
         return this.getB01RoomCache(duid);
       }
 
-      const rawPayload = await this.sendB01MapRequest(duid, mapId);
-      const serial = this.getVacuumDeviceInfo(duid, "sn");
-      const model = this.getProductAttribute(duid, "model");
-      const mapKey = b01Q7Adapter.createMapKey(serial, model);
-      const scMap = b01Q7Adapter.decodeMapPayload(rawPayload, mapKey);
-      const rooms = b01Q7Adapter.parseRoomsFromScMap(scMap);
+      const { rooms } = await this.sendB01MapRequest(duid, mapId);
 
       this._b01RoomRefreshFailures.delete(duid);
       this._b01RoomRefreshAt.set(duid, Date.now());
@@ -5933,10 +6349,178 @@ class Roborock {
         lastAttemptAt: Date.now(),
         consecutiveFailures: (failureState?.consecutiveFailures || 0) + 1,
       });
+      this.endFirstB01RoomWaits(duid);
       throw error;
     }
   }
 
+  /**
+   * The key a Q7 encrypts its map frames with (python-roborock
+   * create_map_key: serial and model).
+   * @param {string} duid
+   * @returns {Buffer}
+   */
+  b01MapKey(duid) {
+    return b01Q7Adapter.createMapKey(
+      this.getVacuumDeviceInfo(duid, "sn"),
+      this.getProductAttribute(duid, "model")
+    );
+  }
+
+  /**
+   * Every protocol-301 frame from a B01 robot, decoded once and routed by
+   * what it is.
+   *
+   * A Q7 sends two kinds of map frame and they answer different questions.
+   * The live map (mapType 0) is pushed while it cleans and carries where the
+   * robot is now; it feeds the live room whether or not anything was asked.
+   * Any other type is a saved map, which `service.upload_by_mapid` returns:
+   * room names and outlines, and a pose that is a placeholder ("a saved map
+   * carries no live pose", python-roborock b01_map_parser). Only a saved map
+   * settles a pending map request, because that is what it asked for.
+   *
+   * Until this existed, whichever 301 frame arrived first settled the request
+   * and its pose was read as the robot's position. That is the field's "226 of
+   * 227 fetches carried a placeholder": the saved map, nearly every time, and
+   * now and then a live push that happened to arrive first. Every other live
+   * push went through the classic map parser and was counted as a frame for
+   * another controller.
+   *
+   * @param {string} duid
+   * @param {Buffer} rawPayload
+   * @returns {boolean} whether the frame settled a pending request
+   */
+  onB01MapFrame(duid, rawPayload) {
+    const family = this.b01Family(duid);
+    if (family === b01Q7Adapter.B01_FAMILY.Q10) {
+      // A Q10 pushes its current map after dpRequestDps; its rooms are read
+      // from it (b01Q10Adapter.parseQ10MapRooms). Trace and record packets
+      // carry no rooms and are not read.
+      try {
+        const packet = b01Q10Adapter.parseQ10MapRooms(rawPayload);
+        if (packet) {
+          void this.noteB01MapRooms(duid, packet.rooms, { announce: true });
+        }
+      } catch (error) {
+        this.log.debug(
+          `A Q10 map packet from ${this.describeDevice(duid)} could not be read: ${error?.message || error}`
+        );
+      }
+      return false;
+    }
+    if (family !== b01Q7Adapter.B01_FAMILY.Q7) {
+      return false;
+    }
+    const pending = this.pendingB01MapRequests?.get(duid);
+
+    let parsed;
+    try {
+      parsed = b01Q7Adapter.parseScMapLiveState(
+        b01Q7Adapter.decodeMapPayload(rawPayload, this.b01MapKey(duid))
+      );
+    } catch (error) {
+      // The robot did answer; what it sent could not be read. Said as such,
+      // never as a robot that did not answer.
+      const message = `A map frame from ${this.describeDevice(duid)} arrived but could not be decoded: ${error?.message || error}`;
+      if (!pending) {
+        this.log.debug(message);
+        return false;
+      }
+      this.settleB01MapRequest(
+        duid,
+        pending,
+        Object.assign(new Error(message), { unansweredRequest: false })
+      );
+      return true;
+    }
+
+    // Rooms come from the saved map. A live frame is for the position: what
+    // it lists is not known to be every room, by name, so it names rooms
+    // only for a robot whose saved rooms are not known yet, and it never
+    // postpones the saved-map read that replaces them.
+    const live = parsed.mapType === b01Q7Adapter.B01_LIVE_MAP_TYPE;
+    if (
+      parsed.rooms.length > 0 &&
+      (!live || this.getB01RoomCache(duid).length === 0)
+    ) {
+      void this.noteB01MapRooms(duid, parsed.rooms, { live });
+    }
+
+    if (live) {
+      if (pending) {
+        pending.liveFrames += 1;
+      }
+      this.applyB01LiveFrame(duid, parsed);
+      return false;
+    }
+
+    if (!pending) {
+      this.log.debug(
+        `A saved map (map type ${parsed.mapType}) from ${this.describeDevice(duid)} arrived with no map request waiting.`
+      );
+      return false;
+    }
+    this.settleB01MapRequest(duid, pending, null, parsed);
+    return true;
+  }
+
+  /**
+   * Settle a pending `service.upload_by_mapid` request, once.
+   * @param {string} duid
+   * @param {any} entry
+   * @param {Error | null} error
+   * @param {any} [parsed]
+   */
+  settleB01MapRequest(duid, entry, error, parsed) {
+    if (this.pendingB01MapRequests?.get(duid) !== entry) {
+      return;
+    }
+    this.clearTimeout(entry.timeout);
+    this.pendingB01MapRequests.delete(duid);
+    if (error) {
+      entry.reject(error);
+    } else {
+      entry.resolve(parsed);
+    }
+  }
+
+  /**
+   * Keep the room-name cache in step with the rooms a map frame carries, and
+   * for a saved map postpone the scheduled room refresh. Written only on
+   * change: the cache is persisted.
+   * @param {string} duid
+   * @param {Array<{roomId: number, roomName: string}>} rooms
+   * @param {{announce?: boolean, live?: boolean}} [options] `announce`: log
+   *   a changed list, as a room refresh does (the only source of a Q10's
+   *   rooms); `live`: from a Q7 live frame, which settles no room refresh
+   */
+  async noteB01MapRooms(duid, rooms, options = {}) {
+    if (!options.live) {
+      if (!this._b01RoomRefreshAt) {
+        this._b01RoomRefreshAt = new Map();
+      }
+      this._b01RoomRefreshAt.set(duid, Date.now());
+    }
+    if (JSON.stringify(this.getB01RoomCache(duid)) === JSON.stringify(rooms)) {
+      return;
+    }
+    await this.setB01RoomCache(duid, rooms);
+    if (options.announce) {
+      this.log.info(
+        `B01 rooms for ${this.describeDevice(duid)}: ${rooms.length ? rooms.map((room) => `${room.roomName || "?"} (${room.roomId})`).join(", ") : "none reported"}.`
+      );
+    }
+  }
+
+  /**
+   * Ask a Q7 for its current saved map (`service.upload_by_mapid`). Resolves
+   * with the decoded map once a saved map arrives (see onB01MapFrame); a live
+   * frame that arrives meanwhile goes to the live room instead.
+   *
+   * @param {string} duid
+   * @param {number} mapId
+   * @returns {Promise<ReturnType<typeof b01Q7Adapter.parseScMapLiveState>>}
+   */
   async sendB01MapRequest(duid, mapId) {
     if (!this.pendingB01MapRequests) {
       this.pendingB01MapRequests = new Map();
@@ -5971,7 +6555,6 @@ class Roborock {
       );
     }
 
-    // Another caller may have published while this one waited or built its payload.
     const concurrent = this.pendingB01MapRequests.get(duid);
     if (concurrent) return concurrent.promise;
 
@@ -5981,6 +6564,7 @@ class Roborock {
         resolve,
         reject,
         timeout: undefined,
+        liveFrames: 0,
         duid,
         transport: "cloud",
         operationClass: "secure-map",
@@ -5992,35 +6576,50 @@ class Roborock {
     });
     entry.promise = promise;
     this.pendingB01MapRequests.set(duid, entry);
+    const onTimeout = () => {
+      // Live frames during the wait mean the robot is talking; it sent no
+      // saved map. That is not a robot that did not answer, and saying so
+      // tells the field which kind of frame a request gets back.
+      const error =
+        entry.liveFrames > 0
+          ? Object.assign(
+              new Error(
+                `${this.describeDevice(duid)} sent ${entry.liveFrames} live map frame(s) (map type 0) but no saved map within 20s of the B01 map request.`
+              ),
+              { unansweredRequest: false, liveFramesArrived: true }
+            )
+          : Object.assign(
+              new Error(
+                `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
+              ),
+              {
+                unansweredRequest: true,
+                transportWasUp: this.rr_mqtt_connector.isConnected(),
+              }
+            );
+      this.settleB01MapRequest(duid, entry, error);
+    };
+    // Refused by mqtt.js (the link dropped): fail now as a transport refusal,
+    // which the give-up register does not count, rather than after 20 s as a
+    // robot that did not answer.
     try {
       this.rr_mqtt_connector.sendMessage(duid, roborockMessage, () => {
-        if (this.pendingB01MapRequests.get(duid) !== entry) return;
-        this.clearTimeout(entry.timeout);
-        this.pendingB01MapRequests.delete(duid);
-        entry.reject(
+        this.settleB01MapRequest(
+          duid,
+          entry,
           refusal(
             "cloud unavailable",
             `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
           )
         );
       });
-      if (this.pendingB01MapRequests.get(duid) !== entry) return promise;
-      entry.publishedAt = Date.now();
-      const timeout = this.setTimeout(() => {
-        this.pendingB01MapRequests.delete(duid);
-        entry.reject(
-          new Error(
-            `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
-          )
-        );
-      }, 20000);
-      if (typeof timeout?.unref === "function") {
-        timeout.unref();
-      }
-      entry.timeout = timeout;
     } catch (error) {
-      this.pendingB01MapRequests.delete(duid);
-      entry.reject(error);
+      this.settleB01MapRequest(duid, entry, error);
+    }
+    if (this.pendingB01MapRequests.get(duid) === entry) {
+      entry.publishedAt = Date.now();
+      entry.timeout = this.setTimeout(onTimeout, 20000);
+      entry.timeout.unref?.();
     }
     return promise;
   }
@@ -6044,61 +6643,15 @@ class Roborock {
     }
     this._b01Q10LiveRoomNoticed.add(duid);
     this.log.info(
-      `${this.describeDevice(duid)} speaks the B01 Q10 dialect, which sends no reply to a map read, so its live-room position is not fetched and no room is reported during a clean. This is a property of the dialect and not a fault; reading state from the datapoint updates the robot pushes is tracked in issue #19.`
+      `${this.describeDevice(duid)} speaks the B01 Q10 dialect, whose live-room position travels in a map format this plugin does not read yet, so no room is reported during a clean. This is tracked in issue #19.`
     );
   }
 
   /**
-   * Fetch the current SCMap and derive which room the robot is physically
-   * inside (currentPose ray-cast against the per-room boundary chains).
-   * Called from the B01 status loop while the robot is actively cleaning;
-   * throttled on attempts (min 10s gap), single-flight per device, and
-   * disabled entirely with the enableLiveRoomTracking=false config option.
-   *
-   * On a room CHANGE the cached last v1 status is re-broadcast through
-   * deviceNotify so the Matter accessory rebuilds its Service Area cluster
-   * promptly (unchanged clusters are suppressed by confirmed-publish
-   * diffing, so the re-broadcast costs one Service Area write at most).
-   * The fetched map also opportunistically refreshes the room-name cache,
-   * postponing the next scheduled 6-hour room refresh.
+   * The live-room bookkeeping for one B01 robot, created on first use.
    * @param {string} duid
-   * @returns {Promise<{segmentId: number, roomName: string, at: number} | null>}
    */
-  async refreshB01LiveRoom(duid) {
-    if (this.config.enableLiveRoomTracking === false) {
-      return null;
-    }
-
-    // A Q10 (`ss*`) IS NOT FETCHED AT ALL, for the same reason the status loop
-    // does not poll one — and this is the second loop with that shape, missed
-    // when the first was fixed in 3.19.0.
-    //
-    // `get_map_list` is not in NEUTRAL_RESPONSES and has no Q10 translation,
-    // so the send choke point refuses it by name and throws. The catch below
-    // then counts that refusal as a failure and warns "Live-room map fetch has
-    // failed N times in a row" every fifth one. The refusal is correct; the
-    // failure count is not, because a request whose refusal is certain before
-    // it is asked is not a diagnostic.
-    //
-    // It matters more here than the cadence alone suggests: the live-room loop
-    // runs only while the robot is actively cleaning, so the warning lands in
-    // the log precisely during the operation #14's reporter confirmed working
-    // on the only Q10 in the field.
-    //
-    // Gated at the entry rather than at the call sites because there are two
-    // of them, and the one in `refreshLiveRoomForDevice` gates on `pv ===
-    // "B01"` — which is BOTH dialects, the premise of #19. Returning null is
-    // what the disabled-tracking branch above already returns, so every caller
-    // handles it, and no state entry is allocated.
-    if (
-      b01Q7Adapter.b01FamilyForModel(
-        this.getProductAttribute(duid, "model")
-      ) === b01Q7Adapter.B01_FAMILY.Q10
-    ) {
-      this.noteB01Q10LiveRoomNotAttempted(duid);
-      return null;
-    }
-
+  b01LiveRoomStateFor(duid) {
     if (!this._b01LiveRoomState) {
       this._b01LiveRoomState = new Map();
     }
@@ -6109,12 +6662,48 @@ class Roborock {
         inflight: null,
         consecutiveFailures: 0,
         current: null,
+        lastLiveFrameAt: 0,
       };
       this._b01LiveRoomState.set(duid, liveState);
     }
+    return liveState;
+  }
 
+  /**
+   * The fallback that asks for a map while a Q7 cleans, when it has pushed no
+   * live map recently.
+   *
+   * The live room comes from the live map frames the robot pushes
+   * (onB01MapFrame -> applyB01LiveFrame), with no request at all. This asks
+   * only when none has arrived for B01_LIVE_FRAME_FRESH_MS of a run: the
+   * answer refreshes the rooms and outlines, and any live frame the robot
+   * sends meanwhile places it. The saved map it answers with is never read as
+   * a position. Throttled on attempts (min 10 s gap, backing off on failure),
+   * single-flight per device, and disabled with enableLiveRoomTracking=false.
+   *
+   * @param {string} duid
+   * @returns {Promise<{segmentId: number, roomName: string, at: number} | null>}
+   */
+  async refreshB01LiveRoom(duid) {
+    if (this.config.enableLiveRoomTracking === false) {
+      return null;
+    }
+    // A Q10's live position comes in its own map format, which this plugin
+    // does not read yet, and an unknown family is not spoken to at all.
+    if (this.b01Family(duid) === b01Q7Adapter.B01_FAMILY.Q10) {
+      this.noteB01Q10LiveRoomNotAttempted(duid);
+      return null;
+    }
+    if (this.b01Family(duid) === null) {
+      return null;
+    }
+
+    const liveState = this.b01LiveRoomStateFor(duid);
     if (liveState.inflight) {
       return liveState.inflight;
+    }
+    if (Date.now() - liveState.lastLiveFrameAt < B01_LIVE_FRAME_FRESH_MS) {
+      return liveState.current;
     }
     if (
       Date.now() - liveState.lastAttemptAt <
@@ -6141,17 +6730,9 @@ class Roborock {
 
     liveState.inflight = (async () => {
       try {
-        const mapListData = await this.messageQueueHandler.sendRequest(
-          duid,
-          "get_map_list",
-          {}
-        );
-        // Acknowledge THIS request here, not at the bottom. Until 3.31.0 the
-        // acknowledgement sat after the map upload, the decode and a cache
-        // write, so a robot that answered get_map_list in 200 ms never had
-        // its counter reset while the heavy upload leg was silent.
-        this.noteMethodAnswered(duid, "get_map_list");
-        const mapId = b01Q7Adapter.findCurrentMapId(mapListData);
+        // The map id is asked once, not on every attempt (see
+        // b01CurrentMapId and noteB01CurrentMapId).
+        const mapId = await this.b01CurrentMapId(duid);
         if (mapId === null) {
           return liveState.current;
         }
@@ -6160,11 +6741,17 @@ class Roborock {
         // own 20-second timeout and its own method on the wire; recording it
         // as get_map_list would close a channel the robot answers, and point
         // the diagnostics at the wrong request.
-        let rawPayload;
+        let savedMap;
         try {
-          rawPayload = await this.sendB01MapRequest(duid, mapId);
+          savedMap = await this.sendB01MapRequest(duid, mapId);
         } catch (error) {
           if (this.stopped) {
+            return liveState.current;
+          }
+          if (error?.liveFramesArrived) {
+            // The robot answered with live frames, which placed it already.
+            this.noteMethodAnswered(duid, b01Q7Adapter.B01_MAP_UPLOAD_METHOD);
+            this.noteLiveRoomFetchRecovered(duid, liveState);
             return liveState.current;
           }
           this.noteLiveRoomFetchFailed(
@@ -6175,103 +6762,22 @@ class Roborock {
           );
           return liveState.current;
         }
-        const serial = this.getVacuumDeviceInfo(duid, "sn");
-        const model = this.getProductAttribute(duid, "model");
-        const mapKey = b01Q7Adapter.createMapKey(serial, model);
-        const scMap = b01Q7Adapter.decodeMapPayload(rawPayload, mapKey);
-        const parsed = b01Q7Adapter.parseScMapLiveState(scMap);
-
-        // The live fetch already paid for the full map payload; reuse it to
-        // keep the room-name cache fresh instead of scheduling another
-        // 6-hour refreshB01Rooms fetch of the same data. Written only on
-        // actual change — the cache is persisted to disk, and rewriting an
-        // identical room list every ~20 s during cleaning is pure I/O waste.
-        if (parsed.rooms.length > 0) {
-          if (!this._b01RoomRefreshAt) {
-            this._b01RoomRefreshAt = new Map();
-          }
-          this._b01RoomRefreshAt.set(duid, Date.now());
-          const cachedRooms = JSON.stringify(this.getB01RoomCache(duid));
-          if (cachedRooms !== JSON.stringify(parsed.rooms)) {
-            await this.setB01RoomCache(duid, parsed.rooms);
-          }
-        }
-
-        const resolution2 = b01Q7Adapter.describeLiveRoomResolution(parsed);
-        const roomId = resolution2.roomId;
         this.noteMethodAnswered(duid, b01Q7Adapter.B01_MAP_UPLOAD_METHOD);
         this.noteLiveRoomFetchRecovered(duid, liveState);
+        liveState.savedGeometry = savedMap;
 
-        if (roomId === null) {
-          // Debug-only used to make this invisible, and it is the single most
-          // likely reason a run goes minutes without naming a room: in the
-          // field a Q7 took 7 minutes to report its first room while every
-          // attempt in between resolved to nothing and said so only at debug
-          // level. Count the misses and say something at a level the user
-          // actually sees, so "no room yet" is distinguishable from "the
-          // feature is broken" — and say WHICH of the four causes it was,
-          // because they call for different fixes.
-          // A placeholder pose is not the robot failing to be in a room, so
-          // it does not join the count that says how long the robot has gone
-          // unplaced. Counting it produced "after 46 unresolved position(s)"
-          // for a robot that had been cleaning one room the whole time, which
-          // reads as a fault and is not one.
-          //
-          // It is said once per run at a level the user sees, with the numbers
-          // that make it diagnosable, and then held at debug. In the field
-          // that turns 226 info-and-debug lines per clean into one.
-          if (resolution2.reason === "pose-placeholder") {
-            const placeholderMessage = `Live room for ${this.describeDevice(duid)}: ${B01_LIVE_ROOM_MISS_REASONS[resolution2.reason]} (${resolution2.outlineCount} room outline(s) in the map${resolution2.cell ? `, position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}` : ""}${describeOutlineBounds(resolution2)}).`;
-            if (!liveState.placeholderReported) {
-              liveState.placeholderReported = true;
-              this.log.info(placeholderMessage);
-            } else {
-              this.log.debug(placeholderMessage);
-            }
-            return liveState.current;
-          }
-
-          liveState.unresolvedPoseCount =
-            (liveState.unresolvedPoseCount || 0) + 1;
-          const message = `Live room for ${this.describeDevice(duid)}: ${B01_LIVE_ROOM_MISS_REASONS[resolution2.reason]} (attempt ${liveState.unresolvedPoseCount} this run, ${resolution2.outlineCount} room outline(s) in the map${resolution2.cell ? `, position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}` : ""}${describeOutlineBounds(resolution2)}${describeRawMapFields(parsed)}).`;
-          if (liveState.unresolvedPoseCount % 5 === 0) {
-            this.log.info(message);
-          } else {
-            this.log.debug(message);
-          }
-          return liveState.current;
-        }
-        const missedBeforeThis = liveState.unresolvedPoseCount || 0;
-        liveState.unresolvedPoseCount = 0;
-
-        const roomName =
-          parsed.rooms.find((room) => room.roomId === roomId)?.roomName ||
-          `Room ${roomId}`;
-        const previous = liveState.current;
-        liveState.current = { segmentId: roomId, roomName, at: Date.now() };
-
-        if (previous && previous.segmentId === roomId && missedBeforeThis > 0) {
-          // Re-entering the room it was already in resets the miss counter
-          // without printing anything, which made the "attempt N" numbers look
-          // as if they reset at random. Say it happened.
+        // The remaining line, said once per run: the saved map placed nobody,
+        // and its map type is in the line so one clean shows which kind of
+        // frame this robot answers a map request with.
+        if (!liveState.current && !liveState.savedMapReported) {
+          liveState.savedMapReported = true;
+          const pose = savedMap.pose
+            ? `, its pose ${formatMapCoordinate(savedMap.pose.x)},${formatMapCoordinate(savedMap.pose.y)}${savedMap.pose.update !== undefined ? ` (update flag ${savedMap.pose.update})` : ""}`
+            : "";
           this.log.info(
-            `Live room for ${this.describeDevice(duid)}: back in ${roomName} (${roomId}) after ${missedBeforeThis} unresolved position(s).`
+            `Live room for ${this.describeDevice(duid)}: no live map (map type 0) has arrived from the robot in the last ${B01_LIVE_FRAME_FRESH_MS / 1000}s of this run, and the map it returns on request is a saved map (map type ${savedMap.mapType}${pose}) that carries no live position, so no room is reported until the robot pushes one.`
           );
         }
-
-        if (!previous || previous.segmentId !== roomId) {
-          this.log.info(
-            `Live room for ${this.describeDevice(duid)}: ${roomName} (${roomId})${previous ? ` — was ${previous.roomName} (${previous.segmentId})` : ""}${missedBeforeThis > 0 ? ` (after ${missedBeforeThis} unresolved position(s))` : ""}${resolution2.cell ? ` [position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}]` : ""}.`
-          );
-          const lastV1Status = this._b01StatusState?.get(duid)?.lastV1Status;
-          if (this.deviceNotify && lastV1Status) {
-            this.deviceNotify("CloudMessage", {
-              duid,
-              payload: [lastV1Status],
-            });
-          }
-        }
-
         return liveState.current;
       } catch (error) {
         this.noteLiveRoomFetchFailed(duid, liveState, error, "get_map_list");
@@ -6282,6 +6788,97 @@ class Roborock {
     })();
 
     return liveState.inflight;
+  }
+
+  /**
+   * Place a cleaning Q7 from a live map frame it pushed.
+   *
+   * A live frame normally carries its own outlines; one that does not is
+   * matched against the outlines of the last saved map, which share its cell
+   * space. On a room CHANGE the cached last v1 status is re-broadcast so the
+   * Matter accessory rebuilds its Service Area cluster promptly (unchanged
+   * clusters are suppressed by confirmed-publish diffing).
+   *
+   * @param {string} duid
+   * @param {ReturnType<typeof b01Q7Adapter.parseScMapLiveState>} parsed
+   */
+  applyB01LiveFrame(duid, parsed) {
+    if (this.config.enableLiveRoomTracking === false) {
+      return;
+    }
+    const liveState = this.b01LiveRoomStateFor(duid);
+    liveState.lastLiveFrameAt = Date.now();
+    // A frame that arrives after the run ended (docking, charging) does not
+    // move the robot back into a room the status loop has just cleared.
+    const v1State = this._b01StatusState?.get(duid)?.lastKnownV1State;
+    if (!B01_LIVE_ROOM_FETCH_V1_STATES.has(v1State)) {
+      return;
+    }
+
+    const geometry =
+      parsed.roomChains.length === 0 && liveState.savedGeometry
+        ? { ...liveState.savedGeometry, pose: parsed.pose }
+        : parsed;
+    const resolution2 = b01Q7Adapter.describeLiveRoomResolution(geometry);
+    const roomId = resolution2.roomId;
+
+    if (roomId === null) {
+      // A placeholder pose is not the robot failing to be in a room, so it
+      // does not join the count that says how long the robot has gone
+      // unplaced. It is said once per run at a level the user sees, then held
+      // at debug.
+      if (resolution2.reason === "pose-placeholder") {
+        const placeholderMessage = `Live room for ${this.describeDevice(duid)}: ${B01_LIVE_ROOM_MISS_REASONS[resolution2.reason]} (map type ${parsed.mapType}, ${resolution2.outlineCount} room outline(s) in the map${resolution2.cell ? `, position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}` : ""}${parsed.pose?.update !== undefined ? `, pose update flag ${parsed.pose.update}` : ""}${describeOutlineBounds(resolution2)}).`;
+        if (!liveState.placeholderReported) {
+          liveState.placeholderReported = true;
+          this.log.info(placeholderMessage);
+        } else {
+          this.log.debug(placeholderMessage);
+        }
+        return;
+      }
+
+      liveState.unresolvedPoseCount = (liveState.unresolvedPoseCount || 0) + 1;
+      const message = `Live room for ${this.describeDevice(duid)}: ${B01_LIVE_ROOM_MISS_REASONS[resolution2.reason]} (attempt ${liveState.unresolvedPoseCount} this run, ${resolution2.outlineCount} room outline(s) in the map${resolution2.cell ? `, position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}` : ""}${describeOutlineBounds(resolution2)}).`;
+      if (liveState.unresolvedPoseCount % 5 === 0) {
+        this.log.info(message);
+      } else {
+        this.log.debug(message);
+      }
+      return;
+    }
+    const missedBeforeThis = liveState.unresolvedPoseCount || 0;
+    liveState.unresolvedPoseCount = 0;
+
+    const roomName =
+      (parsed.rooms.length ? parsed.rooms : this.getB01RoomCache(duid)).find(
+        (room) => room.roomId === roomId
+      )?.roomName || `Room ${roomId}`;
+    const previous = liveState.current;
+    liveState.current = { segmentId: roomId, roomName, at: Date.now() };
+
+    if (previous && previous.segmentId === roomId && missedBeforeThis > 0) {
+      // Re-entering the room it was already in resets the miss counter
+      // without printing anything, which made the "attempt N" numbers look
+      // as if they reset at random. Say it happened — at debug: with live
+      // frames a Q7 does this every minute or so, and nothing changed.
+      this.log.debug(
+        `Live room for ${this.describeDevice(duid)}: back in ${roomName} (${roomId}) after ${missedBeforeThis} unresolved position(s).`
+      );
+    }
+
+    if (!previous || previous.segmentId !== roomId) {
+      this.log.info(
+        `Live room for ${this.describeDevice(duid)}: ${roomName} (${roomId})${previous ? ` — was ${previous.roomName} (${previous.segmentId})` : ""}${missedBeforeThis > 0 ? ` (after ${missedBeforeThis} unresolved position(s))` : ""}${resolution2.cell ? ` [position cell ${Math.round(resolution2.cell.x)},${Math.round(resolution2.cell.y)}]` : ""}.`
+      );
+      const lastV1Status = this._b01StatusState?.get(duid)?.lastV1Status;
+      if (this.deviceNotify && lastV1Status) {
+        this.deviceNotify("CloudMessage", {
+          duid,
+          payload: [lastV1Status],
+        });
+      }
+    }
   }
 
   /**
@@ -6589,28 +7186,115 @@ class Roborock {
   isB01Q10Device(duid) {
     return (
       this.isB01Device(duid) &&
-      b01Q7Adapter.b01FamilyForModel(
-        this.getProductAttribute(duid, "model")
-      ) === b01Q7Adapter.B01_FAMILY.Q10
+      this.b01Family(duid) === b01Q7Adapter.B01_FAMILY.Q10
     );
   }
 
   /**
-   * The v1 state for a state value a robot PUSHED (datapoint 121). Classic and
-   * Q7 values pass through untouched; a Q10's run sub-states (101-105) and
-   * "waiting to charge" (108) would otherwise read as v1's "device offline"
-   * and "locked".
+   * The Matter fault a B01 robot's `error_code` stands for, classified in its
+   * own family's numbering, or null when the code is not one the tables name.
+   * The Matter side publishes the answer through its ordinary fault path; a
+   * classic robot's codes never come here (see isB01Device).
    *
    * @param {string} duid
-   * @param {unknown} rawState
-   * @returns {unknown}
+   * @param {number} errorCode
+   * @returns {{id: number, roborock: string, spec?: string} | null}
    */
-  normalizePushedState(duid, rawState) {
-    if (!this.isB01Q10Device(duid)) {
-      return rawState;
+  describeB01Fault(duid, errorCode) {
+    switch (this.b01Family(duid)) {
+      case b01Q7Adapter.B01_FAMILY.Q10:
+        return b01Q10Adapter.describeQ10Fault(errorCode);
+      case b01Q7Adapter.B01_FAMILY.Q7:
+        return b01Q7Adapter.describeQ7Fault(errorCode);
+      default:
+        return null;
     }
-    const translated = b01Q10Adapter.translateQ10StatusToV1State(rawState);
-    return translated === null ? rawState : translated;
+  }
+
+  /**
+   * Which B01 dialect family this robot's model belongs to (see
+   * b01Q7Adapter.b01FamilyForModel). One spelling for every caller, so the
+   * status, room and live-room loops cannot disagree about a robot.
+   *
+   * @param {string} duid
+   * @returns {string | null} null when the model names neither family
+   */
+  b01Family(duid) {
+    return b01Q7Adapter.b01FamilyForModel(
+      this.getProductAttribute(duid, "model")
+    );
+  }
+
+  /**
+   * A datapoint frame a B01 robot pushed on its own (no msgId), read in the
+   * robot's dialect before anything reaches the Matter side.
+   *
+   * A Q10 reports its state this way; its datapoints are translated to the
+   * v1-shaped fields the accessory reads, kept as the robot's last known live
+   * status, and delivered. A Q7's pushed datapoint numbering is not
+   * documented anywhere, so a Q7 push is never read directly: it is named once
+   * and answered with a status read, which the Q7 does answer in a known
+   * shape.
+   *
+   * @param {string} duid
+   * @param {Record<string, unknown>} dps
+   * @returns {void}
+   */
+  onB01DatapointPush(duid, dps) {
+    const family = this.b01Family(duid);
+    if (family === b01Q7Adapter.B01_FAMILY.Q10) {
+      const v1Status = b01Q10Adapter.mapDpsToV1(dps);
+      if (Object.keys(v1Status).length === 0) {
+        return;
+      }
+      this.rememberB01LiveStatus(duid, v1Status);
+      if (this.deviceNotify) {
+        this.deviceNotify("CloudMessage", { duid, payload: [v1Status] });
+      }
+      return;
+    }
+    if (family === b01Q7Adapter.B01_FAMILY.Q7) {
+      if (!this._b01Q7PushNoticed) {
+        this._b01Q7PushNoticed = new Set();
+      }
+      if (!this._b01Q7PushNoticed.has(duid)) {
+        this._b01Q7PushNoticed.add(duid);
+        this.log.info(
+          `${this.describeDevice(duid)} pushed datapoints ${JSON.stringify(dps)}. The Q7 numbering of pushed datapoints is not documented, so they are not read directly; a status read is taken instead. This is said once per robot.`
+        );
+      }
+      void this.getStatus(duid, { force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Merge a B01 robot's freshly reported v1-shaped fields into its last known
+   * live status (getLastKnownLiveStatus), whichever way they arrived.
+   *
+   * @param {string} duid
+   * @param {Record<string, unknown>} v1Status
+   */
+  rememberB01LiveStatus(duid, v1Status) {
+    if (!this._b01StatusState) {
+      this._b01StatusState = new Map();
+    }
+    let refreshState = this._b01StatusState.get(duid);
+    if (!refreshState) {
+      refreshState = {
+        lastAttemptAt: 0,
+        inflight: null,
+        consecutiveFailures: 0,
+        failureWarned: false,
+      };
+      this._b01StatusState.set(duid, refreshState);
+    }
+    if (typeof v1Status.state === "number") {
+      refreshState.lastKnownV1State = v1Status.state;
+    }
+    refreshState.lastV1Status = {
+      ...refreshState.lastV1Status,
+      ...v1Status,
+    };
   }
 
   /**
@@ -6651,18 +7335,38 @@ class Roborock {
     // A Q10 is B01 too, but numbers its states the v1 way plus a few of its
     // own; the Q7 table turned a charging Q10 into Stopped (#33). Each family
     // reads its own table.
+    // A Q10 reports its state by pushing it, and the push path keeps what it
+    // pushed already translated (onB01DatapointPush). That is fresher than
+    // the home-data snapshot, and it is the only source of fields the
+    // snapshot does not carry, such as the clean task behind `in_cleaning`.
+    if (
+      device.pv === b01Q7Adapter.B01_PROTOCOL_VERSION &&
+      this.b01Family(duid) === b01Q7Adapter.B01_FAMILY.Q10
+    ) {
+      const pushed = this.getLastKnownLiveStatus(duid)?.[property];
+      if (pushed !== undefined) {
+        return pushed;
+      }
+    }
+
     if (
       property === "state" &&
       device.pv === b01Q7Adapter.B01_PROTOCOL_VERSION &&
       device.deviceStatus
     ) {
-      const rawStatus = device.deviceStatus[propertyID];
-      const translated = this.isB01Q10Device(duid)
-        ? b01Q10Adapter.translateQ10StatusToV1State(rawStatus)
-        : b01Q7Adapter.translateQ7WorkStatusToV1State(rawStatus);
-      if (translated !== null) {
-        return translated;
-      }
+      const rawStatus =
+        device.deviceStatus[propertyID] ?? device.deviceStatus[property];
+      const family = this.b01Family(duid);
+      const translated =
+        family === b01Q7Adapter.B01_FAMILY.Q10
+          ? b01Q10Adapter.translateQ10StatusToV1State(rawStatus)
+          : family === b01Q7Adapter.B01_FAMILY.Q7
+            ? b01Q7Adapter.translateQ7WorkStatusToV1State(rawStatus)
+            : null;
+      // An untranslatable value is unknown. Falling through to the raw number
+      // handed the Matter side a B01 code to read as a v1 state ("state 26"
+      // on a Q7, pi-roborock.log 21 Oct 2026).
+      return translated !== null ? translated : "";
     }
 
     if (device.deviceStatus) {
@@ -6688,6 +7392,35 @@ class Roborock {
 
   setDeviceNotify(callback) {
     this.deviceNotify = callback;
+  }
+
+  /**
+   * Register the one listener told that a start has succeeded: the first
+   * start, a retried one, and a restart after a re-login or an account
+   * change. The platform publishes the robots from it; its discovery is
+   * idempotent, so being told again only updates what is already there.
+   *
+   * @param {() => unknown} listener
+   */
+  setReadyListener(listener) {
+    this.readyListener = listener;
+  }
+
+  notifyReady() {
+    if (typeof this.readyListener !== "function") {
+      return;
+    }
+    try {
+      void Promise.resolve(this.readyListener()).catch((error) => {
+        this.log.error(
+          `Publishing the robots failed: ${error?.message || error}`
+        );
+      });
+    } catch (error) {
+      this.log.error(
+        `Publishing the robots failed: ${/** @type {any} */ (error)?.message || error}`
+      );
+    }
   }
 }
 

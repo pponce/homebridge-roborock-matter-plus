@@ -362,7 +362,13 @@ test.each(["b01", "b01-map", "secure-ack", "refusal"])(
       });
       expect(resolve).toHaveBeenCalled();
     } else if (kind === "b01-map") {
-      adapter.pendingB01MapRequests.set("robot-a", { resolve });
+      // A B01 map frame goes to the B01 map handler, which says whether it
+      // settled a waiting request.
+      adapter.isB01Device = () => true;
+      adapter.onB01MapFrame = (duid, payload) => {
+        resolve(payload);
+        return true;
+      };
       receive({ protocol: 301, payload: Buffer.from("map") });
       expect(resolve).toHaveBeenCalled();
     } else {
@@ -481,6 +487,7 @@ test("the persisted observation reaches the actual UI route and copied report wi
       maskLocalIp: (x) => x,
       maskLocalIpsInText: (x) => x,
       describeSavedCloudOnlyMode: async () => "disabled",
+      describeSavedServer: async () => "euiot.roborock.com",
       describeEnabledMatterFeatures: async () => "none",
       appendLocalTestReport: () => {},
     };
@@ -569,7 +576,8 @@ test("a disconnected request timeout does not claim a subscription is unacknowle
 
 test("automatic resubscribe restores silence observations without callback grants", async () => {
   mockHandlers.get("close")();
-  mockHandlers.get("reconnect")();
+  // The connector builds the next client after its 10 s back-off.
+  await jest.advanceTimersByTimeAsync(10_000);
   mockHandlers.get("connect")({ sessionPresent: false });
   expect(snapshot().subscriptionAcknowledged).toBe(false);
   acknowledge();
@@ -606,11 +614,13 @@ test("packets received while disconnected cannot acknowledge a session", () => {
 });
 
 test.each(["before-connect", "after-connect", "after-connect-suback"])(
-  "reconnect SUBACK %s cannot acknowledge or revoke the connect generation",
+  "a previous connection's SUBACK %s cannot acknowledge or revoke the connect generation",
   (order) => {
-    mockHandlers.get("close")();
-    mockHandlers.get("reconnect")();
+    // The subscribe callback of the connection that just closed.
     const legacy = mockSubscriptions.at(-1);
+    mockHandlers.get("close")();
+    // The connector builds the next client after its 10 s back-off.
+    jest.advanceTimersByTime(10_000);
     if (order === "before-connect") legacy(null, [{ qos: 1 }]);
     expect(snapshot().subscriptionAcknowledged).toBe(false);
     mockHandlers.get("connect")({ sessionPresent: true });
@@ -626,7 +636,8 @@ test.each(["before-connect", "after-connect", "after-connect-suback"])(
       generation: 2,
       subscriptionAcknowledged: true,
     });
-    expect(mockClient.subscribe).toHaveBeenCalledTimes(3);
+    // One SUBSCRIBE per connection.
+    expect(mockClient.subscribe).toHaveBeenCalledTimes(2);
   }
 );
 
@@ -677,4 +688,58 @@ test("shutdown persists the final disconnected MQTT snapshot without a pending w
     api.flushPendingPersistedStates();
     fs.rmSync(storage, { recursive: true, force: true });
   }
+});
+
+test("last eligible read survives reconnect with its original generation, without retaining current silence evidence", async () => {
+  expect(snapshot().lastEligibleRead).toBeNull();
+  await timeout();
+  expect(snapshot().lastEligibleRead).toEqual({
+    generation: 1,
+    rawSilenceDuringRequest: true,
+    ageMs: 0,
+  });
+  await jest.advanceTimersByTimeAsync(1000);
+  mockHandlers.get("close")();
+  expect(snapshot()).toMatchObject({
+    connected: false,
+    rawSilenceDuringRequest: null,
+    correlatedSilenceObserved: false,
+    lastEligibleRead: {
+      generation: 1,
+      rawSilenceDuringRequest: true,
+      ageMs: 1000,
+    },
+  });
+  mockHandlers.get("connect")({ sessionPresent: false });
+  acknowledge();
+  expect(snapshot()).toMatchObject({
+    generation: 2,
+    lastEligibleRead: { generation: 1 },
+  });
+  const request = await startRequest();
+  receive({ protocol: 500, payload: Buffer.from('{"online":true}') });
+  await jest.advanceTimersByTimeAsync(10000);
+  await request.result;
+  expect(snapshot().lastEligibleRead).toEqual({
+    generation: 2,
+    rawSilenceDuringRequest: false,
+    ageMs: 0,
+  });
+});
+
+test("a write and an old-generation timeout cannot replace the last eligible read", async () => {
+  await timeout();
+  const oldRead = await startRequest();
+  mockHandlers.get("close")();
+  mockHandlers.get("connect")({ sessionPresent: false });
+  acknowledge();
+  await jest.advanceTimersByTimeAsync(10000);
+  await oldRead.result;
+  await timeout("robot-a", "app_start");
+  expect(snapshot().lastEligibleRead).toEqual({
+    generation: 1,
+    rawSilenceDuringRequest: true,
+    ageMs: 20000,
+  });
+  expect(snapshot().rawSilenceDuringRequest).toBeNull();
 });

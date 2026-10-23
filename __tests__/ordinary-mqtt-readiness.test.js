@@ -148,6 +148,7 @@ test("waits for SUBACK before publishing and preserves the whole response budget
   const { result, id } = await startRequest();
   await jest.advanceTimersByTimeAsync(9000);
   expect(client.publish).not.toHaveBeenCalled();
+  expect(adapter.message.buildPayload).not.toHaveBeenCalled();
   expect(adapter.pendingRequests.size).toBe(0);
   expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
   acknowledge();
@@ -171,10 +172,12 @@ test("expired readiness is unsent, never robot silence, and cannot publish later
   });
   expect(adapter.pendingRequests.size).toBe(0);
   expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
-  client.handlers.get("connect")({});
+  mockClients.at(-1).handlers.get("connect")({});
   acknowledge();
   await jest.advanceTimersByTimeAsync(0);
-  expect(client.publish).not.toHaveBeenCalled();
+  expect(mockClients.every((c) => c.publish.mock.calls.length === 0)).toBe(
+    true
+  );
 });
 
 test("disconnect settles all outstanding readiness waits without waiting for the deadline", async () => {
@@ -250,7 +253,7 @@ test.each([false, true])(
     const client = mockClients[0];
     client.handlers.get("close")();
     if (connected) client.handlers.get("connect")({});
-    const { result, id } = await startRequest("robot-a", "load_multi_map", {
+    const { result, id } = await startRequest("robot-a", "app_start", {
       preferCloud: true,
     });
     expect(adapter.localConnector.sendMessage).toHaveBeenCalledTimes(1);
@@ -281,6 +284,132 @@ test("a retried initUser reopens the readiness gate after retiring the previous 
   adapter.pendingRequests.delete(request.id);
   pending.resolve(["ok"]);
   expect(await request.result).toEqual(["ok"]);
+});
+
+function installHealthRestart() {
+  adapter.cloudSessionHealth = { consecutiveSilences: 0, lastRestartAt: 0 };
+  adapter.restartCloudSession =
+    Roborock.prototype.restartCloudSession.bind(adapter);
+  adapter.noteCloudSilence = Roborock.prototype.noteCloudSilence.bind(adapter);
+  return jest.spyOn(connector, "reconnectClient");
+}
+
+async function readinessExpiry() {
+  const { result } = await startRequest();
+  await jest.advanceTimersByTimeAsync(10000);
+  expect(await result).toMatchObject({
+    code: "MQTT_READINESS_TIMEOUT",
+    requestNotSent: true,
+    unansweredRequest: false,
+  });
+}
+
+test.each(["missing", "refused"])(
+  "%s SUBACK heals after three unsent expiries with the existing cooldown",
+  async (suback) => {
+    const restart = installHealthRestart();
+    const old = mockClients.at(-1);
+    old.handlers.get("connect")({});
+    if (suback === "refused") acknowledge([{ qos: 128 }]);
+    await readinessExpiry();
+    await readinessExpiry();
+    expect(restart).not.toHaveBeenCalled();
+    await readinessExpiry();
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(old.end).toHaveBeenCalledWith(true);
+    expect(adapter.pendingRequests.size).toBe(0);
+    expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
+    expect(adapter.cloudSessionHealth.consecutiveSilences).toBe(0);
+    expect(mockClients.every((c) => c.publish.mock.calls.length === 0)).toBe(
+      true
+    );
+    await jest.advanceTimersByTimeAsync(10000);
+    const fresh = mockClients.at(-1);
+    expect(fresh).not.toBe(old);
+    fresh.handlers.get("connect")({});
+    for (let i = 0; i < 3; i++) await readinessExpiry();
+    expect(restart).toHaveBeenCalledTimes(1);
+    acknowledge();
+    const { result, id } = await startRequest();
+    receive(reply(id));
+    expect(await result).toEqual(["ok"]);
+    expect(fresh.publish).toHaveBeenCalledTimes(1);
+  }
+);
+
+test("disconnected expiries never count towards a health restart", async () => {
+  const restart = installHealthRestart();
+  mockClients.at(-1).handlers.get("close")();
+  for (let i = 0; i < 4; i++) await readinessExpiry();
+  expect(connector.unsubscribedExpiries).toBe(0);
+  expect(restart).not.toHaveBeenCalled();
+  expect(adapter.cloudSessionHealth.lastRestartAt).toBe(0);
+});
+
+test("successful subscription and a disconnected generation reset the readiness streak", async () => {
+  const restart = installHealthRestart();
+  const client = mockClients.at(-1);
+  client.handlers.get("connect")({});
+  await readinessExpiry();
+  await readinessExpiry();
+  expect(connector.unsubscribedExpiries).toBe(2);
+  acknowledge();
+  expect(connector.unsubscribedExpiries).toBe(0);
+  client.handlers.get("connect")({});
+  await readinessExpiry();
+  expect(restart).not.toHaveBeenCalled();
+  client.handlers.get("close")();
+  expect(connector.unsubscribedExpiries).toBe(0);
+});
+
+test("readiness and published-request silence share one restart cooldown", async () => {
+  const restart = installHealthRestart();
+  expect(adapter.noteCloudSilence()).toBe(false);
+  expect(adapter.noteCloudSilence()).toBe(false);
+  expect(adapter.noteCloudSilence()).toBe(true);
+  await jest.advanceTimersByTimeAsync(10000);
+  mockClients.at(-1).handlers.get("connect")({});
+  for (let i = 0; i < 3; i++) await readinessExpiry();
+  expect(restart).toHaveBeenCalledTimes(1);
+  await jest.advanceTimersByTimeAsync(30 * 60 * 1000);
+  await readinessExpiry();
+  expect(restart).toHaveBeenCalledTimes(2);
+});
+
+test("a LAN loss shares the explicit remaining budget with MQTT readiness and its reply", async () => {
+  adapter.config.cloudOnlyMode = false;
+  adapter.localConnector.isConnected.mockReturnValue(true);
+  adapter.localConnector.writeRequest = jest.fn((_duid, _frame, onLost) => {
+    setTimeout(() => onLost("socket closed"), 1000);
+    return { release: jest.fn(), isUp: () => false };
+  });
+  connector.reconnectDelayMs = 0;
+  mockClients.at(-1).handlers.get("close")();
+  await jest.advanceTimersByTimeAsync(0);
+  const fresh = mockClients.at(-1);
+  fresh.handlers.get("connect")({});
+  const { result, id } = await startRequest("robot-a", "get_status", {
+    requestTimeoutMs: 10000,
+  });
+  await jest.advanceTimersByTimeAsync(7000);
+  expect(adapter.pendingRequests.size).toBe(0);
+  expect(fresh.publish).not.toHaveBeenCalled();
+  expect(
+    adapter.message.buildPayload.mock.calls.map((args) => args[1])
+  ).toEqual([4]);
+  acknowledge();
+  await jest.advanceTimersByTimeAsync(0);
+  expect(fresh.publish).toHaveBeenCalledTimes(1);
+  expect(adapter.message.buildRoborockMessage.mock.calls.at(-1)[2]).toBe(
+    Math.floor(Date.now() / 1000)
+  );
+  await jest.advanceTimersByTimeAsync(2999);
+  expect(adapter.pendingRequests.has(id)).toBe(true);
+  await jest.advanceTimersByTimeAsync(1);
+  expect(await result).toMatchObject({
+    unansweredRequest: true,
+    transportWasUp: false,
+  });
 });
 
 test("native schedule controls can bound readiness to eight seconds without publishing", async () => {
@@ -317,66 +446,6 @@ test("cancelling one readiness waiter leaves another waiting for SUBACK", async 
   acknowledge();
   await expect(ready).resolves.toBe(2);
   expect(connector.readiness.waiters.size).toBe(0);
-});
-
-test("ordinary recovery replaces the client, rejects an uncertain write and leaves LAN requests alone", async () => {
-  expect(connector.recovery).toBeNull();
-  const request = await startRequest("robot-a", "upd_timer", {
-    operationClass: "write",
-  });
-  const metadata = adapter.pendingRequests.get(request.id);
-  expect(metadata).toMatchObject({
-    duid: "robot-a",
-    operationClass: "write",
-    sessionGeneration: 1,
-    publishedAt: Date.now(),
-  });
-  const local = {
-    transport: "local",
-    reject: jest.fn(),
-    timeout: setTimeout(() => {}, 10000),
-  };
-  adapter.pendingRequests.set(999, local);
-  const old = mockClients[0];
-  const replacement = connector.reconnectClient(true);
-  await jest.advanceTimersByTimeAsync(500);
-  expect(await request.result).toMatchObject({
-    code: "MQTT_SESSION_REPLACED",
-    ambiguousWrite: true,
-    method: "upd_timer",
-    generation: 1,
-    unansweredRequest: false,
-  });
-  expect(adapter.pendingRequests.get(999)).toBe(local);
-  expect(local.reject).not.toHaveBeenCalled();
-  expect(old.endAsync).toHaveBeenCalledWith(true);
-  expect(old.reconnect).not.toHaveBeenCalled();
-  expect(old.removeAllListeners).not.toHaveBeenCalled();
-  expect(mockClients).toHaveLength(2);
-  mockClients[1].handlers.get("connect")({});
-  acknowledge();
-  await jest.advanceTimersByTimeAsync(0);
-  await expect(replacement).resolves.toBe(true);
-  expect(mockClients[1].publish).not.toHaveBeenCalled();
-  old.handlers.get("close")();
-  expect(connector.isReady()).toBe(true);
-});
-
-test("ordinary replacement survives a long outage and becomes ready on the later SUBACK", async () => {
-  const replacement = connector.reconnectClient(true);
-  await jest.advanceTimersByTimeAsync(20000);
-  await expect(replacement).resolves.toBe(false);
-  const current = mockClients[1];
-  expect(current.end).not.toHaveBeenCalled();
-  await jest.advanceTimersByTimeAsync(70000);
-  expect(mockClients).toHaveLength(2);
-  current.handlers.get("connect")({});
-  acknowledge();
-  expect(connector.isReady()).toBe(true);
-  expect(connector.lifecycle.lastResult).toBe("recovered");
-  const request = await startRequest();
-  receive(reply(request.id));
-  await expect(request.result).resolves.toEqual(["ok"]);
 });
 
 test("repeated initialization does not add duplicate listeners to the current client", async () => {

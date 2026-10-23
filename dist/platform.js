@@ -37,9 +37,9 @@ const hap_name_1 = require("./hap_name");
 const settings_1 = require("./settings");
 const crypto_1 = require("./crypto");
 const node_fs_1 = require("node:fs");
+const node_path_1 = require("node:path");
 const DEP0040_CODE = "DEP0040";
 let dep0040FilterInstalled = false;
-const DEFAULT_TRANSIENT_WARNING_THROTTLE_HOURS = 6;
 function installDeprecationWarningFilter() {
     if (dep0040FilterInstalled) {
         return;
@@ -84,8 +84,6 @@ class RoborockPlatform {
     // the narrow helpers below.
     api) {
         this.api = api;
-        this.Service = this.api.hap.Service;
-        this.Characteristic = this.api.hap.Characteristic;
         // Used to track restored cached accessories
         this.accessories = [];
         this.matterAccessories = [];
@@ -97,8 +95,15 @@ class RoborockPlatform {
         /** Optional HAP schedule accessories, keyed by vacuum duid. */
         this.hapScheduleAccessories = new Map();
         this.schedulePolicyLogged = false;
+        this.discoveryQueue = Promise.resolve();
+        // See discoverDevices: the destructive sweep runs once per process.
+        this.staleMatterSweepDone = false;
         this.matterUnavailableLogged = false;
         this.hapPairingHintLogged = false;
+        // In the constructor rather than as field initialisers: Babel (the test
+        // runner) runs field initialisers before it assigns `api`, tsc after.
+        this.Service = api.hap.Service;
+        this.Characteristic = api.hap.Characteristic;
         this.platformConfig = config;
         // Initialise logging utility
         this.log = new logger_1.default(homebridgeLogger, this.platformConfig.debugMode);
@@ -113,22 +118,40 @@ class RoborockPlatform {
         const decryptedSession = this.platformConfig.encryptedToken
             ? (0, crypto_1.decryptSession)(this.platformConfig.encryptedToken, storagePath)
             : null;
+        if (this.platformConfig.encryptedToken && !decryptedSession) {
+            // The key is a file in the storage folder; a moved folder or a
+            // recreated Docker volume loses it, and the login that made the token
+            // removed the password, so without this line the user only read
+            // "Login failed or requires 2FA".
+            this.log.error(`The saved login could not be decrypted on this machine: its key (roborock.token.key in ${storagePath}) is missing or is not the one it was saved with. Log out and log in again in the plugin settings.`);
+        }
         this.roborockAPI = new Roborock({
             username: username,
             password: password,
             debug: debugMode,
             baseURL: baseURL,
+            serverURL: this.platformConfig.serverURL,
             skipDevices: this.platformConfig.skipDevices,
             enableMatterServiceArea: this.platformConfig.enableMatterServiceArea !== false,
             enableLiveRoomTracking: this.platformConfig.enableLiveRoomTracking !== false,
             cloudOnlyMode: Boolean(this.platformConfig.cloudOnlyMode),
             enableMqttPreventiveRefresh: this.platformConfig.enableMqttPreventiveRefresh === true,
+            isScheduleOperationPending: () => {
+                var _a;
+                return this.scheduleAccountCoordinator.busy ||
+                    ((_a = this.nativeScheduleControls) === null || _a === void 0 ? void 0 : _a.busy) === true ||
+                    [...this.hapScheduleAccessories.values()].some((schedule) => schedule.hasPendingScheduleWrites());
+            },
             mqttPreventiveRefreshMinutes: this.platformConfig.mqttPreventiveRefreshMinutes,
             enableMqttSessionRecovery: this.platformConfig.enableMqttSessionRecovery === true,
             log: this.log,
             userData: decryptedSession,
             storagePath: storagePath,
-            errorLogThrottleMs: transientWarningThrottleHours * 60 * 60 * 1000,
+            // Unset: the library's own default (one hour), which the hourly
+            // transport summary is written around.
+            errorLogThrottleMs: transientWarningThrottleHours === undefined
+                ? undefined
+                : transientWarningThrottleHours * 60 * 60 * 1000,
         });
         this.nativeScheduleControls = new native_schedule_controls_1.NativeScheduleControls(this, this.accessories, this.scheduleAccountCoordinator, storagePath);
         /**
@@ -166,6 +189,7 @@ class RoborockPlatform {
             for (const vacuum of this.matterVacuums.values()) {
                 step("matter vacuum dispose", () => vacuum.dispose());
             }
+            step("matter accessory context save", () => this.saveMatterAccessoryContexts());
             for (const actionSwitch of this.actionSwitches.values()) {
                 step("action switch dispose", () => actionSwitch.dispose());
             }
@@ -188,14 +212,15 @@ class RoborockPlatform {
     async configurePlugin() {
         await this.loginAndDiscoverDevices();
     }
+    /** The user's setting in hours, or undefined when there is none. */
     normalizeTransientWarningThrottleHours(value) {
         const parsed = typeof value === "number"
             ? value
             : typeof value === "string" && value.trim() !== ""
                 ? Number(value)
-                : DEFAULT_TRANSIENT_WARNING_THROTTLE_HOURS;
-        if (!Number.isFinite(parsed) || parsed < 0) {
-            return DEFAULT_TRANSIENT_WARNING_THROTTLE_HOURS;
+                : undefined;
+        if (parsed === undefined || !Number.isFinite(parsed) || parsed < 0) {
+            return undefined;
         }
         return parsed;
     }
@@ -214,24 +239,26 @@ class RoborockPlatform {
         self.roborockAPI.setDeviceNotify(function (id, homeData) {
             self.dispatchDeviceUpdate(id, homeData);
         });
+        // Every successful start publishes the robots — the first one, one the
+        // library retried by itself, and one after a re-login or an account
+        // change. Discovery used to hang off a callback only the first start
+        // was given, so a start that succeeded on its retry registered nothing.
+        self.roborockAPI.setReadyListener(() => self.queueDiscovery());
         // Belt and braces: no rejection from the service startup may ever
         // escape as an unhandled rejection (Homebridge 2 / Node 22+ would
         // treat that as a plugin crash).
-        Promise.resolve(self.roborockAPI.startService(function () {
-            // startService() invokes this callback on the failure path too — the
-            // getHomeDetail catch logs and falls through — so an unconditional
-            // "Service started" asserted success directly underneath the line
-            // saying it had failed.
-            if (self.roborockAPI.isInited()) {
-                self.log.debug("Roborock service started.");
-            }
-            else {
-                self.log.warn("Roborock startup did not complete, so no robots were loaded this time. The reason is in the line above. Anything already paired in Apple Home is left alone, and the plugin tries again on the next Homebridge restart.");
-            }
-            self.discoverDevices();
-        })).catch((error) => {
+        Promise.resolve(self.roborockAPI.startService()).catch((error) => {
             self.log.error(`Roborock service failed to start: ${error instanceof Error ? error.message : String(error)}`);
         });
+    }
+    /**
+     * Run discovery after any discovery already in progress. Two runs at once
+     * could both find a robot unregistered and register it twice.
+     */
+    queueDiscovery() {
+        const run = this.discoveryQueue.then(() => this.discoverDevices());
+        this.discoveryQueue = run.catch(() => undefined);
+        return run;
     }
     dispatchDeviceUpdate(id, homeData) {
         var _a;
@@ -349,6 +376,8 @@ class RoborockPlatform {
                 this.api.unregisterPlatformAccessories(settings_1.PLUGIN_NAME, settings_1.PLATFORM_NAME, [
                     existingAccessory,
                 ]);
+                // Out of our list too, or later lookups by UUID find it first.
+                this.accessories.splice(this.accessories.indexOf(existingAccessory), 1);
             }
         }
         catch (e) {
@@ -405,6 +434,10 @@ class RoborockPlatform {
                 // itself never appears over HomeKit. Everything this plugin registers
                 // over HAP is opt-in and synced below: the schedule and Routine
                 // switches, the action switches and the state sensors.
+                // A B01 robot registering for the first time waits a few seconds
+                // for its first rooms (discoverMatterVacuum). All robots wait
+                // together, so the longest wait is one robot's, not the sum.
+                await Promise.all(devices.map((device) => { var _a, _b; return (_b = (_a = self.roborockAPI).waitForFirstB01Rooms) === null || _b === void 0 ? void 0 : _b.call(_a, String(device.duid)); }));
                 for (const device of devices) {
                     await self.discoverMatterVacuum(device);
                 }
@@ -426,7 +459,14 @@ class RoborockPlatform {
             // After both syncs, so the count is the total a user has to find in
             // Apple Home rather than one kind's share of it.
             this.logHapPairingHint();
-            await this.unregisterStaleMatterAccessories();
+            // Once per process, as when discovery could only run once: a Matter
+            // robot unregistered by mistake has to be re-paired, and the later
+            // runs come from a re-login or an account refresh, where one robot
+            // missing from one reading is not worth that risk.
+            if (self.roborockAPI.isInited() && !this.staleMatterSweepDone) {
+                this.staleMatterSweepDone = true;
+                await this.unregisterStaleMatterAccessories();
+            }
         }
         catch (error) {
             this.log.error("An error occurred during device discovery. " +
@@ -678,114 +718,48 @@ class RoborockPlatform {
         }
         for (const [duid, target] of wanted) {
             let schedule = this.hapScheduleAccessories.get(duid);
-            if (schedule) {
-                schedule.setScheduleExposure(exposeSchedules);
-                if (exposeRoutines) {
-                    this.attachRoutineAccessory(duid, target.vacuumName, schedule);
-                }
-                void schedule
-                    .initialize(target.vacuumName)
-                    .then((result) => {
-                    if (result.success && result.hasSchedules) {
-                        // #22: the switches may be sitting in an accessory the bridge
-                        // does not know about — unregistered when the setting was off,
-                        // or when an earlier refresh failed. Publishing is idempotent.
-                        this.ensureScheduleAccessoryRegistered(target.vacuumName, schedule);
-                        return;
-                    }
-                    if (!result.success) {
-                        this.log.info(`Schedule restoration attempt for ${target.vacuumName}: refresh failed; invoking restoreScheduleHandlersFromAccessory().`);
-                        const restored = schedule.restoreScheduleHandlersFromAccessory();
-                        this.log.info(`Schedule restoration result for ${target.vacuumName}: restored=${restored}.`);
-                        if (restored) {
-                            this.ensureScheduleAccessoryRegistered(target.vacuumName, schedule);
-                        }
-                        this.log.debug(`Unable to refresh Roborock schedules for ${target.vacuumName}; preserving restored schedule accessories.`);
-                        return;
-                    }
-                    const accessory = this.accessories.find((candidate) => candidate.UUID ===
-                        this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`) && (0, hap_schedule_accessory_1.isHapScheduleAccessory)(candidate));
-                    this.removeHapScheduleAccessory(duid, accessory);
-                })
-                    .catch((error) => {
-                    const restored = schedule.restoreScheduleHandlersFromAccessory();
-                    if (!restored) {
-                        const accessory = this.accessories.find((candidate) => candidate.UUID ===
-                            this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`) && (0, hap_schedule_accessory_1.isHapScheduleAccessory)(candidate));
-                        this.removeHapScheduleAccessory(duid, accessory);
-                    }
-                    this.log.debug(`Unable to refresh Roborock schedules for ${target.vacuumName}: ${error instanceof Error ? error.message : String(error)}`);
-                });
-                continue;
+            if (!schedule) {
+                const uuid = this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`);
+                const accessory = this.accessories.find((cached) => cached.UUID === uuid && (0, hap_schedule_accessory_1.isHapScheduleAccessory)(cached)) ||
+                    new this.api.platformAccessory((0, hap_name_1.hapName)(target.vacuumName, "Roborock Vacuum", "Schedules"), uuid);
+                schedule = new hap_schedule_accessory_1.default(this, accessory, duid, this.scheduleAccountCoordinator);
+                this.hapScheduleAccessories.set(duid, schedule);
             }
-            const uuid = this.api.hap.uuid.generate(`hap:roborock:schedules:${duid}`);
-            let accessory = this.accessories.find((cached) => cached.UUID === uuid && (0, hap_schedule_accessory_1.isHapScheduleAccessory)(cached));
-            const isNew = !accessory;
-            if (!accessory) {
-                accessory = new this.api.platformAccessory((0, hap_name_1.hapName)(target.vacuumName, "Roborock Vacuum", "Schedules"), uuid);
-            }
-            schedule = new hap_schedule_accessory_1.default(this, accessory, duid, this.scheduleAccountCoordinator);
-            schedule.setScheduleExposure(exposeSchedules);
-            this.hapScheduleAccessories.set(duid, schedule);
+            const coordinator = schedule;
+            coordinator.setScheduleExposure(exposeSchedules);
+            // Every reading the coordinator applies says how many schedule switches
+            // it left, and the accessory is published or withdrawn from that. One
+            // rule for the first reading and every later one: a coordinator whose
+            // first reading failed keeps reading by itself, and used to be dropped
+            // here instead, so its schedules appeared only after a restart.
+            coordinator.onScheduleReading((count) => this.publishScheduleAccessory(target.vacuumName, coordinator, count));
             if (exposeRoutines) {
-                this.attachRoutineAccessory(duid, target.vacuumName, schedule);
+                this.attachRoutineAccessory(duid, target.vacuumName, coordinator);
             }
-            void schedule
-                .initialize(target.vacuumName)
-                .then((result) => {
-                if (!result.success) {
-                    this.log.info(`Schedule startup restoration attempt for ${target.vacuumName}: refresh failed; invoking restoreScheduleHandlersFromAccessory().`);
-                    const restored = schedule.restoreScheduleHandlersFromAccessory();
-                    this.log.info(`Schedule startup restoration result for ${target.vacuumName}: restored=${restored}.`);
-                    if (!restored && !this.coordinatorKeepsRoutines(schedule)) {
-                        this.hapScheduleAccessories.delete(duid);
-                    }
-                    return;
-                }
-                if (!result.hasSchedules) {
-                    if (!this.coordinatorKeepsRoutines(schedule)) {
-                        this.hapScheduleAccessories.delete(duid);
-                    }
-                    return;
-                }
-                if (!this.accessories.includes(accessory)) {
-                    this.accessories.push(accessory);
-                }
-                if (isNew) {
-                    this.log.info(`Adding HAP schedule accessory '${target.vacuumName} schedules'.`);
-                    this.api.registerPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [accessory]);
-                }
-            })
-                .catch((error) => {
-                // A first-time offline/error response must not create a broken
-                // "Not Supported" schedule tile.
-                this.removeHapScheduleAccessory(duid, accessory);
-                this.log.error(`Unable to initialize Roborock schedules for ${target.vacuumName}: ${error instanceof Error ? error.message : String(error)}`);
+            void coordinator.initialize(target.vacuumName).catch((error) => {
+                this.log.warn(`Unable to read the Roborock schedules for ${target.vacuumName}: ${error instanceof Error ? error.message : String(error)}`);
             });
         }
     }
     /**
-     * A coordinator whose schedule half came back empty still has work when it
-     * drives a Routines accessory, so it must stay in the map — dropping it
-     * would orphan the routine switches' handlers.
+     * Publish a robot's schedule accessory once a reading leaves it with a
+     * switch, and withdraw it when an applied reading leaves none — so an
+     * accessory never sits in the Home app as a tile with nothing on it, and a
+     * schedule list that could not be read at startup appears once it can.
      */
-    coordinatorKeepsRoutines(schedule) {
-        return this.shouldExposeHapRoutines() && schedule.routineCount > 0;
-    }
-    removeHapScheduleAccessory(duid, accessory) {
-        const schedule = this.hapScheduleAccessories.get(duid);
-        schedule === null || schedule === void 0 ? void 0 : schedule.removeScheduleServices();
-        if (!schedule || !this.coordinatorKeepsRoutines(schedule)) {
-            this.hapScheduleAccessories.delete(duid);
-        }
-        if (!accessory) {
+    publishScheduleAccessory(vacuumName, schedule, count) {
+        if (count > 0) {
+            this.ensureScheduleAccessoryRegistered(vacuumName, schedule);
             return;
         }
+        const accessory = schedule.scheduleAccessory;
         const index = this.accessories.indexOf(accessory);
-        if (index >= 0) {
-            this.accessories.splice(index, 1);
-            this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [accessory]);
+        if (index < 0) {
+            return;
         }
+        this.accessories.splice(index, 1);
+        this.log.info(`Removing HAP schedule accessory '${accessory.displayName}': the account has no schedules for this robot.`);
+        this.api.unregisterPlatformAccessories(settings_1.HAP_PLUGIN_IDENTIFIER, settings_1.PLATFORM_NAME, [accessory]);
     }
     /**
      * Unregister every cached HAP accessory that is not one of ours.
@@ -1281,7 +1255,7 @@ class RoborockPlatform {
         return api.matter;
     }
     async discoverMatterVacuum(device) {
-        var _a;
+        var _a, _b, _c;
         const matter = this.getMatterApi();
         if (!matter) {
             return;
@@ -1292,6 +1266,15 @@ class RoborockPlatform {
         }
         const uuid = this.generateMatterUuid(device.duid);
         const existingAccessory = this.matterAccessories.find((accessory) => accessory.UUID === uuid);
+        if (!existingAccessory && !this.matterVacuums.has(String(device.duid))) {
+            // Its clusters are fixed once it registers: a robot whose rooms are
+            // about to arrive registers with them (waitForFirstB01Rooms).
+            await ((_c = (_b = this.roborockAPI).waitForFirstB01Rooms) === null || _c === void 0 ? void 0 : _c.call(_b, String(device.duid)));
+            if (this.roborockAPI.stopped) {
+                // Homebridge is shutting down; nothing is registered after that.
+                return;
+            }
+        }
         const accessory = existingAccessory ||
             this.createMatterAccessory(device, matter.deviceTypes.RoboticVacuumCleaner);
         const vacuum = this.createOrUpdateMatterVacuum(device, accessory, Boolean(existingAccessory));
@@ -1315,7 +1298,7 @@ class RoborockPlatform {
      * one is already known.
      *
      * The robot's status can be known a full poll gap before anything is able to
-     * display it. Discovery runs in the startService callback, so a status that
+     * display it. Discovery runs once the start has succeeded, so a status that
      * arrives first is dropped by whichever gate it reaches — no accessory for
      * the duid yet, or an accessory whose `registered` is still false — and
      * nothing redelivers it. The tile then fell back on the HomeData snapshot and
@@ -1365,7 +1348,7 @@ class RoborockPlatform {
         const accessory = {
             UUID: this.generateMatterUuid(duid),
             deviceType,
-            context: { duid },
+            context: { ...this.readSavedMatterAccessoryContext(duid), duid },
         };
         this.applyMatterAccessoryIdentity(accessory, device);
         return accessory;
@@ -1422,11 +1405,12 @@ class RoborockPlatform {
         if (!matter || typeof matter.unregisterPlatformAccessories !== "function") {
             return;
         }
-        // A failed startup surfaces here as "the account has no robots": when
-        // getHomeDetail() throws (Roborock maintenance, a rate-limited response,
-        // or plain DNS failure — EAI_AGAIN hit this log twice in three weeks) the
-        // error is caught and logged, but the discovery callback still runs, so
-        // getVacuumList() returns an empty array. Treating that as "everything is
+        // A failed startup used to surface here as "the account has no robots":
+        // when getHomeDetail() threw (Roborock maintenance, a rate-limited
+        // response, or plain DNS failure — EAI_AGAIN hit this log twice in three
+        // weeks) discovery still ran, so getVacuumList() returned an empty array.
+        // Discovery now runs only after a successful start, and these guards stay
+        // because an empty account is still not proof. Treating that as "everything is
         // stale" unregisters every Matter accessory, and because Matter locks the
         // mode list at commissioning, the user then has to re-pair every single
         // robot — a destructive, non-recoverable outcome triggered by one bad
@@ -1466,6 +1450,66 @@ class RoborockPlatform {
                 this.matterAccessories.splice(index, 1);
             }
         }
+    }
+    /**
+     * Where the Matter accessories' context is kept between runs.
+     *
+     * Homebridge 2.4.0 saves an external Matter accessory's context — every
+     * robot vacuum is one — but loads that cache only after the accessory has
+     * registered (ServerLifecycle runServer -> startServerNode), so it never
+     * comes back. The room progress and room selection the accessory keeps
+     * there were lost on every restart, so the plugin keeps its own copy.
+     */
+    getMatterAccessoryContextPath() {
+        try {
+            return (0, node_path_1.join)(this.api.user.storagePath(), "roborock.MatterAccessoryContext");
+        }
+        catch (_a) {
+            return null;
+        }
+    }
+    readSavedMatterAccessoryContext(duid) {
+        var _a;
+        const file = this.getMatterAccessoryContextPath();
+        if (!file) {
+            return {};
+        }
+        try {
+            const saved = (_a = JSON.parse((0, node_fs_1.readFileSync)(file, "utf8"))) === null || _a === void 0 ? void 0 : _a[duid];
+            return saved && typeof saved === "object" && !Array.isArray(saved)
+                ? saved
+                : {};
+        }
+        catch (_b) {
+            // None yet, or unreadable: start as a first run would.
+            return {};
+        }
+    }
+    /** Run at shutdown; see getMatterAccessoryContextPath. */
+    saveMatterAccessoryContexts() {
+        const file = this.getMatterAccessoryContextPath();
+        if (!file) {
+            return;
+        }
+        // Merged into what is there: a second instance of this platform (another
+        // child bridge, another account) keeps its robots in the same file.
+        let contexts = {};
+        try {
+            const saved = JSON.parse((0, node_fs_1.readFileSync)(file, "utf8"));
+            if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+                contexts = saved;
+            }
+        }
+        catch (_a) {
+            // None yet, or unreadable: replaced below.
+        }
+        for (const accessory of this.matterAccessories) {
+            const duid = this.getMatterAccessoryDuid(accessory);
+            if (duid) {
+                contexts[duid] = accessory.context;
+            }
+        }
+        (0, node_fs_1.writeFileSync)(file, JSON.stringify(contexts), { mode: 0o600 });
     }
     generateMatterUuid(duid) {
         var _a;

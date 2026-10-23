@@ -1,6 +1,39 @@
 # Home branch integration and remaining extras
 
-## Integration on upstream v3.39.0 (16 October 2026)
+## Integration on upstream 3.40.0 stable
+
+This branch incorporates the stable release and revised PRs #31, #32, #36,
+#37, #38, #39 and #46. The optional recovery code from #31 is adapted for this
+home build; the upstream proposal remains parked. Schedule reconciliation,
+optimistic switch feedback, momentary action acknowledgement, presence logging,
+send readiness and historical eligible-read diagnostics are retained.
+
+Native pause and stacked schedule-delay controls retain the same accessory IDs,
+configuration keys and persistent journal. The preventive refresh minutes field
+remains below its checkbox (default 240 minutes, both recovery flags required).
+
+Upstream 3.40 already creates fresh clients. Optional correlated-silence and
+preventive triggers now use that same reconnect path and its 10-second initial
+backoff, growing by 1.5 after failed connections. There is no independent client
+factory or retry loop. A successful connection plus SUBACK restarts session age.
+Preventive refresh defers while cloud requests, map reads, queued schedule writes
+or entire pause/delay transactions are pending. It never deliberately interrupts
+those operations just because the age limit expired. See
+[MQTT recovery behavior](mqtt-session-recovery.md).
+
+Retained home extras include per-request readiness budgets, cancellable waits,
+operation and generation metadata, per-robot activity ages, idempotent listener
+installation, immediate shutdown ordering, and schedule inspection tools. The
+obsolete immediate-replacement lifecycle from the old home build is superseded
+by the upstream reconnect path. Physical Homebridge/robot validation remains
+separate from automated tests.
+
+`upstream_plus_SCHEDULE_PAUSE_DELAY` is the alternative stable-based build with
+only native pause/delay controls. It does not contain the optional recovery UI,
+these home extras, or the open-PR feature set. Both install as the existing
+`homebridge-roborock-matter` package, so select one build at a time.
+
+## Historical integration on upstream v3.39.0 (superseded)
 
 `SCHEDULE_PAUSE_DELAY` incorporates the revised PRs #30, #31, #32, #36,
 #37, #38 and #39, plus the separate local TCP-probe test fix. The native

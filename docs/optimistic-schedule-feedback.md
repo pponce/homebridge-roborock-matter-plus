@@ -3,7 +3,9 @@
 A HomeKit schedule write acknowledges acceptance immediately and displays the
 requested value while the existing write/reconciliation operation runs. The
 display is provisional; the cached schedule value remains the latest confirmed
-state. Repeated identical pending taps share one operation.
+state. Repeated identical pending taps share one operation. This keeps 3.40's
+HomeKit acknowledgement within its time limit, and adds immediate provisional
+feedback plus persisted confirmation/intent state.
 
 When confirmation succeeds the requested value becomes confirmed. When it fails
 or the operation reports that it did not execute, the characteristic returns to
@@ -52,8 +54,8 @@ provisional, and the failed-command 30-second cooldown is not armed. One follow-
 refresh is scheduled after three seconds, subject to the account queue and rate
 limit policy. A trusted read logs the resolved value and any display correction;
 failed or retained source data cannot confirm it. If that follow-up also fails,
-there is no automatic read loop: the next normal successful refresh logs the
-resolution. A new user request remains possible. Account-wide throttle protection
+that explicit follow-up is not repeated in a loop. Upstream's source-retry
+backoff and normal refreshes can later resolve the outcome, which is logged. A new user request remains possible. Account-wide throttle protection
 still applies.
 
 Real hap-nodejs tests exercise post-onSet ordering, cooldown correction, shutdown,

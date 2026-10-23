@@ -1,16 +1,14 @@
 # MQTT presence logging
 
 Retained broker snapshots stay at debug level and do not establish the live
-baseline. The first live presence report produces one informational message per
-robot during the plugin lifetime, saying online or offline without claiming a
-recovery. Reconnects do not reset that baseline. Repeated identical live values
-produce no further informational or warning messages. Later offline transitions
-are warnings; a later offline-to-online transition is reported as back online.
-DUP packets are processed because the earlier copy may never have arrived.
+baseline. The first live online report is informational and says "first", without
+claiming a recovery. The first live offline report is a warning, as are later
+offline transitions. Reconnects do not reset the baseline. Repeated identical
+live values produce no further informational or warning messages. A later
+offline-to-online transition is reported as back online. DUP packets are
+processed because the earlier copy may never have arrived.
 
-Cloud presence does not establish whether LAN commands can succeed. Logs avoid
-claiming that an offline notification makes every command fail. This changes
-logging only, not connectivity, command routing or recovery policy.
-
-This is the presence-only part of the discussion in upstream PR #36. Momentary
-action acknowledgement is a separate proposal with separate validation.
+Offline reports warn that cloud commands may fail. Only robots that support LAN
+commands, with cloud-only mode disabled, receive the additional explanation that
+LAN commands may still work. B01 robots, including Q7 models, do not receive that
+reassurance. This changes logging only, not connectivity, routing or recovery.

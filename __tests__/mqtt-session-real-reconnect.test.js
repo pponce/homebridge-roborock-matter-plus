@@ -24,20 +24,20 @@ async function until(predicate) {
 }
 
 test.each([false, true])(
-  "real mqtt.js reconnect and retained presence (recovery=%s)",
+  "a real dropped connection is replaced by a new client with a new id, which acknowledges generation 2 with one SUBSCRIBE per connection (recovery=%s)",
   async (enableMqttSessionRecovery) => {
     const connections = [];
     const errors = [];
     const callbackGrants = [];
+    const seenClients = new WeakSet();
     const presencePackets = [];
-    let realClient;
     let receivedSubacks = 0;
     const originalSubscribe = mqtt.MqttClient.prototype.subscribe;
     const spy = jest
       .spyOn(mqtt.MqttClient.prototype, "subscribe")
       .mockImplementation(function (...args) {
-        if (!realClient) {
-          realClient = this;
+        if (!seenClients.has(this)) {
+          seenClients.add(this);
           this.on("message", (_topic, _message, packet) =>
             presencePackets.push(packet)
           );
@@ -66,6 +66,8 @@ test.each([false, true])(
       socket.on("data", (bytes) => parser.parse(bytes));
       parser.on("packet", (packet) => {
         if (packet.cmd === "connect") {
+          connection.clientId = packet.clientId;
+          connection.username = packet.username;
           socket.write(
             mqttPacket.generate({
               cmd: "connack",
@@ -116,6 +118,9 @@ test.each([false, true])(
       },
     };
     const connector = new roborock_mqtt_connector(adapter);
+    // The back-off is 10 s in production; this fixture is real TCP and real
+    // time, so it waits 20 ms.
+    connector.reconnectDelays = { initialMs: 20, multiplier: 1.5, maxMs: 1000 };
     try {
       await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
       await connector.initUser({
@@ -163,13 +168,8 @@ test.each([false, true])(
         connected: true,
         subscriptionAcknowledged: false,
       });
-      expect(
-        callbackGrants.some(
-          ({ error, grants }) => !error && grants?.length === 0
-        )
-      ).toBe(true);
-      if (enableMqttSessionRecovery)
-        expect(connector.isConnected()).toBe(false);
+      // A new client subscribes afresh: no callback has fired for it yet.
+      expect(callbackGrants).toHaveLength(1);
       connections[1].socket.write(connections[1].pendingSuback);
       await until(() => receivedSubacks === 2);
       // This assertion fails on the old connector even though both SUBACKs arrived.
@@ -183,7 +183,12 @@ test.each([false, true])(
       expect(connections[1].subscriptions[0].subscriptions).toEqual(
         connections[0].subscriptions[0].subscriptions
       );
-      expect(connector.isConnected()).toBe(true);
+      // python-roborock never reuses an id; the account-wide username let any
+      // second client of the account take this session over.
+      expect(connections[0].clientId).toMatch(/^[0-9A-Za-z]{22}$/);
+      expect(connections[1].clientId).toMatch(/^[0-9A-Za-z]{22}$/);
+      expect(connections[1].clientId).not.toBe(connections[0].clientId);
+      expect(connections[1].username).toBe(connections[0].username);
       expect(errors).toEqual([]);
     } finally {
       connector.disconnect();

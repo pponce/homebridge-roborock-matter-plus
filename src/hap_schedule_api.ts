@@ -15,8 +15,6 @@ interface RoborockRequestOptions {
   preferLocal?: boolean;
   allowOfflineCloudSend?: boolean;
   requestTimeoutMs?: number;
-  cloudGateTimeoutMs?: number;
-  operationClass?: "read" | "write" | "fire-and-forget" | "secure-map";
   waitForResult?: boolean;
   throwOnError?: boolean;
 }
@@ -65,10 +63,7 @@ export async function getServerTimers(
   duid: string,
   options: RoborockRequestOptions = {}
 ): Promise<unknown> {
-  return api.getServerTimers(
-    duid,
-    scheduleRequestOptions({ ...options, operationClass: "read" })
-  );
+  return api.getServerTimers(duid, scheduleRequestOptions(options));
 }
 
 export async function updateServerTimer(
@@ -86,7 +81,6 @@ export async function updateServerTimer(
 
   const requestOptions = scheduleRequestOptions({
     ...options,
-    operationClass: "write",
     waitForResult: true,
     throwOnError: true,
   });
@@ -144,7 +138,6 @@ export async function updateTimer(
 
   const requestOptions = scheduleRequestOptions({
     ...options,
-    operationClass: "write",
     waitForResult: true,
     throwOnError: true,
   });

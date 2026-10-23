@@ -35,7 +35,6 @@ describe("Roborock vacuum command options", () => {
       {
         preferCloud: true,
         requestTimeoutMs: 2500,
-        operationClass: "write",
       }
     );
   });
@@ -87,11 +86,7 @@ describe("Roborock vacuum command options", () => {
       [],
       false,
       false,
-      {
-        preferCloud: true,
-        requestTimeoutMs: 15000,
-        operationClass: "read",
-      }
+      { preferCloud: true, requestTimeoutMs: 15000 }
     );
 
     expect(sendRequest).toHaveBeenNthCalledWith(
@@ -101,11 +96,7 @@ describe("Roborock vacuum command options", () => {
       ["timer-1", "off"],
       false,
       false,
-      {
-        preferCloud: true,
-        requestTimeoutMs: 15000,
-        operationClass: "write",
-      }
+      { preferCloud: true, requestTimeoutMs: 15000 }
     );
   });
 

@@ -144,10 +144,7 @@ describe("vacuum room mapping", () => {
     expect(adapter.messageQueueHandler.sendRequest).toHaveBeenCalledWith(
       "device-1",
       "app_segment_clean",
-      [{ segments: [101, 102], repeat: 2 }],
-      false,
-      false,
-      { operationClass: "write" }
+      [{ segments: [101, 102], repeat: 2 }]
     );
   });
 
@@ -160,10 +157,7 @@ describe("vacuum room mapping", () => {
     expect(adapter.messageQueueHandler.sendRequest).toHaveBeenCalledWith(
       "device-1",
       "load_multi_map",
-      [2],
-      false,
-      false,
-      { operationClass: "write" }
+      [2]
     );
     expect(adapter.updateRoomMappingCache).toHaveBeenCalledWith("device-1", 2, [
       [101, 55],
@@ -184,7 +178,7 @@ describe("vacuum room mapping", () => {
       ["get_status"],
       false,
       false,
-      { preferCloud: true, operationClass: "read" }
+      { preferCloud: true }
     );
   });
 

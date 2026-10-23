@@ -383,7 +383,6 @@ describe("HAP schedule names and stable group identity", () => {
         [["timer-complex", "on"]],
         {
           requestTimeoutMs: 10000,
-          operationClass: "write",
           preferCloud: true,
           waitForResult: true,
           throwOnError: true,
@@ -604,7 +603,7 @@ describe("HAP schedule names and stable group identity", () => {
 
       expect(platform.roborockAPI.getServerTimers).toHaveBeenCalledTimes(2);
       expect(platform.log.info).toHaveBeenCalledWith(
-        "Schedule reconciliation for device-1: requested=2; ambiguous=0; primaryConfirmed=1; retried=1; fallbackSent=1; failed=0."
+        "Schedule reconciliation for Test Vacuum: requested=2; ambiguous=0; primaryConfirmed=1; retried=1; fallbackSent=1; failed=0."
       );
       expect(
         switchService(accessory, "timer-1").getCharacteristic(Characteristic.On)

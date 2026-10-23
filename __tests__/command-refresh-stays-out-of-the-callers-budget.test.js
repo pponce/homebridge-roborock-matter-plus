@@ -136,14 +136,12 @@ describe("a state refresh never spends the caller's budget", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(transport.optionsFor("set_water_box_custom_mode")).toEqual({
-      operationClass: "write",
       preferCloud: true,
       requestTimeoutMs: PREP_WINDOW_MS,
     });
     // Same robot, same setting, so the same transport — a caller that asked for
     // cloud must not be handed a local request it never asked for.
     expect(transport.optionsFor("get_water_box_custom_mode")).toEqual({
-      operationClass: "read",
       preferCloud: true,
     });
     transport.cleanup();
@@ -182,6 +180,22 @@ describe("a state refresh never spends the caller's budget", () => {
     transport.cleanup();
   });
 
+  test("a B01 robot's command is not read back with a v1 read it cannot answer", async () => {
+    const transport = createTransport({ hangMs: 10 });
+    const adapter = createAdapter(transport);
+    adapter.isB01Device = () => true;
+    const robot = new vacuum(adapter, "roborock.vacuum.sc05");
+
+    await robot.command("device-1", "set_custom_mode", [3], {
+      throwOnError: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(transport.methods()).toEqual(["set_custom_mode"]);
+    expect(adapter.catchError).not.toHaveBeenCalled();
+    transport.cleanup();
+  });
+
   test("getParameter carries the caller's options on branches other than get_status", async () => {
     const transport = createTransport({ hangMs: 10 });
     const robot = new vacuum(createAdapter(transport), "roborock.vacuum.a144");
@@ -192,7 +206,6 @@ describe("a state refresh never spends the caller's budget", () => {
     });
 
     expect(transport.optionsFor("get_water_box_mode")).toEqual({
-      operationClass: "read",
       preferCloud: true,
       requestTimeoutMs: 1234,
     });

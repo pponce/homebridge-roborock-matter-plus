@@ -3,22 +3,24 @@
 The settings page's **Copy diagnostics** report includes an `mqttSession`
 snapshot. Cloud timeout messages append a short summary only for correlated
 silence or an unacknowledged subscription; the full snapshot stays in diagnostics.
-The observations do not change transport selection, subscription handling,
-request readiness, retries, or reconnection. The breaker integration below uses
-the measured signal to avoid counting account-session failures against methods.
+The connector uses the connection and subscription observations to gate cloud
+sends. Readiness expiry is an unsent transport failure. The breaker integration
+below uses correlated silence only for requests that were actually published.
 
-- `generation` increments on each MQTT connect event, including automatic
-  reconnects. It restarts with the plugin process; it is not a broker session ID.
+- `generation` increments on each MQTT connect event, including reconnects.
+  Every connection is a new mqtt.js client with its own random client id; the
+  connector opens it after a 10 s back-off growing by 1.5 up to 10 minutes.
+  It restarts with the plugin process; it is not a broker session ID.
 - `connected` and `subscriptionAcknowledged` are separate observations. The latter
   observes successful SUBACK packets through the current client's `packetreceive`
-  event, including mqtt.js automatic resubscriptions after reconnect. Nonempty
+  event. Nonempty
   connect-handler callback grants also record the result for their captured
   generation. mqtt.js can call back with no error and an empty granted list for
   a topic it already knows; this is a no-op, not an acknowledgement or refusal.
   Failed subscriptions and refused SUBACK grants remain unacknowledged. Late
-  callbacks from older connections and the legacy reconnect-handler callback
-  cannot acknowledge or revoke the new generation. The existing subscribe calls
-  remain unchanged; this does not gate sends. The timeout summary only says
+  callbacks from older connections cannot acknowledge or revoke the new
+  generation. The existing subscribe calls
+  remain unchanged; sends wait for an acknowledged reply subscription. The timeout summary only says
   "subscription not acknowledged" when the session is still connected.
 - Inbound ages distinguish the raw MQTT callback, attribution to a known robot,
   successful Roborock decoding, and correlation to a pending request. A correlated
@@ -46,7 +48,13 @@ one did, and `null` means no eligible timeout has been observed. It is useful
 on single-robot accounts without relaxing the two-robot correlation rule.
 `lastReadTimeoutAgeMs` dates that observation at `capturedAt`; later traffic
 does not rewrite the historical result. Disconnect and connect reset both
-fields. Writes, B01 translated reads, and old-generation timeouts cannot
+fields. `lastEligibleRead` separately retains the latest eligible timeout across
+connections, including its original `generation`, `rawSilenceDuringRequest`, and
+`ageMs` at snapshot capture. It is initially null, changes only on an eligible
+read timeout, and is not used by recovery or breaker decisions. This lets a
+report distinguish historical evidence from the new session's current state;
+the hourly per-robot transport lines remain the broader traffic summary.
+Writes, B01 translated reads, and old-generation timeouts cannot
 supply this observation. An idle or non-answering robot can produce raw silence
 on a healthy session: this is evidence to inspect, not a session-fault verdict
 or a reason to change breaker/recovery policy in this PR.
@@ -75,7 +83,7 @@ The reconnect regression uses the real mqtt.js client and production connector
 against a loopback TCP broker implemented with mqtt.js's MQTT packet codec. It
 drops the socket, withholds the second SUBACK, and verifies generation 2 becomes
 acknowledged only after that packet arrives. It also checks the broker receives
-exactly one SUBSCRIBE per connection. No Roborock account or external broker is
+exactly one SUBSCRIBE per connection, and a different client id on each. No Roborock account or external broker is
 used. Upstream v3.36.0's recovery policy remains unchanged by this instrumentation.
 
 ## Breaker integration

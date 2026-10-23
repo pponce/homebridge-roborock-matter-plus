@@ -3,21 +3,22 @@
 const DEFAULT_PREVENTIVE_REFRESH_MINUTES = 240;
 const COOLDOWN_MS = 60_000;
 const SILENCE_COOLDOWN_MS = 30 * 60_000;
-const READY_TIMEOUT_MS = 20_000;
+const READY_TIMEOUT_MS = 30_000; // 10 s upstream backoff + 20 s for connect/SUBACK.
 const DRAIN_MS = 500;
 
-// Shared client replacement lifecycle. Correlated and preventive triggers remain opt-in.
+// Optional triggers and request draining; the connector owns client replacement and retry backoff.
 class MqttSessionRecovery {
   constructor(connector) {
     this.connector = connector;
     this.adapter = connector.adapter;
     this.preventiveRefreshEnabled =
-      this.adapter.config?.enableMqttSessionRecovery === true &&
-      this.adapter.config?.enableMqttPreventiveRefresh === true;
-    const configuredMinutes = this.adapter.config?.mqttPreventiveRefreshMinutes;
+      this.adapter.config.enableMqttPreventiveRefresh === true;
+    const minutes = this.adapter.config.mqttPreventiveRefreshMinutes;
     this.preventiveRefreshMinutes =
-      Number.isSafeInteger(configuredMinutes) && configuredMinutes >= 1
-        ? configuredMinutes
+      Number.isSafeInteger(minutes) &&
+      minutes >= 1 &&
+      Number.isSafeInteger(minutes * 60_000)
+        ? minutes
         : DEFAULT_PREVENTIVE_REFRESH_MINUTES;
     /** @type {string | null} */
     this.lastReason = null;
@@ -31,11 +32,10 @@ class MqttSessionRecovery {
     this.failures = 0;
     this.waits = new Set();
     this.timer = null;
-    this.retryTimer = null;
   }
 
   // Connection listeners and logging are installed by the same connector path
-  // as ordinary MQTT. They use v3.39.0's listen/whileCurrent retirement guards.
+  // as ordinary MQTT. They use upstream's listen/whileCurrent retirement guards.
   install() {
     if (!this.timer) {
       this.timer = setInterval(() => {
@@ -59,8 +59,6 @@ class MqttSessionRecovery {
       if (!this.recovering && this.lastResult === "failed") {
         this.lastResult = "recovered";
         this.failures = 0;
-        clearTimeout(this.retryTimer);
-        this.retryTimer = null;
       }
     } else {
       this.readyAt = null;
@@ -81,6 +79,15 @@ class MqttSessionRecovery {
       enabled: true,
       preventiveRefreshEnabled: this.preventiveRefreshEnabled,
       preventiveRefreshMinutes: this.preventiveRefreshMinutes,
+      preventiveRemainingMs:
+        this.readyAt === null
+          ? null
+          : Math.max(
+              0,
+              this.preventiveRefreshMinutes * 60_000 -
+                (performance.now() - this.readyAt)
+            ),
+      waitingForIdle: this.lastResult === "deferred",
       inProgress: this.recovering,
       lastReason: this.lastReason,
       lastResult: this.lastResult,
@@ -126,15 +133,13 @@ class MqttSessionRecovery {
       (request.abandon ?? request.reject)(
         Object.assign(
           new Error(
-            this.stopped
-              ? "MQTT is shutting down before a reply arrived. The command outcome is unknown; it was not replayed."
-              : "The MQTT session was replaced before a reply arrived. The command outcome is unknown; it was not replayed."
+            "The MQTT session was replaced before a reply arrived. The command outcome is unknown; it was not replayed."
           ),
           {
             code: "MQTT_SESSION_REPLACED",
             generation:
               request.sessionGeneration ??
-              this.connector.getSessionGeneration(),
+              this.connector.sessionDiagnostics.generation,
             method: request.method,
             operationClass: request.operationClass,
             ambiguousWrite: request.operationClass === "write",
@@ -160,20 +165,11 @@ class MqttSessionRecovery {
     });
   }
 
-  async close(candidate) {
-    if (!candidate) return;
-    // Keep mqtt.js's own close/error listeners so its CONNACK timer is cleared.
-    // The connector's listen/whileCurrent wrappers ignore the retired client.
-    if (this.connector.client === candidate) this.connector.client = undefined;
-    if (candidate.endAsync) {
-      const timeout = this.pause(2000);
-      const cancel = [...this.waits].at(-1);
-      try {
-        await Promise.race([candidate.endAsync(true), timeout]);
-      } finally {
-        cancel?.();
-      }
-    } else candidate.end(true);
+  busy() {
+    return (
+      this.pending().length > 0 ||
+      this.adapter.config.isScheduleOperationPending?.() === true
+    );
   }
 
   canRecoverSilence() {
@@ -193,12 +189,10 @@ class MqttSessionRecovery {
       !this.canRecoverSilence()
     )
       return Promise.resolve(false);
-    if (this.stopped || performance.now() < this.nextAllowedAt) {
-      if (!this.stopped) this.connector.sessionDiagnostics.emit(true);
+    if (this.stopped || performance.now() < this.nextAllowedAt)
       return Promise.resolve(false);
-    }
     // A busy preventive refresh defers before touching the shared send gate.
-    if (reason === "preventive" && this.pending().length) {
+    if (reason === "preventive" && (!this.connector.isReady() || this.busy())) {
       this.lastReason = reason;
       this.lastResult = "deferred";
       this.connector.sessionDiagnostics.emit(true);
@@ -208,7 +202,7 @@ class MqttSessionRecovery {
     this.lastReason = reason;
     this.lastResult = "in-progress";
     this.adapter.log.info(
-      `MQTT session recreation starting: reason=${reason}; generation=${this.connector.getSessionGeneration()}.`
+      `MQTT refresh starting: reason=${reason}; generation=${this.connector.sessionDiagnostics.generation}.`
     );
     this.recovering = true;
     this.sendPaused = true;
@@ -242,7 +236,7 @@ class MqttSessionRecovery {
       // Never deliberately interrupt an active request for an age refresh.
       // New inbound evidence during a reactive drain also cancels the need.
       if (
-        (reason === "preventive" && this.pending().length) ||
+        (reason === "preventive" && this.busy()) ||
         (reason === "correlated-silence" &&
           before.rawSequence !==
             connector.sessionDiagnostics.captureRequest().rawSequence)
@@ -258,21 +252,18 @@ class MqttSessionRecovery {
         }
         this.adapter.cloudSessionHealth.consecutiveSilences = 0;
       }
-      this.rejectPending();
-      connector.discardSessionFragments();
-      connector.connected = false;
-      connector.sessionDiagnostics.onDisconnect();
-      this.readyAt = null;
-      await this.close(connector.client);
-      if (this.stopped) return false;
-      connector.createClient();
-      await connector.initMQTT_Subscribe();
-      await connector.initMQTT_Message();
-      // The new client's SUBACK now owns readiness. Use the same gate as every
-      // ordinary cloud request; there is no second assertCanSend policy.
+      // Share upstream's one replacement path, random client IDs and 10 s x1.5
+      // retry backoff. An age refresh never runs its own reconnect loop.
+      const started = await connector.reconnectClient(true);
+      if (!started && !connector.reconnectTimer) {
+        this.lastResult = "deferred";
+        return false;
+      }
       this.sendPaused = false;
       connector.readiness.changed();
-      await connector.waitUntilReady({ timeoutMs: READY_TIMEOUT_MS });
+      // Observing our own replacement is not an unsent user request and must
+      // not increment #37's connected/unsubscribed expiry counter.
+      await connector.readiness.wait(READY_TIMEOUT_MS);
       if (this.stopped) return false;
       this.lastResult = "succeeded";
       this.failures = 0;
@@ -291,24 +282,11 @@ class MqttSessionRecovery {
         15 * 60_000
       );
       this.nextAllowedAt = performance.now() + backoff;
-      // Leave a disconnected replacement alive: mqtt.js keeps reconnecting.
-      // A connected client with a missing/refused SUBACK (or a synchronous
-      // creation failure with no client) needs a bounded fresh attempt instead.
-      clearTimeout(this.retryTimer);
-      this.retryTimer = setTimeout(() => {
-        this.retryTimer = null;
-        if (
-          !this.stopped &&
-          (!connector.client || (connector.connected && !connector.isReady()))
-        ) {
-          void this.recreate("connection-unavailable");
-        }
-      }, backoff);
-      this.retryTimer.unref?.();
-      if (!this.stopped)
-        this.adapter.log.warn(
-          `MQTT session recreation failed: reason=${reason}; retryCooldownMs=${backoff}; ${error.message}. The client keeps reconnecting in the background.`
-        );
+      // Ordinary reconnect/backoff and #37's SUBACK recovery remain in charge.
+      // No second retry timer competes with the connector.
+      this.adapter.log.warn(
+        `MQTT refresh did not become ready: reason=${reason}; ${error.message}. Upstream reconnect and subscription recovery remain active.`
+      );
       return false;
     }
   }
@@ -316,8 +294,6 @@ class MqttSessionRecovery {
   stop() {
     if (this.recovering) this.lastResult = "stopped";
     this.stopped = true;
-    clearTimeout(this.retryTimer);
-    this.retryTimer = null;
     clearInterval(this.timer);
     this.timer = null;
     for (const finish of [...this.waits]) finish();

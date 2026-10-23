@@ -70,9 +70,9 @@ jobs:
       - run: npm test -- --coverage --runInBand
         env:
           CI: true
-      - name: Run Node diagnostic tests
+      - name: Run native schedule tests
         run: node --test tests/*.test.cjs
-      - name: Run Python diagnostic tests
+      - name: Run schedule diagnostic tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
       - name: Upload coverage to Codecov
         run: |

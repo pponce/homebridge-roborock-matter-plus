@@ -4,10 +4,14 @@ Cloud RPCs wait up to 10 seconds for the current MQTT connection's reply
 subscription to be acknowledged. TCP connect alone is insufficient. mqtt.js can
 acknowledge a reconnect through a real SUBACK while its subscribe callback returns
 an empty list; the gate uses the existing session observations for that case.
-The gate observes connection state: it does not restart MQTT or replay commands.
+The gate observes connection state and never replays commands. After three
+consecutive readiness expiries on a connected but unsubscribed client, the
+connector requests a fresh session using the existing 30-minute health-restart
+cooldown. Disconnected expiries do not count. A successful SUBACK or disconnect
+resets that streak. Reconnection keeps 3.40's new-client-per-connection backoff.
 Requests with a working LAN route do not wait on MQTT, including `preferCloud`
 requests while MQTT is disconnected or still awaiting SUBACK. Cloud-only, remote,
-secure, photo and B01 operations still require MQTT. Readiness is event-driven: a
+secure, map/network-info and B01 operations still require MQTT. Readiness is event-driven: a
 SUBACK wakes waiting requests; each has one deadline timer, with no polling or
 repeated diagnostics snapshots.
 
@@ -21,8 +25,10 @@ in addition to payload building, existing operation queues and any caller retrie
 If readiness expires, the promise rejects with `MQTT_READINESS_TIMEOUT`,
 `requestNotSent: true`, and `unansweredRequest: false`. The message says the reply
 subscription did not become ready and the command was not sent. There is no robot
-timeout, breaker increment, silence-recovery evidence, delayed publication, or
-automatic replay from this gate. Disconnect cancels outstanding waits.
+timeout, method-breaker increment, delayed publication, or automatic replay.
+Connected-but-unsubscribed expiries can request the bounded health restart above.
+Shutdown cancels outstanding waits. With neither LAN nor ready MQTT available,
+a command waits up to 10 seconds before failing as unsent.
 
 ## What the user sees
 
@@ -35,9 +41,9 @@ no new "waiting for MQTT" tile or progress indicator.
   state. Home may briefly show the requested state before that correction.
 - Existing HAP handlers that await the operation remain pending for longer. Their
   existing catch paths determine whether the error is returned or merely logged.
-  In v3.39.0 a refused schedule write throws `HapStatusError`, preserving its
-  previous HAP value. Controller-specific error presentation still requires a
-  live check.
+  Schedule switches in 3.40 answer HomeKit within 2.5 seconds and confirm in
+  the background; a later failure rolls the switch back. Controller-specific
+  error presentation still requires a live check.
 - Background polling has no user command to acknowledge. The failed read follows
   the existing diagnostics path and leaves the last reported robot state in place.
 

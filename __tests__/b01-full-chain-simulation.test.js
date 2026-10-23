@@ -142,8 +142,16 @@ describe("Full-chain simulation: two Q7s + one classic robot", () => {
         return null;
       }),
     };
+    // The map request resolves with the saved map, decoded once where the
+    // 301 frame arrives (onB01MapFrame), through the REAL decode chain.
+    const b01 = require("../roborockLib/lib/b01Q7Adapter");
     api.sendB01MapRequest = jest.fn(async () =>
-      Buffer.from(MAP_FIXTURE.payloadBase64, "ascii")
+      b01.parseScMapLiveState(
+        b01.decodeMapPayload(
+          Buffer.from(MAP_FIXTURE.payloadBase64, "ascii"),
+          b01.createMapKey(MAP_FIXTURE.serial, MAP_FIXTURE.model)
+        )
+      )
     );
     // v1 runtime networking is out of scope here.
     api.getNetworkInfo = jest.fn(async () => undefined);
@@ -275,9 +283,9 @@ describe("Full-chain simulation: two Q7s + one classic robot", () => {
     const areaPublish = [...matterUpdates]
       .reverse()
       .find((u) => u.uuid === `uuid-${GARAGE}` && u.cluster === "serviceArea");
-    expect(areaPublish.attributes.currentArea).toBe(
-      MAP_FIXTURE.expectedRooms[0].roomId
-    );
+    // Not named until live tracking or the robot's own room-clean report
+    // says the robot is in it.
+    expect(areaPublish.attributes.currentArea).toBeNull();
     expect(areaPublish.attributes.progress).toEqual([
       { areaId: MAP_FIXTURE.expectedRooms[0].roomId, status: 1 },
     ]);

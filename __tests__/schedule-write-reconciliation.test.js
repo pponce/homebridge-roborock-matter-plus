@@ -361,22 +361,52 @@ test("verification does not adopt a read started before the write completed", as
 });
 
 test("verification waits for an optional existing recovery without starting one", async () => {
-  let finishRecovery;
-  connector.recovery = {
-    inFlight: new Promise((resolve) => {
-      finishRecovery = resolve;
-    }),
-    observeTimeout: jest.fn(),
-  };
-  const restart = jest.spyOn(connector, "reconnectClient");
-  writes.push({ apply: true, reply: false });
-  const operation = coordinator.executeScheduleWriteBatch([request()]);
-  await jest.advanceTimersByTimeAsync(10_001);
-  expect(events.map((e) => e.method)).toEqual(["upd_server_timer"]);
-  finishRecovery(true);
-  await jest.advanceTimersByTimeAsync(120_000);
-  expect((await operation).size).toBe(0);
-  expect(writeEvents()).toHaveLength(1);
-  expect(events.at(-1).method).toBe("get_server_timer");
-  expect(restart).not.toHaveBeenCalled();
+  const originalRecovery = connector.recovery;
+  try {
+    let finishRecovery;
+    connector.recovery = {
+      inFlight: new Promise((resolve) => {
+        finishRecovery = resolve;
+      }),
+      observeTimeout: jest.fn(),
+    };
+    const restart = jest.spyOn(connector, "reconnectClient");
+    writes.push({ apply: true, reply: false });
+    const operation = coordinator.executeScheduleWriteBatch([request()]);
+    await jest.advanceTimersByTimeAsync(10_001);
+    expect(events.map((e) => e.method)).toEqual(["upd_server_timer"]);
+    finishRecovery(true);
+    await jest.advanceTimersByTimeAsync(120_000);
+    expect((await operation).size).toBe(0);
+    expect(writeEvents()).toHaveLength(1);
+    expect(events.at(-1).method).toBe("get_server_timer");
+    expect(restart).not.toHaveBeenCalled();
+  } finally {
+    // Restore the actual lifecycle before the connector's shutdown hook runs.
+    connector.recovery = originalRecovery;
+  }
 });
+
+test.each([true, false])(
+  "timer read matches requested state=%s while scenes are throttled: no fallback and cooldown stays armed",
+  async (applied) => {
+    const throttle = Object.assign(new Error("Too many requests"), {
+      response: { status: 429 },
+    });
+    adapter.getCloudScenes.mockRejectedValue(throttle);
+    writes.push({ apply: applied, reply: true });
+    const failures = await run();
+    expect(failures.has("timer-1")).toBe(!applied);
+    if (!applied) expect(failures.get("timer-1")).toBe(throttle);
+    expect(writeEvents()).toHaveLength(1);
+    expect(coordinator.cachedSchedules[0].enabled).toBe(applied);
+    expect(coordinator.accountCoordinator.currentThrottleError()).toBe(
+      throttle
+    );
+    expect(adapter.log.info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `primaryConfirmed=${applied ? 1 : 0}; retried=0; fallbackSent=0; failed=${applied ? 0 : 1}`
+      )
+    );
+  }
+);

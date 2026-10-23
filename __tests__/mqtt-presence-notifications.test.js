@@ -9,10 +9,12 @@ const {
   roborock_mqtt_connector,
 } = require("../roborockLib/lib/roborock_mqtt_connector");
 
-async function setup() {
+async function setup({ b01 = false, cloudOnly = false } = {}) {
   const logs = { debug: [], info: [], warn: [], error: [] };
   const adapter = {
     config: {},
+    isB01Device: () => b01,
+    isCloudOnlyModeEnabled: () => cloudOnly,
     localKeys: new Map([
       ["robot-1", "test-key"],
       ["robot-2", "test-key"],
@@ -53,21 +55,36 @@ async function setup() {
 }
 
 describe("MQTT presence notifications", () => {
+  test.each([{ b01: true }, { cloudOnly: true }])(
+    "cloud-only robots do not get a LAN reassurance (%j)",
+    async (options) => {
+      const { logs, emit } = await setup(options);
+      emit(false);
+      emit(true);
+      emit(false);
+      expect(logs.warn).toHaveLength(2);
+      for (const line of logs.warn) {
+        expect(line).toContain("Cloud commands may fail.");
+        expect(line).not.toContain("LAN");
+      }
+    }
+  );
   test.each([true, false, 1, 0])(
-    "first live report %s is informational exactly once",
+    "first live report %s uses the appropriate severity exactly once",
     async (value) => {
       const { logs, connector, emit } = await setup();
       emit(value);
       emit(value);
       emit(value, { dup: true });
-      expect(logs.info).toEqual([
+      const firstLogs = value ? logs.info : logs.warn;
+      expect(firstLogs).toEqual([
         expect.stringContaining(
           `first live MQTT presence report is ${value ? "online" : "offline"}`
         ),
       ]);
-      expect(logs.info[0]).toContain("Test Robot One");
-      expect(logs.info[0]).not.toContain("back online");
-      expect(logs.warn).toHaveLength(0);
+      expect(firstLogs[0]).toContain("Test Robot One");
+      expect(firstLogs[0]).not.toContain("back online");
+      expect(value ? logs.warn : logs.info).toHaveLength(0);
       expect(connector.robotPresenceByDuid.get("robot-1")).toBe(Boolean(value));
     }
   );
@@ -96,7 +113,7 @@ describe("MQTT presence notifications", () => {
     emit(true);
     expect(logs.warn).toEqual([
       expect.stringContaining(
-        "does not by itself prove that local or cloud commands will fail"
+        "Cloud commands may fail. LAN commands may still work."
       ),
     ]);
     expect(logs.info).toHaveLength(2);
@@ -107,8 +124,9 @@ describe("MQTT presence notifications", () => {
     emit(false);
     emit(true, {}, "robot-2");
     emit(true, {}, "robot-2");
-    expect(logs.info).toHaveLength(2);
-    expect(logs.info[0]).toContain("Test Robot One");
-    expect(logs.info[1]).toContain("Test Robot Two");
+    expect(logs.warn).toHaveLength(1);
+    expect(logs.info).toHaveLength(1);
+    expect(logs.warn[0]).toContain("Test Robot One");
+    expect(logs.info[0]).toContain("Test Robot Two");
   });
 });

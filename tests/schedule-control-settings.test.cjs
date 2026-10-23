@@ -45,6 +45,10 @@ function harness(saved) {
         value = String(next);
       },
       checked: /\bchecked\b/.test(attributes),
+      options: [],
+      appendChild(option) {
+        this.options.push(option);
+      },
       classList: {
         add: (s) => classes.add(s),
         remove: (s) => classes.delete(s),
@@ -59,6 +63,7 @@ function harness(saved) {
     setTimeout: () => 0,
     clearTimeout() {},
     document: {
+      createElement: () => ({ value: "", textContent: "" }),
       getElementById: (id) => elements.get(id) || null,
       addEventListener() {},
     },

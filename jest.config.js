@@ -1,7 +1,5 @@
 module.exports = {
   testEnvironment: "node",
-  // The diagnostic .cjs suites use node:test, not Jest. CI runs them with
-  // `node --test tests/*.test.cjs` in a separate required step.
   testPathIgnorePatterns: [
     "/node_modules/",
     "/dist/",
@@ -21,9 +19,5 @@ module.exports = {
   // Individual real-I/O tests still set their own higher ceiling where a cold
   // interpreter start is involved.
   testTimeout: 20_000,
-  collectCoverageFrom: [
-    "roborockLib/**/*.js",
-    "!roborockLib/lib/sniffing/**",
-    "!roborockLib/lib/map/**",
-  ],
+  collectCoverageFrom: ["roborockLib/**/*.js"],
 };

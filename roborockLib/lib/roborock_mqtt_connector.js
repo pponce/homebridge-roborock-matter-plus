@@ -12,13 +12,44 @@ const {
   createRefusalError,
 } = require("./describeReplyRefusal");
 
-const { MqttSessionRecovery } = require("./mqttSessionRecovery");
 const { MqttReadiness } = require("./mqttReadiness");
+const { MqttSessionRecovery } = require("./mqttSessionRecovery");
 
 const { MqttSessionDiagnostics } = require("./mqttSessionDiagnostics");
 
-const PHOTO_MAGIC = "ROBOROCK";
-const PHOTO_HEADER_MIN_LENGTH = 9;
+// python-roborock's MQTT reconnect policy (mqtt/roborock_session.py):
+// MIN_BACKOFF_INTERVAL 10 s, BACKOFF_MULTIPLIER 1.5, back to 10 s after every
+// successful connect. Its 6-hour ceiling exists for rate-limited or
+// unauthorised accounts, which python-roborock hands to a re-authentication
+// hook this plugin does not have; here a dead network is retried at most every
+// 10 minutes, so the cloud is back within 10 minutes of the network, and an
+// outage costs 6 attempts an hour instead of mqtt.js's one a second.
+const MQTT_RECONNECT_DELAYS = Object.freeze({
+  initialMs: 10_000,
+  multiplier: 1.5,
+  maxMs: 10 * 60_000,
+});
+const CLIENT_ID_ALPHABET =
+  "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/**
+ * A client id of its own for every connection: 22 random base-62 characters,
+ * as python-roborock generated them before it moved to broker-assigned ids
+ * (`mqtt.base62(uuid4().int, padding=22)`). Within MQTT 3.1.1's guaranteed
+ * 1–23 characters of [0-9a-zA-Z]. The account-wide username used to double
+ * as the id, so any second client of the account — another Homebridge, the
+ * ioBroker adapter, an overlapping restart — took the session over.
+ *
+ * @returns {string}
+ */
+function randomClientId() {
+  let id = "";
+  for (let i = 0; i < 22; i += 1) {
+    id += CLIENT_ID_ALPHABET[crypto.randomInt(CLIENT_ID_ALPHABET.length)];
+  }
+  return id;
+}
+
 const PROTOCOL_301_HEADER_LENGTH = 24;
 
 const protocol301Parser = new Parser()
@@ -32,24 +63,6 @@ const protocol301Parser = new Parser()
   .buffer("unknown2", {
     length: 6,
   });
-
-const photoParser = new Parser()
-  .endianess("little")
-  .string("roborock", {
-    length: 8,
-    stripNull: true,
-  })
-  .uint8("id");
-
-// Per robot, not per process. These were module-level `let`s shared by every
-// robot on the account until 3.31.0, and they are only cleared when a photo
-// transfer COMPLETES. One transfer that started and never finished — a robot
-// going offline between chunk 1 and chunk 2 is enough — left `photoChunkID`
-// set forever, and from then on every protocol 301 frame with `seq == 2`
-// from ANY robot was swallowed into that stale photo buffer instead of being
-// decoded as a map reply. On a multi-robot account that is a permanent,
-// silent map outage with no error anywhere.
-const photoBuffers = new Map();
 
 // How many protocol-301 frames have been discarded per robot, and why.
 //
@@ -149,15 +162,6 @@ function resetFrameCounters() {
   droppedFrames.clear();
 }
 
-function photoBufferFor(duid) {
-  let entry = photoBuffers.get(duid);
-  if (!entry) {
-    entry = { chunks: [], chunkId: 0 };
-    photoBuffers.set(duid, entry);
-  }
-  return entry;
-}
-
 /**
  * True when a protocol-102 result is a bare "command accepted" acknowledgement
  * rather than real data. Roborock sends this as the single-element array
@@ -191,25 +195,6 @@ function shouldResolveOn102(pending, result) {
   return !(pending.secure === true && isOkAcknowledgement(result));
 }
 
-function payloadStartsWith(payload, value) {
-  return (
-    Buffer.isBuffer(payload) &&
-    payload.length >= value.length &&
-    payload.subarray(0, value.length).toString("utf8") === value
-  );
-}
-
-function parsePhotoPayload(payload) {
-  if (
-    !payloadStartsWith(payload, PHOTO_MAGIC) ||
-    payload.length < PHOTO_HEADER_MIN_LENGTH
-  ) {
-    return null;
-  }
-
-  return photoParser.parse(payload);
-}
-
 function parseProtocol301Header(payload) {
   if (
     !Buffer.isBuffer(payload) ||
@@ -226,17 +211,19 @@ function parseProtocol301Header(payload) {
 class roborock_mqtt_connector {
   constructor(adapter) {
     this.adapter = adapter;
-    this.lifecycle = new MqttSessionRecovery(this);
     this.recovery =
       adapter.config?.enableMqttSessionRecovery === true
-        ? this.lifecycle
+        ? new MqttSessionRecovery(this)
         : null;
-    this.activityByDuid = new Map();
     // Last live presence value per robot; log suppression only.
     this.robotPresenceByDuid = new Map();
+    this.activityByDuid = new Map();
 
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
-      this.lifecycle?.onSessionChanged();
+      this.recovery?.onSessionChanged();
+      if (!snapshot.connected || snapshot.subscriptionAcknowledged) {
+        this.unsubscribedExpiries = 0;
+      }
       this.readiness?.changed();
       Promise.resolve(
         this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
@@ -250,19 +237,35 @@ class roborock_mqtt_connector {
     });
     this.readiness = new MqttReadiness(
       () =>
-        !this.lifecycle?.sendPaused &&
-        !this.lifecycle?.stopped &&
+        !this.recovery?.sendPaused &&
+        !this.recovery?.stopped &&
         this.sessionDiagnostics.connected &&
         this.sessionDiagnostics.subscriptionAcknowledged,
       () => this.sessionDiagnostics.generation
     );
+    this.unsubscribedExpiries = 0;
     this.connected = false;
+    // Which MQTT connection is current: a new number on every connect, so a
+    // request can tell "the link I went out on is still up" from "a link is
+    // up" across a session restart.
+    this.linkId = 0;
     this.initialConnectTimeout = null;
+    // Reconnects are the connector's, not mqtt.js's: every connection is a
+    // new client with a new id, after python-roborock's back-off.
+    this.reconnectDelays = { ...MQTT_RECONNECT_DELAYS };
+    this.reconnectDelayMs = this.reconnectDelays.initialMs;
+    /** @type {ReturnType<typeof setTimeout> | null} */
+    this.reconnectTimer = null;
+    this.sessionWanted = false;
+    this.connectionEventsWanted = false;
+    /** @type {((topic: string, message: Buffer, packet?: { retain?: boolean, dup?: boolean }) => void) | null} */
+    this.messageHandler = null;
+    /** @type {Set<(connected: boolean) => void>} see waitUntilConnected */
+    this.connectWaiters = new Set();
 
     // NOTE: this class previously generated its own RSA-2048 keypair here,
-    // but nothing ever read it — the protocol keypair lives in message.js
-    // (lazily created for the rare photo path). Removed: one full RSA
-    // keygen less at every startup.
+    // but nothing ever read it. Removed: one full RSA keygen less at every
+    // startup.
   }
 
   async initUser(userdata) {
@@ -272,11 +275,7 @@ class roborock_mqtt_connector {
     // old one still delivered every frame and was never ended at shutdown.
     this.disconnect();
     this.readiness.start();
-    this.lifecycle = new MqttSessionRecovery(this);
-    this.recovery =
-      this.adapter.config?.enableMqttSessionRecovery === true
-        ? this.lifecycle
-        : null;
+    if (this.recovery) this.recovery = new MqttSessionRecovery(this);
     this.rriot = userdata.rriot;
 
     this.endpoint = roborockCrypto
@@ -289,12 +288,24 @@ class roborock_mqtt_connector {
     this.mqttPassword = roborockCrypto
       .md5hex(this.rriot.s + ":" + this.rriot.k)
       .substring(16);
-    this.createClient();
+    // A new session from scratch: initMQTT_Subscribe and initMQTT_Message say
+    // again which listeners it wants.
+    this.connectionEventsWanted = false;
+    this.messageHandler = null;
+    this.sessionWanted = true;
+    this.reconnectDelayMs = this.reconnectDelays.initialMs;
+    this.openClient();
   }
 
-  createClient() {
+  /**
+   * A new mqtt.js client for one connection, with whatever listeners the
+   * connector has been asked for. python-roborock builds a new client for
+   * every connection as well (`_run_reconnect_loop`), so nothing of a session
+   * that went bad — its id, its stores, its timers — reaches the next one.
+   */
+  openClient() {
     this.client = mqtt.connect(this.rriot.r.m, {
-      clientId: this.mqttUser,
+      clientId: randomClientId(),
       username: this.mqttUser,
       password: this.mqttPassword,
       keepalive: 30,
@@ -304,17 +315,70 @@ class roborock_mqtt_connector {
       // already reported as failed would reach the robot minutes later.
       // python-roborock refuses to publish while disconnected; so does this.
       queueQoSZero: false,
+      // mqtt.js would reconnect this same client every second, with the same
+      // id; scheduleReconnect builds a new one after python-roborock's
+      // back-off instead.
+      reconnectPeriod: 0,
     });
+    if (this.connectionEventsWanted) {
+      this.installConnectionEvents();
+    }
+    if (this.messageHandler) {
+      this.listen("message", this.messageHandler);
+    }
+  }
+
+  /**
+   * Open a new client after the back-off: 10 s after a connection that had
+   * been up, growing by 1.5 for every attempt that fails, up to 10 minutes.
+   *
+   * @returns {number | null} the delay, or null when one is already armed or
+   *   the session is shut down
+   */
+  scheduleReconnect() {
+    if (!this.sessionWanted || this.reconnectTimer) {
+      return null;
+    }
+    const delayMs = this.reconnectDelayMs;
+    this.reconnectDelayMs = Math.min(
+      delayMs * this.reconnectDelays.multiplier,
+      this.reconnectDelays.maxMs
+    );
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (!this.sessionWanted || this.connected) {
+        return;
+      }
+      const previous = this.client;
+      this.openClient();
+      // Let go of the closed one. Its listeners stay and ignore it (see
+      // listen); end() only makes sure nothing of it is left running.
+      if (previous && previous !== this.client) {
+        try {
+          previous.end(true);
+        } catch (error) {
+          this.adapter.log.debug(
+            `Ending the previous MQTT client failed: ${error?.message || error}`
+          );
+        }
+      }
+    }, delayMs);
+    if (typeof this.reconnectTimer?.unref === "function") {
+      this.reconnectTimer.unref();
+    }
+    return delayMs;
+  }
+
+  clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
   }
 
   async initMQTT_Subscribe() {
-    this.installClientEvents();
-    this.recovery?.install(this.client);
-  }
-
-  installClientEvents() {
-    if (!this.client || this.eventsInstalledFor === this.client) return;
-    this.eventsInstalledFor = this.client;
+    if (this.connectionEventsWanted && this.eventsInstalledFor === this.client)
+      return;
     // This used to invoke a `restart` method on the adapter, which the
     // Roborock class has never had — so on the one path it was written for
     // (the broker
@@ -322,9 +386,9 @@ class roborock_mqtt_connector {
     // boots before the network is up, or a SYN black-holed by a firewall) it
     // threw a TypeError inside an async timer. That is an unhandled rejection,
     // which terminates the Homebridge process under Node's default policy —
-    // the exact opposite of the intended recovery. mqtt.js already retries on
-    // its own reconnectPeriod, so the correct behaviour here is to say so
-    // clearly and let it keep trying. The handle is stored and unref'd so
+    // the exact opposite of the intended recovery. The connector already
+    // retries on its own back-off (scheduleReconnect), so the correct
+    // behaviour here is to say so clearly and let it keep trying. The handle is stored and unref'd so
     // shutdown can cancel it instead of firing into a torn-down adapter.
     this.clearInitialConnectTimeout();
     this.initialConnectTimeout = setTimeout(() => {
@@ -337,9 +401,20 @@ class roborock_mqtt_connector {
       this.initialConnectTimeout.unref();
     }
 
-    // mqtt.js resubscribes before our connect handler. A subscribe callback
-    // can therefore contain no grants even though a real SUBACK follows.
-    // Observe that packet without changing mqtt.js subscription behaviour.
+    this.connectionEventsWanted = true;
+    this.installConnectionEvents();
+    this.recovery?.install();
+  }
+
+  /**
+   * The connection-state listeners, on the current client. Installed again on
+   * every client openClient builds.
+   */
+  installConnectionEvents() {
+    if (!this.client || this.eventsInstalledFor === this.client) return;
+    this.eventsInstalledFor = this.client;
+    // Observe every SUBACK packet without changing mqtt.js subscription
+    // behaviour; its callback is not the only evidence of one.
     this.listen("packetreceive", (packet) => {
       if (packet.cmd !== "suback") return;
       this.sessionDiagnostics.onSubscribe(
@@ -351,6 +426,10 @@ class roborock_mqtt_connector {
 
     this.listen("connect", (result) => {
       if (typeof result != "undefined") {
+        this.linkId += 1;
+        this.unsubscribedExpiries = 0;
+        // python-roborock: the back-off starts over after every connect.
+        this.reconnectDelayMs = this.reconnectDelays.initialMs;
         const generation = this.sessionDiagnostics.onConnect();
         this.client.subscribe(
           `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`,
@@ -366,6 +445,9 @@ class roborock_mqtt_connector {
         this.clearInitialConnectTimeout();
 
         this.connected = true;
+        for (const waiter of [...this.connectWaiters]) {
+          waiter(true);
+        }
         if (this._connectionIssueActive) {
           this._connectionIssueActive = false;
           this._connectionIssueLog?.clear();
@@ -392,37 +474,27 @@ class roborock_mqtt_connector {
       );
     });
 
+    // Every way a connection ends — a failed connect, a dropped link, a
+    // keepalive timeout, the broker closing it — comes through here, and is
+    // followed by a new client after the back-off.
     this.listen("close", () => {
-      if (this.connected) {
-        this.adapter.log.info(`MQTT connection closed; reconnecting.`);
+      const wasConnected = this.connected;
+      this.connected = false;
+      this.sessionDiagnostics.onDisconnect();
+      const delayMs = this.scheduleReconnect();
+      if (wasConnected) {
+        // So the next connect says the outage is over.
+        this._connectionIssueActive = true;
+        this.adapter.log.info(
+          delayMs === null
+            ? `MQTT connection closed.`
+            : `MQTT connection closed; reconnecting in ${Math.round(delayMs / 1000)} seconds.`
+        );
+      } else if (delayMs !== null) {
+        this.adapter.log.debug(
+          `MQTT connect attempt did not succeed; next attempt in ${Math.round(delayMs / 1000)} seconds.`
+        );
       }
-      this.connected = false;
-      this.sessionDiagnostics.onDisconnect();
-    });
-
-    this.listen("reconnect", () => {
-      // Preserve the legacy subscription. Its callback is not evidence for
-      // a new generation; actual SUBACK packets are observed above.
-      this.client.subscribe(
-        `rr/m/o/${this.rriot.u}/${this.mqttUser}/#`,
-        this.whileCurrent((err, granted) => {
-          if (err) {
-            this.logConnectionIssue(
-              `Failed to subscribe to the Roborock MQTT server after reconnect: ${err} (granted: ${JSON.stringify(granted)}).`
-            );
-          }
-        })
-      );
-      this.clearInitialConnectTimeout();
-      this.adapter.log.debug(`MQTT connection reconnect attempt.`);
-    });
-
-    this.listen("offline", () => {
-      this.connected = false;
-      this.sessionDiagnostics.onDisconnect();
-      this.logConnectionIssue(
-        `Roborock MQTT connection is offline. The client keeps reconnecting automatically.`
-      );
     });
   }
 
@@ -507,12 +579,12 @@ class roborock_mqtt_connector {
   }
 
   async initMQTT_Message() {
-    if (!this.client || this.messagesInstalledFor === this.client) return;
-    this.messagesInstalledFor = this.client;
+    if (this.messageHandler) return;
     this.adapter.log.debug(`MQTT initialized.`);
 
-    const endpoint = this.endpoint;
-    this.listen("message", (topic, message, packet = {}) => {
+    // Kept, so every client openClient builds gets it too.
+    this.messageHandler = (topic, message, packet = {}) => {
+      const endpoint = this.endpoint;
       try {
         this.sessionDiagnostics.noteActivity("raw");
         const duid = this.resolveDuidFromTopic(topic);
@@ -639,191 +711,136 @@ class roborock_mqtt_connector {
           } else if (!pending) {
             noteLateReply(this.adapter, duid, dps.id, "cloud");
           }
-          // protocol 300 seems to be for get_photo 0 only. get_photo 0 is for large images. 1 is for small images.
-        } else if (data.protocol == 300) {
-          const photoData = parsePhotoPayload(data.payload);
-          if (photoData) {
-            if (this.adapter.pendingRequests.has(photoData.id)) {
-              this.adapter.log.debug(`First photo gzip chunk detected!`);
-
-              const photoBuffer = photoBufferFor(duid);
-              photoBuffer.chunks.push(data.payload.slice(56));
-              photoBuffer.chunkId = photoData.id;
-            }
-          } else {
-            this.adapter.log.debug(
-              `Skipping protocol 300 MQTT message for ${duid} because the payload is not a complete Roborock photo header.`
-            );
-          }
         } else if (data.protocol == 301) {
-          // B01/Q7 map upload responses arrive on protocol 301 as an opaque
-          // base64 blob. Resolve the per-device pending map request first;
-          // classic v1 photo/map chunk handling continues below otherwise.
-          const pendingMap = this.adapter.pendingB01MapRequests?.get(duid);
-          if (pendingMap) {
-            this.adapter.clearTimeout(pendingMap.timeout);
-            this.adapter.pendingB01MapRequests.delete(duid);
-            this.noteSessionActivity("correlated", duid);
-            pendingMap.resolve(data.payload);
+          // A B01 robot's map frames are its own format, pushed unasked as
+          // well as sent on request. Every one goes to the B01 map handler,
+          // which decodes it once and routes it by map type; none reaches
+          // the classic photo/map parser below, which counted each push as a
+          // frame for another controller.
+          if (
+            typeof this.adapter.onB01MapFrame === "function" &&
+            this.adapter.isB01Device?.(duid)
+          ) {
+            if (this.adapter.onB01MapFrame(duid, data.payload)) {
+              this.noteSessionActivity("correlated", duid);
+            }
             return;
           }
 
-          // The original guard compared `photoGzipChunks != []` against a
-          // fresh array literal and was therefore always true, so it never
-          // guarded anything. Both halves are now real: a non-empty buffer,
-          // and a request that is still waiting for it.
-          const photoBuffer = photoBufferFor(duid);
-          // The buffer must belong to a request that is STILL waiting. A
-          // stale chunkId — from a transfer that never completed — used to
-          // swallow every seq==2 frame from every robot, forever.
-          if (
-            photoBuffer.chunkId !== 0 &&
-            !this.adapter.pendingRequests.has(photoBuffer.chunkId)
-          ) {
+          const data2 = parseProtocol301Header(data.payload);
+          if (!data2) {
             this.adapter.log.debug(
-              `Discarding a stale photo chunk buffer for ${duid}: request ${photoBuffer.chunkId} is no longer waiting, so the transfer never completed.`
+              `Skipping protocol 301 MQTT message for ${duid} because the payload is shorter than ${PROTOCOL_301_HEADER_LENGTH} bytes.`
             );
-            photoBuffer.chunks = [];
-            photoBuffer.chunkId = 0;
+            return;
           }
 
-          if (
-            data.seq == 2 &&
-            photoBuffer.chunks.length !== 0 &&
-            photoBuffer.chunkId != 0
-          ) {
-            this.adapter.log.debug(`Second photo gzip chunk detected!`);
-            photoBuffer.chunks.push(data.payload);
+          // THE COMPARISON IS THE OTHER WAY ROUND, and until 3.31.0 it
+          // was inverted AND silent — the worst possible pair.
+          //
+          // `endpoint` is our own 8-character key (md5bin(rriot.k)
+          // bytes 8..14, base64). The wire field is 15 bytes, so a robot
+          // that echoes our 8 characters followed by anything that is not
+          // a trailing NUL leaves `data2.endpoint` LONGER than 8 —
+          // and an 8-character string can never `startsWith` a longer
+          // one. python-roborock, the reference implementation, compares
+          // it the other way: received.startswith(ours).
+          //
+          // So this failed closed on a reply that was addressed to us,
+          // and it did it with `return` — no log, no counter, nothing.
+          // A dropped 301 leaves the pending request to die on its 10 s
+          // timer, which is indistinguishable from a robot that never
+          // answered. That is exactly the shape of the oldest open bug in
+          // this project: `get_map_v1` on a classic robot timing out 95
+          // and 225 times in a row while the same robot answers
+          // everything else (my own a70; #9's a75).
+          //
+          // Whether that IS the cause is not settled here — it is
+          // measured, because from 3.31.0 the drop says so.
+          if (!String(data2.endpoint || "").startsWith(endpoint)) {
+            noteDroppedFrame(duid, "addressed-elsewhere");
+            this.adapter.log.debug(
+              `Ignored a protocol 301 message for ${duid}: it is addressed to endpoint '${data2.endpoint}', and this plugin's endpoint is '${this.endpoint}'. It belongs to another controller on the same Roborock account (the Roborock app, for one), so ignoring it is expected.`
+            );
+            return;
+          }
 
-            if (this.adapter.pendingRequests.has(photoBuffer.chunkId)) {
-              const { resolve, timeout } = this.adapter.pendingRequests.get(
-                photoBuffer.chunkId
-              );
-              this.adapter.clearTimeout(timeout);
-              this.adapter.pendingRequests.delete(photoBuffer.chunkId);
+          // Past the guard: this frame names US. Counted before the
+          // decipher, because the question it answers is only about the
+          // endpoint — a frame addressed to us that then fails to decode
+          // is still proof that our account key is the right one.
+          noteAcceptedFrame(duid);
 
-              const finalPhotoGzip = Buffer.concat(photoBuffer.chunks);
-
-              photoBuffer.chunks = [];
-              photoBuffer.chunkId = 0;
-
-              this.noteSessionActivity("correlated", duid);
-              resolve(finalPhotoGzip);
-            }
-          } else {
-            const photoData = parsePhotoPayload(data.payload);
-            if (photoData) {
-              this.adapter.log.debug(
-                `Cloud message with protocol 301 and photo id ${photoData.id} received.`
-              );
-
-              if (this.adapter.pendingRequests.has(photoData.id)) {
-                const { resolve, timeout } = this.adapter.pendingRequests.get(
-                  photoData.id
-                );
-                this.adapter.clearTimeout(timeout);
-                this.adapter.pendingRequests.delete(photoData.id);
-                this.adapter.log.debug(
-                  `Cloud message with protocol 301 and photo id ${photoData.id} received.`
-                );
-                this.noteSessionActivity("correlated", duid);
-                resolve(data.payload.slice(56));
-              }
-            } else {
-              const data2 = parseProtocol301Header(data.payload);
-              if (!data2) {
-                this.adapter.log.debug(
-                  `Skipping protocol 301 MQTT message for ${duid} because the payload is shorter than ${PROTOCOL_301_HEADER_LENGTH} bytes.`
-                );
-                return;
-              }
-
-              // THE COMPARISON IS THE OTHER WAY ROUND, and until 3.31.0 it
-              // was inverted AND silent — the worst possible pair.
-              //
-              // `endpoint` is our own 8-character key (md5bin(this.rriot.k)
-              // bytes 8..14, base64). The wire field is 15 bytes, so a robot
-              // that echoes our 8 characters followed by anything that is not
-              // a trailing NUL leaves `data2.endpoint` LONGER than 8 —
-              // and an 8-character string can never `startsWith` a longer
-              // one. python-roborock, the reference implementation, compares
-              // it the other way: received.startswith(ours).
-              //
-              // So this failed closed on a reply that was addressed to us,
-              // and it did it with `return` — no log, no counter, nothing.
-              // A dropped 301 leaves the pending request to die on its 10 s
-              // timer, which is indistinguishable from a robot that never
-              // answered. That is exactly the shape of the oldest open bug in
-              // this project: `get_map_v1` on a classic robot timing out 95
-              // and 225 times in a row while the same robot answers
-              // everything else (my own a70; #9's a75).
-              //
-              // Whether that IS the cause is not settled here — it is
-              // measured, because from 3.31.0 the drop says so.
-              if (!String(data2.endpoint || "").startsWith(endpoint)) {
-                noteDroppedFrame(duid, "addressed-elsewhere");
-                this.adapter.log.debug(
-                  `Ignored a protocol 301 message for ${duid}: it is addressed to endpoint '${data2.endpoint}', and this plugin's endpoint is '${endpoint}'. It belongs to another controller on the same Roborock account (the Roborock app, for one), so ignoring it is expected.`
-                );
-                return;
-              }
-
-              // Past the guard: this frame names US. Counted before the
-              // decipher, because the question it answers is only about the
-              // endpoint — a frame addressed to us that then fails to decode
-              // is still proof that our account key is the right one.
-              noteAcceptedFrame(duid);
-
-              const iv = Buffer.alloc(16, 0);
-              const decipher = crypto.createDecipheriv(
-                "aes-128-cbc",
-                this.adapter.nonce,
-                iv
-              );
-              let decrypted = Buffer.concat([
+          let decrypted;
+          try {
+            const decipher = crypto.createDecipheriv(
+              "aes-128-cbc",
+              this.adapter.nonce,
+              Buffer.alloc(16, 0)
+            );
+            decrypted = zlib.gunzipSync(
+              Buffer.concat([
                 decipher.update(data.payload.subarray(24)),
                 decipher.final(),
-              ]);
-              decrypted = zlib.gunzipSync(decrypted);
-
-              if (!this.adapter.pendingRequests.has(data2.id)) {
-                // The other silent drop on this path. An unsolicited map push
-                // lands here legitimately, but so does a reply whose id we
-                // failed to match — and the waiting request then times out
-                // with nothing in the log to say a reply had arrived. Since
-                // 3.35.0 a reply to a request that had ALREADY timed out is
-                // told apart and counted as late, not as discarded: it is the
-                // robot being slow, not this side throwing an answer away.
-                const late = noteLateReply(
-                  this.adapter,
-                  duid,
-                  data2.id,
-                  "cloud"
-                );
-                noteDroppedFrame(
-                  duid,
-                  late ? "arrived-after-timeout" : "no-request-waiting"
-                );
-                if (!late) {
-                  this.adapter.log.debug(
-                    `Received a protocol 301 message for ${duid} with id ${data2.id}, but no request is waiting for that id. It was decrypted successfully, so the robot did answer something; either this is an unsolicited map push, or a reply to a request this plugin did not send.`
-                  );
-                }
-              }
-
-              if (this.adapter.pendingRequests.has(data2.id)) {
-                const { resolve, timeout } = this.adapter.pendingRequests.get(
-                  data2.id
-                );
-                this.adapter.clearTimeout(timeout);
-                this.adapter.pendingRequests.delete(data2.id);
-                this.adapter.log.debug(
-                  `Cloud message with protocol 301 and id ${data2.id} received.`
-                );
-                this.noteSessionActivity("correlated", duid);
-                resolve(decrypted);
-              }
+              ])
+            );
+          } catch (error) {
+            // The robot answered; what arrived could not be read. Said
+            // as such and settled now, never left to time out as a robot
+            // that did not answer.
+            const pending = this.adapter.pendingRequests.get(data2.id);
+            if (!pending) {
+              noteDroppedFrame(duid, "undecodable");
+              this.adapter.log.debug(
+                `A protocol 301 frame for ${duid} with id ${data2.id} could not be decoded and no request is waiting for it: ${error?.message || error}`
+              );
+              return;
             }
+            this.adapter.clearTimeout(pending.timeout);
+            this.adapter.pendingRequests.delete(data2.id);
+            this.noteSessionActivity("correlated", duid);
+            pending.reject(
+              Object.assign(
+                new Error(
+                  `The reply to ${pending.method || "the map request"} (cloud id ${data2.id}) from ${describeDevice(this.adapter, duid)} arrived but could not be decoded: ${error?.message || error}`
+                ),
+                { unansweredRequest: false }
+              )
+            );
+            return;
+          }
+
+          if (!this.adapter.pendingRequests.has(data2.id)) {
+            // The other silent drop on this path. An unsolicited map push
+            // lands here legitimately, but so does a reply whose id we
+            // failed to match — and the waiting request then times out
+            // with nothing in the log to say a reply had arrived. Since
+            // 3.35.0 a reply to a request that had ALREADY timed out is
+            // told apart and counted as late, not as discarded: it is the
+            // robot being slow, not this side throwing an answer away.
+            const late = noteLateReply(this.adapter, duid, data2.id, "cloud");
+            noteDroppedFrame(
+              duid,
+              late ? "arrived-after-timeout" : "no-request-waiting"
+            );
+            if (!late) {
+              this.adapter.log.debug(
+                `Received a protocol 301 message for ${duid} with id ${data2.id}, but no request is waiting for that id. It was decrypted successfully, so the robot did answer something; either this is an unsolicited map push, or a reply to a request this plugin did not send.`
+              );
+            }
+          }
+
+          if (this.adapter.pendingRequests.has(data2.id)) {
+            const { resolve, timeout } = this.adapter.pendingRequests.get(
+              data2.id
+            );
+            this.adapter.clearTimeout(timeout);
+            this.adapter.pendingRequests.delete(data2.id);
+            this.adapter.log.debug(
+              `Cloud message with protocol 301 and id ${data2.id} received.`
+            );
+            this.noteSessionActivity("correlated", duid);
+            resolve(decrypted);
           }
         } else if (data.protocol == 500) {
           // 500 is for general information
@@ -868,13 +885,19 @@ class roborock_mqtt_connector {
             if (previous === online) {
               return;
             }
+            const lanAvailable =
+              this.adapter.isB01Device?.(duid) === false &&
+              this.adapter.isCloudOnlyModeEnabled?.() !== true;
+            const offlineDetail =
+              " Cloud commands may fail." +
+              (lanAvailable ? " LAN commands may still work." : "");
             if (previous === undefined) {
-              this.adapter.log.info(
-                `${label}: first live MQTT presence report is ${online ? "online" : "offline"}.${online ? "" : " Cloud presence does not determine whether LAN commands can succeed."}`
-              );
+              const message = `${label}: first live MQTT presence report is ${online ? "online" : "offline"}.${online ? "" : offlineDetail}`;
+              if (online) this.adapter.log.info(message);
+              else this.adapter.log.warn(message);
             } else if (!online) {
               this.adapter.log.warn(
-                `${label} reports itself offline via MQTT. This presence notification does not by itself prove that local or cloud commands will fail.`
+                `${label} reports itself offline via MQTT.${offlineDetail}`
               );
             } else if (previous === false) {
               this.adapter.log.info(`${label} is back online.`);
@@ -916,7 +939,8 @@ class roborock_mqtt_connector {
       } finally {
         this.sessionDiagnostics.emit();
       }
-    });
+    };
+    this.listen("message", this.messageHandler);
   }
 
   getEndpoint() {
@@ -946,7 +970,24 @@ class roborock_mqtt_connector {
   }
 
   waitUntilReady({ timeoutMs = 10000, signal } = {}) {
-    return this.readiness.wait(timeoutMs, signal);
+    return this.readiness.wait(timeoutMs, signal).catch((error) => {
+      // An unsent request is not robot silence. But a connected client whose
+      // reply subscription never succeeds must not stay stuck forever either.
+      if (
+        error.code === "MQTT_READINESS_TIMEOUT" &&
+        this.connected &&
+        !this.sessionDiagnostics.subscriptionAcknowledged &&
+        !this.readiness.stopped
+      ) {
+        this.unsubscribedExpiries += 1;
+        if (this.unsubscribedExpiries >= 3) {
+          this.adapter.restartCloudSession?.(
+            `${this.unsubscribedExpiries} requests in a row could not be sent because the connected MQTT session did not acknowledge its reply subscription`
+          );
+        }
+      }
+      throw error;
+    });
   }
 
   getSessionGeneration() {
@@ -976,7 +1017,7 @@ class roborock_mqtt_connector {
           : "disconnected",
       socketConnected: snapshot.connected,
       subscriptionReady: snapshot.subscriptionAcknowledged,
-      readyAgeMs: age(this.lifecycle.readyAt),
+      readyAgeMs: age(this.recovery?.readyAt),
       ...(duid
         ? {
             lastDecodedInboundAgeMs: age(activity?.decoded),
@@ -986,10 +1027,15 @@ class roborock_mqtt_connector {
     };
   }
 
-  reconnectAndWaitReady({ reason = "manual", mode } = {}) {
-    return this.lifecycle.recreate(
-      mode === "preventive" ? "preventive" : reason
-    );
+  async reconnectAndWaitReady({ reason = "manual", mode } = {}) {
+    if (this.recovery)
+      return this.recovery.recreate(
+        mode === "preventive" ? "preventive" : reason
+      );
+    if (!(await this.reconnectClient(true)) && !this.reconnectTimer)
+      return false;
+    await this.readiness.wait(30_000);
+    return true;
   }
 
   sendMessage(duid, roborockMessage, onNotSent) {
@@ -1021,10 +1067,6 @@ class roborock_mqtt_connector {
     return this.recovery ? this.isReady() : this.connected;
   }
 
-  discardSessionFragments() {
-    for (const duid of this.getKnownDeviceDuids()) photoBuffers.delete(duid);
-  }
-
   /**
    * Listen to the current client for as long as it is the current one.
    *
@@ -1050,7 +1092,7 @@ class roborock_mqtt_connector {
   /**
    * Close the MQTT session on shutdown.
    *
-   * `this.client.end()` existed in exactly 1 place in this codebase — inside
+   * `client.end()` existed in exactly 1 place in this codebase — inside
    * `reconnectClient` — and never on the shutdown path. So during the seconds
    * between Homebridge's SIGTERM and its forced exit, robot frames kept
    * arriving and being dispatched into disposed accessories, and the socket
@@ -1063,7 +1105,9 @@ class roborock_mqtt_connector {
    * The client is let go of, not stripped of its listeners (see `listen`).
    */
   disconnect() {
-    this.lifecycle?.stop();
+    this.recovery?.stop();
+    this.sessionWanted = false;
+    this.clearReconnectTimer();
     this.readiness.stop();
     this.clearInitialConnectTimeout();
     const closing = this.client;
@@ -1101,17 +1145,19 @@ class roborock_mqtt_connector {
       return true;
     }
 
-    const deadline = Date.now() + timeoutMs;
-    while (!this.connected && Date.now() < deadline) {
-      await new Promise((resolve) => {
-        const timer = setTimeout(resolve, 100);
-        if (typeof timer?.unref === "function") {
-          timer.unref();
-        }
-      });
-    }
-
-    return this.connected;
+    return new Promise((resolve) => {
+      /** @param {boolean} connected */
+      const settle = (connected) => {
+        clearTimeout(timer);
+        this.connectWaiters.delete(settle);
+        resolve(connected);
+      };
+      const timer = setTimeout(() => settle(this.connected), timeoutMs);
+      if (typeof timer?.unref === "function") {
+        timer.unref();
+      }
+      this.connectWaiters.add(settle);
+    });
   }
 
   async ensureConnected() {
@@ -1119,17 +1165,61 @@ class roborock_mqtt_connector {
       this.adapter.log.debug("MQTT health check passed. Reconnect skipped.");
       return false;
     }
+    if (this.reconnectTimer) {
+      this.adapter.log.debug(
+        "MQTT health check: a reconnect is already scheduled."
+      );
+      return false;
+    }
 
-    await this.reconnectClient(true);
-    return true;
+    return this.reconnectClient(true);
   }
 
+  /**
+   * Start a fresh MQTT session: end this client now and build a new one after
+   * the back-off, as python-roborock's `restart()` cancels its connection and
+   * lets the reconnect loop build the next client.
+   *
+   * This used to end the client and call `reconnect()` on the SAME object,
+   * with the same id, one second later. The teardown is still forced:
+   * an unforced `end()` waits for an `outgoingEmpty` that a dead link never
+   * emits (25 Aug 2026: 1 h 44 min of failures after the network was back).
+   *
+   * @param {boolean} [force]
+   * @returns {Promise<boolean>} whether a new session was started
+   */
   async reconnectClient(force = false) {
-    if (!force && this.isReady()) return false;
-    // The home branch replaces a wedged client even when reactive recovery is
-    // disabled. Reuse the reviewed drain/retirement/readiness/backoff lifecycle.
-    // The caller's default silence rule has already recorded its own cooldown.
-    return this.lifecycle.recreate("connection-unavailable");
+    // All restart reasons share upstream's scheduled, fresh-client path.
+    if (!this.sessionWanted || this.reconnectTimer) return false;
+    if (!this.client) return this.scheduleReconnect() !== null;
+    if (!force && this.connected) {
+      this.adapter.log.debug(
+        "MQTT reconnect skipped because client is already connected."
+      );
+      return false;
+    }
+
+    this.adapter.log.info("Reconnecting mqtt client!");
+    const current = this.client;
+    // Retire it before end(): late events during the backoff must not declare
+    // the old session ready or resolve a newly created request.
+    this.client = undefined;
+    this.connected = false;
+    this.recovery?.rejectPending();
+    this.sessionDiagnostics.onDisconnect();
+    try {
+      current.end(true);
+    } catch (error) {
+      this.adapter.log.debug(
+        `Ending the MQTT client failed: ${error?.message || error}`
+      );
+    }
+    // Shut down, or replaced by a retried start, while the link closed.
+    if (!this.sessionWanted) {
+      return false;
+    }
+    this.scheduleReconnect();
+    return true;
   }
 }
 
@@ -1146,6 +1236,18 @@ function resolveB01PendingResponse(
   dps,
   onCorrelatedReply = () => {}
 ) {
+  if (
+    dps &&
+    dps.msgId === undefined &&
+    dps.id === undefined &&
+    typeof adapter.onB01DatapointPush === "function" &&
+    adapter.isB01Device?.(duid)
+  ) {
+    // A datapoint push from a B01 robot. It is read in the robot's own
+    // dialect there; handed on raw it was read as classic datapoints.
+    adapter.onB01DatapointPush(duid, dps);
+    return true;
+  }
   if (!dps || dps.msgId === undefined || dps.id !== undefined) {
     return false;
   }
@@ -1187,8 +1289,6 @@ module.exports = {
   resolveB01PendingResponse,
   roborock_mqtt_connector,
   parseProtocol301Header,
-  parsePhotoPayload,
-  payloadStartsWith,
   isOkAcknowledgement,
   shouldResolveOn102,
 };

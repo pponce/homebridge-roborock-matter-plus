@@ -3,7 +3,6 @@
 const rrMessage = require("./message").message;
 const RRMapParser = require("./RRMapParser");
 const fs = require("fs");
-const zlib = require("zlib");
 const { describeDevice } = require("./describeDevice");
 const { isKnownStatusAttribute } = require("./deviceFeatures");
 
@@ -51,6 +50,7 @@ function buildForwardedRequestOptions(options = {}) {
   ) {
     requestOptions.requestTimeoutMs = options.requestTimeoutMs;
   }
+
   if (
     typeof options.cloudGateTimeoutMs === "number" &&
     Number.isFinite(options.cloudGateTimeoutMs) &&
@@ -182,6 +182,15 @@ class vacuum {
     this.lastStatusPollAt = new Map();
 
     /**
+     * The robot's last `get_status` reply as it arrived, per duid. Startup
+     * waits for the first one before the Matter accessories exist, so this is
+     * how they can start from it (roborockAPI.getLastKnownLiveStatus).
+     *
+     * @type {Map<string, Record<string, unknown>>}
+     */
+    this.lastStatusReply = new Map();
+
+    /**
      * `get_status` attributes with no mapping in the robot's feature profile
      * that have already been reported, per duid. The set of unmapped fields a
      * given robot sends is fixed by its firmware, so reporting it once says
@@ -282,7 +291,6 @@ class vacuum {
   async command(duid, parameter, value, options = {}) {
     try {
       const requestOptions = buildForwardedRequestOptions(options);
-      requestOptions.operationClass = "write";
       const hasRequestOptions = Object.keys(requestOptions).length > 0;
       const sendCommandRequest = (method, params) =>
         hasRequestOptions
@@ -490,8 +498,11 @@ class vacuum {
   refreshStateAfterCommand(duid, parameter, options) {
     const getCommand = parameter.replace("set", "get");
     // Nothing to read back: a command with no `set` in its name would other-
-    // wise be re-sent to the robot as its own "refresh".
-    if (getCommand === parameter) {
+    // wise be re-sent to the robot as its own "refresh". A B01 robot has no v1
+    // reads at all — its state comes from its own status loop and pushes —
+    // and reading back its suction logged "Unknown parameter: []" after
+    // every start from Apple Home.
+    if (getCommand === parameter || this.adapter.isB01Device?.(duid)) {
       return;
     }
 
@@ -513,7 +524,6 @@ class vacuum {
   async getServerTimers(duid, options = {}) {
     try {
       const requestOptions = buildForwardedRequestOptions(options);
-      requestOptions.operationClass = "read";
 
       return await this.adapter.messageQueueHandler.sendRequest(
         duid,
@@ -532,7 +542,6 @@ class vacuum {
   async updateServerTimer(duid, timerId, enabled, options = {}) {
     try {
       const requestOptions = buildForwardedRequestOptions(options);
-      requestOptions.operationClass = "write";
 
       return await this.adapter.messageQueueHandler.sendRequest(
         duid,
@@ -559,25 +568,18 @@ class vacuum {
     // did, by hand, and every other branch reverted to the local transport and
     // the ten-second default however the caller had been configured (#8).
     const requestOptions = buildForwardedRequestOptions(options);
-    requestOptions.operationClass = "read";
     /**
      * @param {string} method
      * @param {unknown} params
      * @param {boolean} [secure]
-     * @param {boolean} [photo]
      */
-    const sendParameterRequest = (
-      method,
-      params,
-      secure = false,
-      photo = false
-    ) =>
+    const sendParameterRequest = (method, params, secure = false) =>
       this.adapter.messageQueueHandler.sendRequest(
         duid,
         method,
         params,
         secure,
-        photo,
+        false,
         requestOptions
       );
 
@@ -641,6 +643,10 @@ class vacuum {
           const deviceStatus = await sendParameterRequest("get_prop", [
             "get_status",
           ]);
+          if (deviceStatus?.[0] && typeof deviceStatus[0] === "object") {
+            // A copy: the loop below rewrites some fields in place.
+            this.lastStatusReply.set(duid, { ...deviceStatus[0] });
+          }
 
           await this.updateDiagnosticSnapshot(duid, "lastStatus", {
             method: "get_status",
@@ -1117,42 +1123,6 @@ class vacuum {
             );
           }
         }
-      } else if (parameter == "get_photo") {
-        const photoresponse = await sendParameterRequest(
-          "get_photo",
-          attribute,
-          true,
-          true
-        );
-
-        if (this.isGZIP(photoresponse)) {
-          this.adapter.log.debug(`gzipped photo found.`);
-          this.adapter.log.debug(JSON.stringify(photoresponse));
-
-          this.unzipBuffer(photoresponse, (error, photoData) => {
-            if (error) {
-              this.adapter.catchError(
-                error,
-                "get_photo",
-                duid,
-                this.robotModel
-              );
-            } else {
-              const extractedPhoto = this.extractPhoto(photoData);
-
-              if (extractedPhoto) {
-                const photo = {};
-                photo.duid = duid;
-                photo.command = "get_photo";
-                photo.image = `data:image/jpeg;base64,${extractedPhoto.toString("base64")}`;
-
-                if (this.adapter.socket) {
-                  this.adapter.socket.send(JSON.stringify(photo));
-                }
-              }
-            }
-          });
-        }
       } else if (
         parameter == "get_dust_collection_switch_status" ||
         parameter == "get_wash_towel_mode" ||
@@ -1243,39 +1213,6 @@ class vacuum {
       clearWaterBoxStatus: (dss >> 2) & 0b11,
       isUpdownWaterReady: dss & 0b11,
     };
-  }
-
-  unzipBuffer(buffer, callback) {
-    zlib.gunzip(buffer, callback);
-  }
-
-  isGZIP(buffer) {
-    return buffer.length >= 2 && buffer[0] == 31 && buffer[1] == 139;
-  }
-  extractPhoto(buffer) {
-    // Verify that the buffer is long enough to hold the header
-    if (buffer.length < 10) {
-      return false;
-    }
-
-    // Check the signature
-    if (
-      buffer[26] == 74 &&
-      buffer[27] == 70 &&
-      buffer[28] == 73 &&
-      buffer[29] == 70
-    ) {
-      return buffer.slice(20);
-    } else if (
-      buffer[42] == 74 &&
-      buffer[43] == 70 &&
-      buffer[44] == 73 &&
-      buffer[45] == 70
-    ) {
-      return buffer.slice(36);
-    }
-
-    return false;
   }
 }
 

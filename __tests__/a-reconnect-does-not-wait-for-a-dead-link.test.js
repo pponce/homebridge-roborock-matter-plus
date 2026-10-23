@@ -29,6 +29,10 @@
  * Passing `force` is the whole fix. There is never a reason to wait for a
  * queue to drain over a connection we have already concluded is dead — that
  * is the only situation in which this function is called.
+ *
+ * A session restart no longer calls `reconnect()` on the same client at all:
+ * it ends the client (forced) and builds a new one after the back-off, as
+ * python-roborock does. Ending is still forced, and still must never wait.
  */
 
 "use strict";
@@ -59,8 +63,6 @@ function makeAdapter() {
       error: jest.fn(),
     },
     catchError: jest.fn(),
-    pendingRequests: new Map(),
-    clearTimeout,
   };
 }
 
@@ -70,7 +72,6 @@ function makeAdapter() {
  * nothing left in the outgoing queue.
  */
 function makeClient({ outgoingMessages = 1 } = {}) {
-  const handlers = new Map();
   const client = {
     outgoing: {},
     tornDown: false,
@@ -105,19 +106,11 @@ function makeClient({ outgoingMessages = 1 } = {}) {
       return this;
     },
 
-    on(event, handler) {
-      handlers.set(event, handler);
-      if (event === "connect") {
-        queueMicrotask(() => handler({ sessionPresent: false }));
-      }
+    on() {
       return this;
     },
-    subscribe(topic, callback) {
-      queueMicrotask(() => callback(null, [{ topic, qos: 1 }]));
+    subscribe() {
       return this;
-    },
-    removeAllListeners() {
-      handlers.clear();
     },
   };
 
@@ -129,62 +122,51 @@ function makeClient({ outgoingMessages = 1 } = {}) {
 }
 
 describe("a reconnect does not wait for a dead link", () => {
+  beforeEach(() => jest.useFakeTimers());
   afterEach(() => {
     jest.clearAllMocks();
+    jest.useRealTimers();
   });
 
-  test("tears the client down even when the outgoing queue can never drain", async () => {
-    const clients = [];
-    mqtt.connect.mockImplementation(() => {
-      const client = makeClient({ outgoingMessages: 3 });
-      clients.push(client);
-      return client;
-    });
+  test("tears the client down even when the outgoing queue can never drain, and a new one follows", async () => {
+    const client = makeClient({ outgoingMessages: 3 });
+    const next = makeClient();
+    mqtt.connect.mockReturnValueOnce(client).mockReturnValueOnce(next);
 
     const connector = new roborock_mqtt_connector(makeAdapter());
     await connector.initUser(USERDATA);
-    await connector.initMQTT_Subscribe();
-    await connector.initMQTT_Message();
-    await Promise.resolve();
 
-    await connector.reconnectClient(true);
+    await expect(connector.reconnectClient(true)).resolves.toBe(true);
 
-    expect(clients[0].stillWaitingToDrain).toBe(false);
-    expect(clients[0].tornDown).toBe(true);
-    expect(clients).toHaveLength(2);
-    expect(connector.getSessionGeneration()).toBe(2);
-    expect(clients[0].reconnectCalls).toBe(0);
+    expect(client.stillWaitingToDrain).toBe(false);
+    expect(client.tornDown).toBe(true);
+    await jest.advanceTimersByTimeAsync(10_000);
+    expect(mqtt.connect).toHaveBeenCalledTimes(2);
+    expect(client.reconnectCalls).toBe(0);
     connector.disconnect();
   });
 
   test("a second attempt still does real work instead of silently doing nothing", async () => {
-    const clients = [];
-    mqtt.connect.mockImplementation(() => {
-      const client = makeClient({ outgoingMessages: 2 });
-      clients.push(client);
-      return client;
-    });
+    const first = makeClient({ outgoingMessages: 2 });
+    const second = makeClient({ outgoingMessages: 2 });
+    mqtt.connect
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+      .mockReturnValue(makeClient());
 
     const connector = new roborock_mqtt_connector(makeAdapter());
     await connector.initUser(USERDATA);
-    await connector.initMQTT_Subscribe();
-    await connector.initMQTT_Message();
-    await Promise.resolve();
 
     await connector.reconnectClient(true);
-    // The hourly retry is outside the shared one-minute recreation cooldown.
-    const clock = jest
-      .spyOn(performance, "now")
-      .mockReturnValue(performance.now() + 3600000);
+    await jest.advanceTimersByTimeAsync(10_000);
     await connector.reconnectClient(true);
-    clock.mockRestore();
+    await jest.advanceTimersByTimeAsync(15_000);
 
     // The field symptom was an hourly retry that had become a no-op: the
     // connection stayed down for as long as the process lived.
-    expect(clients[0].tornDown).toBe(true);
-    expect(clients[1].tornDown).toBe(true);
-    expect(clients).toHaveLength(3);
-    expect(connector.getSessionGeneration()).toBe(3);
+    expect(first.tornDown).toBe(true);
+    expect(second.tornDown).toBe(true);
+    expect(mqtt.connect).toHaveBeenCalledTimes(3);
     connector.disconnect();
   });
 

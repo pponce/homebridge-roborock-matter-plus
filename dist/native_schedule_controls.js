@@ -20,6 +20,9 @@ function isNativeScheduleControl(accessory) {
         (context.duid === null || typeof context.duid === "string"));
 }
 class NativeScheduleControls {
+    get busy() {
+        return this.queuedCommands > 0;
+    }
     constructor(platform, accessories, coordinator, storagePath) {
         this.platform = platform;
         this.accessories = accessories;
@@ -31,6 +34,7 @@ class NativeScheduleControls {
         this.resetTimers = new Map();
         this.delayPulses = new Set();
         this.commandTail = Promise.resolve();
+        this.queuedCommands = 0;
         this.pending = new Map();
         this.failedValues = new Map();
         const config = platform.platformConfig;
@@ -265,6 +269,7 @@ class NativeScheduleControls {
         // GETs and refreshes use the requested state immediately, including the
         // aggregate tile. Serialize whole requests so all-vacuum and individual
         // presses execute in order; older completions cannot clear newer intent.
+        this.queuedCommands++;
         this.commandTail = this.commandTail
             .then(() => this.ready)
             .then(async () => {
@@ -322,13 +327,17 @@ class NativeScheduleControls {
             }
             this.platform.log.error(`[SCHEDULE CONTROL FAILED] ${this.name(context.duid)}: ${action}: ${this.describeError(error)}. Switches refreshed from saved state.`);
         })
-            .finally(() => this.refresh());
+            .finally(() => {
+            this.queuedCommands--;
+            this.refresh();
+        });
     }
     acceptPausePreference(value) {
         const token = {};
         this.pendingPausePreference = { token, value };
         // Keep preference changes ordered with presses, but do not contact the cloud
         // for a local setting. Failed persistence restores its previous saved value.
+        this.queuedCommands++;
         this.commandTail = this.commandTail
             .then(() => this.ready)
             .then(async () => {
@@ -344,6 +353,7 @@ class NativeScheduleControls {
         })
             .finally(() => {
             var _a;
+            this.queuedCommands--;
             if (((_a = this.pendingPausePreference) === null || _a === void 0 ? void 0 : _a.token) === token)
                 this.pendingPausePreference = undefined;
             this.refresh();

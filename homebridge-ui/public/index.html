@@ -74,11 +74,30 @@
           <option value="https://cniot.roborock.com">
             CN (cniot.roborock.com)
           </option>
+          <option value="https://ruiot.roborock.com">
+            RU (ruiot.roborock.com)
+          </option>
           <option value="https://api.roborock.com">
             Asia (api.roborock.com)
           </option>
+          <option value="custom">Custom server (local_roborock_server)</option>
         </select>
         <small>Choose the region used by your Roborock app account.</small>
+      </label>
+
+      <label id="server-url-row" class="field hidden">
+        <span>Server URL</span>
+        <input
+          id="server-url"
+          type="url"
+          placeholder="https://api-roborock.example.com:555"
+        />
+        <small
+          >A self-hosted Roborock server such as local_roborock_server, as
+          https://host or https://host:port. Log in below with the email set up
+          on the server and its PIN as the verification code. The server needs a
+          certificate this Homebridge trusts.</small
+        >
       </label>
 
       <label class="field">
@@ -152,9 +171,10 @@
       <label class="checkbox"
         ><input id="enableMqttSessionRecovery" type="checkbox" /><span
           >Enable experimental MQTT session recovery<small
-            >Adds correlated-silence recovery and bounded session recreation.
-            Off by default. Commands are not replayed. Restart the child bridge
-            after changing this setting.</small
+            >Adds recovery when multiple robots stop replying, using the
+            plugin's normal reconnect backoff. Off by default. Commands are not
+            replayed. Restart the child bridge after changing this
+            setting.</small
           ></span
         ></label
       >
@@ -165,9 +185,9 @@
         <label class="checkbox"
           ><input id="enableMqttPreventiveRefresh" type="checkbox" /><span
             >Enable preventive MQTT refresh<small
-              >Refreshes the MQTT session at the interval below when no cloud
-              request is pending. Requires experimental MQTT session recovery.
-              Off by default.</small
+              >Refreshes the MQTT session at the interval below when cloud
+              requests and schedule operations are idle. Requires experimental
+              MQTT session recovery. Off by default.</small
             ></span
           ></label
         >
@@ -593,7 +613,8 @@
     <h2>Two-Factor Authentication</h2>
     <p class="help">
       Send a Roborock verification email, then enter the code to save an
-      encrypted token.
+      encrypted token. With a custom server, enter the PIN it was set up with as
+      the code; no email is needed.
     </p>
     <label id="code-row" class="field">
       <span>Verification Code</span>
