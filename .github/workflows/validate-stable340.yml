@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [pr31, pr32, pr36, pr37, pr38, pr39, pr46]
+        target: [full, upstream]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
