@@ -177,7 +177,8 @@ async function replacementReady() {
 
 function enableBaselineRule() {
   adapter.cloudSessionHealth = { consecutiveSilences: 0, lastRestartAt: 0 };
-  adapter.restartCloudSession = Roborock.prototype.restartCloudSession.bind(adapter);
+  adapter.restartCloudSession =
+    Roborock.prototype.restartCloudSession.bind(adapter);
   adapter.noteCloudSilence = Roborock.prototype.noteCloudSilence.bind(adapter);
   adapter.noteCloudReply = Roborock.prototype.noteCloudReply.bind(adapter);
 }
@@ -199,16 +200,30 @@ test("correlated recovery uses upstream's ten-second fresh-client path without r
   expect(mockClients).toHaveLength(2);
   expect(mockClients[1].publish).not.toHaveBeenCalled();
   await replacementReady();
-  expect(snapshot()).toMatchObject({ generation: 2, subscriptionAcknowledged: true, recovery: { lastResult: "succeeded" } });
+  expect(snapshot()).toMatchObject({
+    generation: 2,
+    subscriptionAcknowledged: true,
+    recovery: { lastResult: "succeeded" },
+  });
 });
 
 test("a pending write is retired as unknown while local requests survive", async () => {
   const write = await startRequest("robot-a", "app_start");
-  const local = { transport: "local", reject: jest.fn(), timeout: setTimeout(() => {}, 50000) };
+  const local = {
+    transport: "local",
+    reject: jest.fn(),
+    timeout: setTimeout(() => {}, 50000),
+  };
   adapter.pendingRequests.set(999, local);
   const refresh = connector.recovery.recreate("manual");
   await jest.advanceTimersByTimeAsync(500);
-  expect(await write.result).toMatchObject({ code: "MQTT_SESSION_REPLACED", ambiguousWrite: true, generation: 1, method: "app_start", unansweredRequest: false });
+  expect(await write.result).toMatchObject({
+    code: "MQTT_SESSION_REPLACED",
+    ambiguousWrite: true,
+    generation: 1,
+    method: "app_start",
+    unansweredRequest: false,
+  });
   expect(adapter.pendingRequests.get(999)).toBe(local);
   expect(local.reject).not.toHaveBeenCalled();
   expect(adapter.noteRequestAnswered).not.toHaveBeenCalled();
@@ -218,11 +233,16 @@ test("a pending write is retired as unknown while local requests survive", async
 });
 
 test("pending B01 maps are retired without replay", async () => {
-  const map = Roborock.prototype.sendB01MapRequest.call(adapter, "robot-a", 0).catch(e => e);
+  const map = Roborock.prototype.sendB01MapRequest
+    .call(adapter, "robot-a", 0)
+    .catch((e) => e);
   await jest.advanceTimersByTimeAsync(0);
   const refresh = connector.recovery.recreate("manual");
   await jest.advanceTimersByTimeAsync(500);
-  expect(await map).toMatchObject({ code: "MQTT_SESSION_REPLACED", operationClass: "secure-map" });
+  expect(await map).toMatchObject({
+    code: "MQTT_SESSION_REPLACED",
+    operationClass: "secure-map",
+  });
   expect(adapter.pendingB01MapRequests.size).toBe(0);
   await openReplacement();
   expect(await refresh).toBe(true);
@@ -289,36 +309,58 @@ test("shutdown during drain and backoff prevents replacement and cancels waiters
   expect(jest.getTimerCount()).toBe(0);
 });
 
-test.each([{}, { enableMqttSessionRecovery: true }, { enableMqttPreventiveRefresh: true }])("preventive refresh requires both options: %j", async config => {
+test.each([
+  {},
+  { enableMqttSessionRecovery: true },
+  { enableMqttPreventiveRefresh: true },
+])("preventive refresh requires both options: %j", async (config) => {
   await restartWith(config);
   await jest.advanceTimersByTimeAsync(5 * 60 * 60000);
   expect(mockClients).toHaveLength(1);
 });
 
-test.each([undefined, 0, -1, 1.5, "60"])("invalid interval %s keeps the four-hour default", async value => {
-  await restartWith({ enableMqttSessionRecovery: true, enableMqttPreventiveRefresh: true, mqttPreventiveRefreshMinutes: value });
-  expect(connector.recovery.preventiveRefreshMinutes).toBe(240);
-  await jest.advanceTimersByTimeAsync(240 * 60000 - 1);
-  expect(mockClients[0].end).not.toHaveBeenCalled();
-  await jest.advanceTimersByTimeAsync(1);
-  expect(mockClients[0].end).toHaveBeenCalledWith(true);
-  await openReplacement();
-});
+test.each([undefined, 0, -1, 1.5, "60"])(
+  "invalid interval %s keeps the four-hour default",
+  async (value) => {
+    await restartWith({
+      enableMqttSessionRecovery: true,
+      enableMqttPreventiveRefresh: true,
+      mqttPreventiveRefreshMinutes: value,
+    });
+    expect(connector.recovery.preventiveRefreshMinutes).toBe(240);
+    await jest.advanceTimersByTimeAsync(240 * 60000 - 1);
+    expect(mockClients[0].end).not.toHaveBeenCalled();
+    await jest.advanceTimersByTimeAsync(1);
+    expect(mockClients[0].end).toHaveBeenCalledWith(true);
+    await openReplacement();
+  }
+);
 
 test("the configured minute interval uses the upstream backoff then resets after SUBACK", async () => {
-  await restartWith({ enableMqttSessionRecovery: true, enableMqttPreventiveRefresh: true, mqttPreventiveRefreshMinutes: 1 });
+  await restartWith({
+    enableMqttSessionRecovery: true,
+    enableMqttPreventiveRefresh: true,
+    mqttPreventiveRefreshMinutes: 1,
+  });
   await jest.advanceTimersByTimeAsync(60000);
   expect(mockClients).toHaveLength(1);
   await openReplacement();
   expect(mockClients).toHaveLength(2);
-  expect(snapshot().recovery).toMatchObject({ preventiveRefreshMinutes: 1, lastResult: "succeeded" });
+  expect(snapshot().recovery).toMatchObject({
+    preventiveRefreshMinutes: 1,
+    lastResult: "succeeded",
+  });
   expect(snapshot().recovery.preventiveRemainingMs).toBeGreaterThan(59000);
   await jest.advanceTimersByTimeAsync(50000);
   expect(mockClients).toHaveLength(2);
 });
 
 test("a normal upstream reconnect resets preventive age", async () => {
-  await restartWith({ enableMqttSessionRecovery: true, enableMqttPreventiveRefresh: true, mqttPreventiveRefreshMinutes: 1 });
+  await restartWith({
+    enableMqttSessionRecovery: true,
+    enableMqttPreventiveRefresh: true,
+    mqttPreventiveRefreshMinutes: 1,
+  });
   await jest.advanceTimersByTimeAsync(30000);
   mockClients[0].handlers.get("close")();
   await openReplacement();
@@ -328,7 +370,11 @@ test("a normal upstream reconnect resets preventive age", async () => {
 });
 
 test("preventive refresh defers for cloud writes without closing the send gate", async () => {
-  await restartWith({ enableMqttSessionRecovery: true, enableMqttPreventiveRefresh: true, mqttPreventiveRefreshMinutes: 1 });
+  await restartWith({
+    enableMqttSessionRecovery: true,
+    enableMqttPreventiveRefresh: true,
+    mqttPreventiveRefreshMinutes: 1,
+  });
   await jest.advanceTimersByTimeAsync(59000);
   const write = await startRequest("robot-a", "app_start");
   await jest.advanceTimersByTimeAsync(1000);
@@ -340,11 +386,30 @@ test("preventive refresh defers for cloud writes without closing the send gate",
 });
 
 test("queued schedule batches defer preventive refresh even between their cloud requests", async () => {
-  const { ScheduleAccountCoordinator, ScheduleWriteBatcher } = require("../src/hap_schedule_accessory.ts");
+  const {
+    ScheduleAccountCoordinator,
+    ScheduleWriteBatcher,
+  } = require("../src/hap_schedule_accessory.ts");
   const account = new ScheduleAccountCoordinator();
   let finish;
-  const batcher = new ScheduleWriteBatcher(() => account.enqueue(() => new Promise(resolve => { finish = () => resolve(new Map()); }), () => new Map()), x => x.id, 1000);
-  await restartWith({ enableMqttSessionRecovery: true, enableMqttPreventiveRefresh: true, mqttPreventiveRefreshMinutes: 1, isScheduleOperationPending: () => account.busy || batcher.busy });
+  const batcher = new ScheduleWriteBatcher(
+    () =>
+      account.enqueue(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve(new Map());
+          }),
+        () => new Map()
+      ),
+    (x) => x.id,
+    1000
+  );
+  await restartWith({
+    enableMqttSessionRecovery: true,
+    enableMqttPreventiveRefresh: true,
+    mqttPreventiveRefreshMinutes: 1,
+    isScheduleOperationPending: () => account.busy || batcher.busy,
+  });
   await jest.advanceTimersByTimeAsync(59500);
   const write = batcher.enqueue({ id: "timer" });
   await jest.advanceTimersByTimeAsync(500);
@@ -382,20 +447,27 @@ test("preventive refresh does not consume the failure-recovery cooldown", async 
   await openReplacement();
   expect(await refresh).toBe(true);
   expect(adapter.cloudSessionHealth.lastRestartAt).toBe(0);
-  for (let i=0;i<3;i++) await timeout("robot-a");
+  for (let i = 0; i < 3; i++) await timeout("robot-a");
   await openReplacement();
   expect(mockClients).toHaveLength(3);
 });
 
 test("the correlated option alone does not treat a single robot or a write as account silence", async () => {
-  for (let i=0;i<3;i++) await timeout("robot-a");
+  for (let i = 0; i < 3; i++) await timeout("robot-a");
   await timeout("robot-b", "app_start");
   expect(mockClients).toHaveLength(1);
 });
 
 test("historical read evidence keeps its generation across replacement", async () => {
   await silence();
-  expect(snapshot().lastEligibleRead).toMatchObject({ generation: 1, rawSilenceDuringRequest: true });
+  expect(snapshot().lastEligibleRead).toMatchObject({
+    generation: 1,
+    rawSilenceDuringRequest: true,
+  });
   await openReplacement();
-  expect(snapshot()).toMatchObject({ generation: 2, rawSilenceDuringRequest: null, lastEligibleRead: { generation: 1 } });
+  expect(snapshot()).toMatchObject({
+    generation: 2,
+    rawSilenceDuringRequest: null,
+    lastEligibleRead: { generation: 1 },
+  });
 });

@@ -48,7 +48,9 @@ export class NativeScheduleControls {
   private delayPulses = new Set<string | null>();
   private commandTail: Promise<void> = Promise.resolve();
   private queuedCommands = 0;
-  get busy(): boolean { return this.queuedCommands > 0; }
+  get busy(): boolean {
+    return this.queuedCommands > 0;
+  }
   private pending = new Map<string, { token: object; value: boolean }>();
   private failedValues = new Map<string, boolean>();
   private pendingPausePreference?: { token: object; value: boolean };
@@ -381,7 +383,10 @@ export class NativeScheduleControls {
           `[SCHEDULE CONTROL FAILED] ${this.name(context.duid)}: ${action}: ${this.describeError(error)}. Switches refreshed from saved state.`
         );
       })
-      .finally(() => { this.queuedCommands--; this.refresh(); });
+      .finally(() => {
+        this.queuedCommands--;
+        this.refresh();
+      });
   }
   private acceptPausePreference(value: boolean): void {
     const token = {};

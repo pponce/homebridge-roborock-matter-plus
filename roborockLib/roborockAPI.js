@@ -2274,7 +2274,8 @@ class Roborock {
   }
 
   async recoverMqttSession(options = {}) {
-    if (this.stopped) throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
+    if (this.stopped)
+      throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
     return this.rr_mqtt_connector.reconnectAndWaitReady(options);
   }
 
@@ -6559,10 +6560,19 @@ class Roborock {
 
     let entry;
     const promise = new Promise((resolve, reject) => {
-      entry = { resolve, reject, timeout: undefined, liveFrames: 0,
-        duid, transport: "cloud", operationClass: "secure-map",
+      entry = {
+        resolve,
+        reject,
+        timeout: undefined,
+        liveFrames: 0,
+        duid,
+        transport: "cloud",
+        operationClass: "secure-map",
         sessionGeneration: this.rr_mqtt_connector.getSessionGeneration?.(),
-        method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD, createdAt: Date.now(), publishedAt: null };
+        method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD,
+        createdAt: Date.now(),
+        publishedAt: null,
+      };
     });
     entry.promise = promise;
     this.pendingB01MapRequests.set(duid, entry);

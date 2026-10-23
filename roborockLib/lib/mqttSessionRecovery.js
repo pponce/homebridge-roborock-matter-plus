@@ -14,8 +14,12 @@ class MqttSessionRecovery {
     this.preventiveRefreshEnabled =
       this.adapter.config.enableMqttPreventiveRefresh === true;
     const minutes = this.adapter.config.mqttPreventiveRefreshMinutes;
-    this.preventiveRefreshMinutes = Number.isSafeInteger(minutes) && minutes >= 1 && Number.isSafeInteger(minutes * 60_000)
-      ? minutes : DEFAULT_PREVENTIVE_REFRESH_MINUTES;
+    this.preventiveRefreshMinutes =
+      Number.isSafeInteger(minutes) &&
+      minutes >= 1 &&
+      Number.isSafeInteger(minutes * 60_000)
+        ? minutes
+        : DEFAULT_PREVENTIVE_REFRESH_MINUTES;
     /** @type {string | null} */
     this.lastReason = null;
     this.lastResult = "never";
@@ -38,7 +42,8 @@ class MqttSessionRecovery {
         if (
           this.preventiveRefreshEnabled &&
           this.readyAt !== null &&
-          performance.now() - this.readyAt >= this.preventiveRefreshMinutes * 60_000
+          performance.now() - this.readyAt >=
+            this.preventiveRefreshMinutes * 60_000
         ) {
           void this.recreate("preventive");
         }
@@ -74,7 +79,14 @@ class MqttSessionRecovery {
       enabled: true,
       preventiveRefreshEnabled: this.preventiveRefreshEnabled,
       preventiveRefreshMinutes: this.preventiveRefreshMinutes,
-      preventiveRemainingMs: this.readyAt === null ? null : Math.max(0, this.preventiveRefreshMinutes * 60_000 - (performance.now() - this.readyAt)),
+      preventiveRemainingMs:
+        this.readyAt === null
+          ? null
+          : Math.max(
+              0,
+              this.preventiveRefreshMinutes * 60_000 -
+                (performance.now() - this.readyAt)
+            ),
       waitingForIdle: this.lastResult === "deferred",
       inProgress: this.recovering,
       lastReason: this.lastReason,
@@ -114,7 +126,8 @@ class MqttSessionRecovery {
 
   rejectPending() {
     for (const { map, key, request } of this.pending()) {
-      if (request.timeout !== undefined) this.adapter.clearTimeout(request.timeout);
+      if (request.timeout !== undefined)
+        this.adapter.clearTimeout(request.timeout);
       map.delete(key);
       // Teardown is not a robot reply; keep upstream silence/breaker evidence.
       (request.abandon ?? request.reject)(
@@ -124,7 +137,9 @@ class MqttSessionRecovery {
           ),
           {
             code: "MQTT_SESSION_REPLACED",
-            generation: request.sessionGeneration ?? this.connector.sessionDiagnostics.generation,
+            generation:
+              request.sessionGeneration ??
+              this.connector.sessionDiagnostics.generation,
             method: request.method,
             operationClass: request.operationClass,
             ambiguousWrite: request.operationClass === "write",
@@ -151,7 +166,10 @@ class MqttSessionRecovery {
   }
 
   busy() {
-    return this.pending().length > 0 || this.adapter.config.isScheduleOperationPending?.() === true;
+    return (
+      this.pending().length > 0 ||
+      this.adapter.config.isScheduleOperationPending?.() === true
+    );
   }
 
   canRecoverSilence() {
@@ -183,7 +201,9 @@ class MqttSessionRecovery {
     // New sends wait on the ordinary readiness gate while the old client drains.
     this.lastReason = reason;
     this.lastResult = "in-progress";
-    this.adapter.log.info(`MQTT refresh starting: reason=${reason}; generation=${this.connector.sessionDiagnostics.generation}.`);
+    this.adapter.log.info(
+      `MQTT refresh starting: reason=${reason}; generation=${this.connector.sessionDiagnostics.generation}.`
+    );
     this.recovering = true;
     this.sendPaused = true;
     this.nextAllowedAt = performance.now() + COOLDOWN_MS;

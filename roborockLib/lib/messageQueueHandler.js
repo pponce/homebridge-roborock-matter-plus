@@ -578,7 +578,9 @@ class messageQueueHandler {
     if (useCloudConnection && (deviceOnline || allowOfflineCloudSend)) {
       // No frame or pending RPC exists while the reply subscription is pending.
       try {
-        await this.adapter.rr_mqtt_connector.waitUntilReady?.({ timeoutMs: options.cloudGateTimeoutMs || 10000 });
+        await this.adapter.rr_mqtt_connector.waitUntilReady?.({
+          timeoutMs: options.cloudGateTimeoutMs || 10000,
+        });
       } catch (error) {
         this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
         throw error;
@@ -612,7 +614,9 @@ class messageQueueHandler {
       this.adapter.rr_mqtt_connector.recovery &&
       !this.adapter.rr_mqtt_connector.isReady?.()
     ) {
-      await this.adapter.rr_mqtt_connector.waitUntilReady?.({ timeoutMs: options.cloudGateTimeoutMs || 10000 });
+      await this.adapter.rr_mqtt_connector.waitUntilReady?.({
+        timeoutMs: options.cloudGateTimeoutMs || 10000,
+      });
       mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
       roborockMessage = await this.adapter.message.buildRoborockMessage(
         duid,
@@ -819,7 +823,9 @@ class messageQueueHandler {
         const explicitBudget = Number(options.requestTimeoutMs) > 0;
         try {
           await this.adapter.rr_mqtt_connector.waitUntilReady?.({
-            timeoutMs: explicitBudget ? Math.min(options.cloudGateTimeoutMs || 10000, retryTimeout) : (options.cloudGateTimeoutMs || 10000),
+            timeoutMs: explicitBudget
+              ? Math.min(options.cloudGateTimeoutMs || 10000, retryTimeout)
+              : options.cloudGateTimeoutMs || 10000,
           });
         } catch (error) {
           this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
@@ -1034,8 +1040,15 @@ class messageQueueHandler {
         method,
         transport: "cloud",
         duid,
-        operationClass: context.options.operationClass || (secure ? "secure-map" : /^(get_|prop\.get)/.test(method) ? "read" : "write"),
-        sessionGeneration: this.adapter.rr_mqtt_connector.getSessionGeneration?.(),
+        operationClass:
+          context.options.operationClass ||
+          (secure
+            ? "secure-map"
+            : /^(get_|prop\.get)/.test(method)
+              ? "read"
+              : "write"),
+        sessionGeneration:
+          this.adapter.rr_mqtt_connector.getSessionGeneration?.(),
         createdAt: Date.now(),
         publishedAt: null,
       };

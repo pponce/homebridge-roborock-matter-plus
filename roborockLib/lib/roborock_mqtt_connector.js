@@ -377,7 +377,8 @@ class roborock_mqtt_connector {
   }
 
   async initMQTT_Subscribe() {
-    if (this.connectionEventsWanted && this.eventsInstalledFor === this.client) return;
+    if (this.connectionEventsWanted && this.eventsInstalledFor === this.client)
+      return;
     // This used to invoke a `restart` method on the adapter, which the
     // Roborock class has never had — so on the one path it was written for
     // (the broker
@@ -989,7 +990,9 @@ class roborock_mqtt_connector {
     });
   }
 
-  getSessionGeneration() { return this.sessionDiagnostics.generation; }
+  getSessionGeneration() {
+    return this.sessionDiagnostics.generation;
+  }
 
   noteSessionActivity(stage, duid) {
     this.sessionDiagnostics.noteActivity(stage);
@@ -1003,20 +1006,34 @@ class roborock_mqtt_connector {
   getSessionHealthSnapshot(duid) {
     const snapshot = this.sessionDiagnostics.snapshot();
     const activity = this.activityByDuid.get(duid);
-    const age = value => typeof value === "number" ? Math.max(0, performance.now() - value) : null;
+    const age = (value) =>
+      typeof value === "number" ? Math.max(0, performance.now() - value) : null;
     return {
       ...snapshot,
-      state: this.readiness.stopped ? "shutting-down" : this.isReady() ? "ready" : "disconnected",
+      state: this.readiness.stopped
+        ? "shutting-down"
+        : this.isReady()
+          ? "ready"
+          : "disconnected",
       socketConnected: snapshot.connected,
       subscriptionReady: snapshot.subscriptionAcknowledged,
       readyAgeMs: age(this.recovery?.readyAt),
-      ...(duid ? { lastDecodedInboundAgeMs: age(activity?.decoded), lastCorrelatedReplyAgeMs: age(activity?.correlated) } : {}),
+      ...(duid
+        ? {
+            lastDecodedInboundAgeMs: age(activity?.decoded),
+            lastCorrelatedReplyAgeMs: age(activity?.correlated),
+          }
+        : {}),
     };
   }
 
   async reconnectAndWaitReady({ reason = "manual", mode } = {}) {
-    if (this.recovery) return this.recovery.recreate(mode === "preventive" ? "preventive" : reason);
-    if (!await this.reconnectClient(true) && !this.reconnectTimer) return false;
+    if (this.recovery)
+      return this.recovery.recreate(
+        mode === "preventive" ? "preventive" : reason
+      );
+    if (!(await this.reconnectClient(true)) && !this.reconnectTimer)
+      return false;
     await this.readiness.wait(30_000);
     return true;
   }

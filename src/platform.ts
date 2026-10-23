@@ -208,8 +208,11 @@ export default class RoborockPlatform implements DynamicPlatformPlugin {
       enableMqttPreventiveRefresh:
         this.platformConfig.enableMqttPreventiveRefresh === true,
       isScheduleOperationPending: () =>
-        this.scheduleAccountCoordinator.busy || this.nativeScheduleControls?.busy === true ||
-        [...this.hapScheduleAccessories.values()].some(schedule => schedule.hasPendingScheduleWrites()),
+        this.scheduleAccountCoordinator.busy ||
+        this.nativeScheduleControls?.busy === true ||
+        [...this.hapScheduleAccessories.values()].some((schedule) =>
+          schedule.hasPendingScheduleWrites()
+        ),
       mqttPreventiveRefreshMinutes:
         this.platformConfig.mqttPreventiveRefreshMinutes,
       enableMqttSessionRecovery:

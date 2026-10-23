@@ -199,7 +199,9 @@ export class ScheduleWriteQueue {
 
 export class ScheduleAccountCoordinator {
   private queuedOperations = 0;
-  get busy(): boolean { return this.queuedOperations > 0; }
+  get busy(): boolean {
+    return this.queuedOperations > 0;
+  }
   private tail: Promise<void> = Promise.resolve();
   private throttleUntil = 0;
   private throttleError: unknown;
@@ -235,7 +237,9 @@ export class ScheduleAccountCoordinator {
       () => undefined,
       () => undefined
     );
-    return run.finally(() => { this.queuedOperations--; });
+    return run.finally(() => {
+      this.queuedOperations--;
+    });
   }
 
   recordThrottle(error: unknown): void {
@@ -292,7 +296,9 @@ interface PendingScheduleWrite<T> {
 
 export class ScheduleWriteBatcher<T> {
   private queuedBatches = 0;
-  get busy(): boolean { return this.pending.size > 0 || this.queuedBatches > 0; }
+  get busy(): boolean {
+    return this.pending.size > 0 || this.queuedBatches > 0;
+  }
   private readonly queue = new ScheduleWriteQueue();
   private readonly pending = new Map<string, PendingScheduleWrite<T>>();
   private timer: ReturnType<typeof scheduleTimer> | undefined;
@@ -370,7 +376,10 @@ export class ScheduleWriteBatcher<T> {
             pending.reject(error);
           }
         }
-      ).finally(() => { this.queuedBatches--; });
+      )
+      .finally(() => {
+        this.queuedBatches--;
+      });
   }
 }
 
@@ -1405,7 +1414,9 @@ export default class RoborockHapScheduleAccessory {
     return { ok: true, schedules, reason: undefined };
   }
 
-  hasPendingScheduleWrites(): boolean { return this.writeBatcher.busy; }
+  hasPendingScheduleWrites(): boolean {
+    return this.writeBatcher.busy;
+  }
 
   enqueueScheduleWrite(
     scheduleId: string,
