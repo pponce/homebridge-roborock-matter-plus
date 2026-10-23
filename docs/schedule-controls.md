@@ -40,6 +40,14 @@ Turning Delay Active OFF is optimistic too; a failed cancellation returns it to
 ON. A momentary Delay button reset is an acknowledgement of the press, not proof
 that schedules changed.
 
+In the combined `SCHEDULE_PAUSE_DELAY` build, a native control needing MQTT can
+wait up to thirty seconds for reply readiness before sending. This allows the
+initial ten-second reconnect backoff plus connection and subscription time.
+The robot's normal response timeout is separate, and an expired unsent request
+is never replayed later. The existing total retry budget still bounds a command
+that first failed over LAN. The upstream-only branch keeps upstream transport
+behavior.
+
 ## Which schedules are delayed?
 
 Every press checks again using the current, possibly delayed times:

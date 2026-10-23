@@ -217,7 +217,6 @@ class roborock_mqtt_connector {
         : null;
     // Last live presence value per robot; log suppression only.
     this.robotPresenceByDuid = new Map();
-    this.activityByDuid = new Map();
 
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
       this.recovery?.onSessionChanged();
@@ -609,7 +608,7 @@ class roborock_mqtt_connector {
           return;
         }
 
-        this.noteSessionActivity("decoded", duid);
+        this.sessionDiagnostics.noteActivity("decoded");
 
         // Counted here and nowhere else: past the topic match AND past
         // decryption, so the count means the link delivered something real
@@ -637,7 +636,7 @@ class roborock_mqtt_connector {
 
           if (
             resolveB01PendingResponse(this.adapter, duid, dps, () =>
-              this.noteSessionActivity("correlated", duid)
+              this.sessionDiagnostics.noteActivity("correlated")
             )
           ) {
             return;
@@ -690,7 +689,7 @@ class roborock_mqtt_connector {
           // Those requests then sat until the 10 s timeout and failed in Apple
           // Home even though the robot had already carried them out.
           const pending = this.adapter.pendingRequests.get(dps.id);
-          if (pending) this.noteSessionActivity("correlated", duid);
+          if (pending) this.sessionDiagnostics.noteActivity("correlated");
           if (shouldResolveOn102(pending, dps.result)) {
             this.adapter.clearTimeout(pending.timeout);
             this.adapter.pendingRequests.delete(dps.id);
@@ -722,7 +721,7 @@ class roborock_mqtt_connector {
             this.adapter.isB01Device?.(duid)
           ) {
             if (this.adapter.onB01MapFrame(duid, data.payload)) {
-              this.noteSessionActivity("correlated", duid);
+              this.sessionDiagnostics.noteActivity("correlated");
             }
             return;
           }
@@ -798,7 +797,7 @@ class roborock_mqtt_connector {
             }
             this.adapter.clearTimeout(pending.timeout);
             this.adapter.pendingRequests.delete(data2.id);
-            this.noteSessionActivity("correlated", duid);
+            this.sessionDiagnostics.noteActivity("correlated");
             pending.reject(
               Object.assign(
                 new Error(
@@ -839,7 +838,7 @@ class roborock_mqtt_connector {
             this.adapter.log.debug(
               `Cloud message with protocol 301 and id ${data2.id} received.`
             );
-            this.noteSessionActivity("correlated", duid);
+            this.sessionDiagnostics.noteActivity("correlated");
             resolve(decrypted);
           }
         } else if (data.protocol == 500) {
@@ -969,8 +968,8 @@ class roborock_mqtt_connector {
     return !this.readiness.stopped && this.readiness.isReady();
   }
 
-  waitUntilReady({ timeoutMs = 10000, signal } = {}) {
-    return this.readiness.wait(timeoutMs, signal).catch((error) => {
+  waitUntilReady({ timeoutMs = 10000 } = {}) {
+    return this.readiness.wait(timeoutMs).catch((error) => {
       // An unsent request is not robot silence. But a connected client whose
       // reply subscription never succeeds must not stay stuck forever either.
       if (
@@ -992,50 +991,6 @@ class roborock_mqtt_connector {
 
   getSessionGeneration() {
     return this.sessionDiagnostics.generation;
-  }
-
-  noteSessionActivity(stage, duid) {
-    this.sessionDiagnostics.noteActivity(stage);
-    if (duid) {
-      const activity = this.activityByDuid.get(duid) || {};
-      activity[stage] = performance.now();
-      this.activityByDuid.set(duid, activity);
-    }
-  }
-
-  getSessionHealthSnapshot(duid) {
-    const snapshot = this.sessionDiagnostics.snapshot();
-    const activity = this.activityByDuid.get(duid);
-    const age = (value) =>
-      typeof value === "number" ? Math.max(0, performance.now() - value) : null;
-    return {
-      ...snapshot,
-      state: this.readiness.stopped
-        ? "shutting-down"
-        : this.isReady()
-          ? "ready"
-          : "disconnected",
-      socketConnected: snapshot.connected,
-      subscriptionReady: snapshot.subscriptionAcknowledged,
-      readyAgeMs: age(this.recovery?.readyAt),
-      ...(duid
-        ? {
-            lastDecodedInboundAgeMs: age(activity?.decoded),
-            lastCorrelatedReplyAgeMs: age(activity?.correlated),
-          }
-        : {}),
-    };
-  }
-
-  async reconnectAndWaitReady({ reason = "manual", mode } = {}) {
-    if (this.recovery)
-      return this.recovery.recreate(
-        mode === "preventive" ? "preventive" : reason
-      );
-    if (!(await this.reconnectClient(true)) && !this.reconnectTimer)
-      return false;
-    await this.readiness.wait(30_000);
-    return true;
   }
 
   sendMessage(duid, roborockMessage, onNotSent) {

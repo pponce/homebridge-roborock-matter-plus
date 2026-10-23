@@ -27,14 +27,7 @@ class MqttReadiness {
     }
   }
 
-  wait(timeoutMs = 10000, signal) {
-    if (signal?.aborted)
-      return Promise.reject(
-        readinessError(
-          "MQTT readiness wait was cancelled; this command was not sent.",
-          "MQTT_READINESS_CANCELLED"
-        )
-      );
+  wait(timeoutMs = 10000) {
     if (this.stopped)
       return Promise.reject(
         readinessError(
@@ -50,18 +43,10 @@ class MqttReadiness {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
         this.waiters.delete(waiter);
         if (error) reject(error);
         else resolve(this.generation());
       };
-      const abort = () =>
-        finish(
-          readinessError(
-            "MQTT readiness wait was cancelled; this command was not sent.",
-            "MQTT_READINESS_CANCELLED"
-          )
-        );
       const waiter = {
         ready: () => finish(null),
         stop: () =>
@@ -73,7 +58,6 @@ class MqttReadiness {
           ),
       };
       this.waiters.add(waiter);
-      signal?.addEventListener("abort", abort, { once: true });
       timer = setTimeout(
         () =>
           finish(

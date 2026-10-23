@@ -189,7 +189,7 @@ function adapter(debug, api) {
   return result;
 }
 
-test("real integration is debug-only, once per robot, and never writes", async () => {
+test("plugin debug mode keeps upstream discovery without the extra method probes", async () => {
   const calls = [];
   const client = {
     get: async (p) => {
@@ -210,17 +210,14 @@ test("real integration is debug-only, once per robot, and never writes", async (
   const enabled = adapter(true, client);
   await enabled.probeCloudScheduleRoutes("robot");
   await enabled.probeCloudScheduleRoutes("robot");
-  assert.equal(calls.length, 5);
+  assert.deepEqual(calls, [
+    ["GET", "user/devices/robot/jobs"],
+    ["GET", "user/scene/device/robot"],
+  ]);
   assert.equal(
     enabled.lines.filter((l) =>
       l.startsWith("Schedule time inspection for robot:")
     ).length,
-    1
+    0
   );
-  const record = JSON.parse(
-    enabled.lines
-      .find((l) => l.startsWith("Schedule time inspection for robot:"))
-      .split("value=")[1]
-  );
-  assert.equal(record.jobs[0].definition.param.method, "do_timer");
 });

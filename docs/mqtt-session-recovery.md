@@ -13,9 +13,11 @@ failures and idle time alone do not count as correlated cloud silence.
 
 Cloud sends wait for the broker's actual reply-subscription acknowledgement.
 Their normal readiness deadline is ten seconds; the native pause/delay controls
-use an eight-second readiness budget. A request that expires before publication
-fails as not sent and is never replayed later. Once published, it receives its
-separate response deadline. Local requests bypass the cloud readiness gate.
+allow thirty seconds for the initial reconnect backoff and subscription handshake.
+A request that expires before publication fails as not sent and is never replayed
+later. Once published, it receives its separate ten-second response deadline.
+Existing explicit total budgets for LAN-to-cloud retries still apply. Local
+requests bypass the cloud readiness gate.
 
 ## Preventive refresh and minutes setting
 
@@ -42,7 +44,7 @@ It uses the short trigger cooldown and waits for the next idle check when busy.
 
 ## Replacement and failure behavior
 
-Concurrent optional triggers share one operation. Reactive/manual requests pause
+Concurrent optional triggers share one operation. Reactive requests pause
 new cloud sends and allow up to 500 ms for outstanding requests to finish.
 Preventive requests defer instead of deliberately interrupting active work.
 Retired cloud requests and B01 map reads reject with `MQTT_SESSION_REPLACED`;
@@ -77,8 +79,14 @@ Results are `never`, `in-progress`, `succeeded`, `failed`, `recovered`, `deferre
 or `stopped`. With the option disabled, recovery diagnostics report
 `{ enabled: false }`; upstream's default recovery remains active.
 Historical `lastEligibleRead` preserves its generation across replacement, while
-current correlation evidence is cleared. Per-robot activity ages are diagnostic
-only and do not create another recovery policy.
+current correlation evidence is cleared. Upstream's hourly transport summaries
+remain available. Unused manual recovery hooks, per-request abort arguments and
+the extra per-robot activity-age snapshot have been removed. Shutdown still
+cancels readiness waiters.
+
+The extra recovery triggers remain experimental; their benefit over upstream
+3.40.0 has not been established. With both options off, upstream recovery remains
+active and native pause/delay controls continue to work.
 
 Automated regression tests cover real queue timeouts, replacement timing,
 request retirement, late SUBACK, shutdown, shared cooldowns, configured age and

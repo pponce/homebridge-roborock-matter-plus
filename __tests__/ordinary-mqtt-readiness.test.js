@@ -412,42 +412,6 @@ test("a LAN loss shares the explicit remaining budget with MQTT readiness and it
   });
 });
 
-test("native schedule controls can bound readiness to eight seconds without publishing", async () => {
-  mockClients[0].handlers.get("close")();
-  const { result } = await startRequest("robot-a", "upd_timer", {
-    cloudGateTimeoutMs: 8000,
-    operationClass: "write",
-  });
-  await jest.advanceTimersByTimeAsync(7999);
-  expect(connector.readiness.waiters.size).toBe(1);
-  await jest.advanceTimersByTimeAsync(1);
-  expect(await result).toMatchObject({
-    code: "MQTT_READINESS_TIMEOUT",
-    requestNotSent: true,
-  });
-  expect(mockClients[0].publish).not.toHaveBeenCalled();
-  expect(adapter.pendingRequests.size).toBe(0);
-});
-
-test("cancelling one readiness waiter leaves another waiting for SUBACK", async () => {
-  mockClients[0].handlers.get("close")();
-  const abort = new AbortController();
-  const cancelled = connector
-    .waitUntilReady({ signal: abort.signal })
-    .catch((error) => error);
-  const ready = connector.waitUntilReady();
-  abort.abort();
-  expect(await cancelled).toMatchObject({
-    code: "MQTT_READINESS_CANCELLED",
-    requestNotSent: true,
-  });
-  expect(connector.readiness.waiters.size).toBe(1);
-  mockClients[0].handlers.get("connect")({});
-  acknowledge();
-  await expect(ready).resolves.toBe(2);
-  expect(connector.readiness.waiters.size).toBe(0);
-});
-
 test("repeated initialization does not add duplicate listeners to the current client", async () => {
   const client = mockClients[0];
   const count = client.on.mock.calls.length;
@@ -460,18 +424,73 @@ test("repeated initialization does not add duplicate listeners to the current cl
   expect(adapter.noteRequestAnswered).toHaveBeenCalledTimes(1);
 });
 
-test("health diagnostics retain robot-specific activity ages", async () => {
-  const request = await startRequest();
-  receive(reply(request.id));
-  await request.result;
-  await jest.advanceTimersByTimeAsync(1000);
-  expect(connector.getSessionHealthSnapshot("robot-a")).toMatchObject({
-    state: "ready",
-    lastDecodedInboundAgeMs: 1000,
-    lastCorrelatedReplyAgeMs: 1000,
+function nativeApi() {
+  const {
+    createNativeScheduleApi,
+  } = require("../roborockLib/lib/nativeScheduleApi");
+  adapter.messageQueueHandler = queue;
+  adapter.vacuums = {
+    "robot-a": {
+      command: (duid, method, params, options) =>
+        queue.sendRequest(duid, method, params, false, false, options),
+    },
+  };
+  return createNativeScheduleApi(adapter, {
+    recordRequest: jest.fn(),
+    currentThrottleError: () => undefined,
   });
-  expect(connector.getSessionHealthSnapshot("robot-b")).toMatchObject({
-    lastDecodedInboundAgeMs: null,
-    lastCorrelatedReplyAgeMs: null,
+}
+
+test.each(["read", "write"])(
+  "native schedule %s waits through the upstream reconnect and retains its response budget",
+  async (kind) => {
+    const api = nativeApi();
+    const old = mockClients[0];
+    old.handlers.get("close")();
+    const operation = (
+      kind === "read" ? api.isCleaning("robot-a") : api.dock("robot-a")
+    ).catch((error) => error);
+    await jest.advanceTimersByTimeAsync(9999);
+    expect(mockClients).toHaveLength(1);
+    expect(connector.readiness.waiters.size).toBe(1);
+    expect(adapter.pendingRequests.size).toBe(0);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(mockClients).toHaveLength(2);
+    const fresh = mockClients[1];
+    fresh.handlers.get("connect")({});
+    await jest.advanceTimersByTimeAsync(2500);
+    expect(fresh.publish).not.toHaveBeenCalled();
+    acknowledge();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(fresh.publish).toHaveBeenCalledTimes(1);
+    expect(old.publish).not.toHaveBeenCalled();
+    const id = requestId;
+    await jest.advanceTimersByTimeAsync(9999);
+    expect(adapter.pendingRequests.has(id)).toBe(true);
+    receive(reply(id, kind === "read" ? [{ state: 5 }] : ["ok"]));
+    expect(await operation).toBe(kind === "read" ? true : undefined);
+    expect(adapter.pendingRequests.size).toBe(0);
+  }
+);
+
+test("native schedule readiness expires after thirty seconds and a late SUBACK cannot send it", async () => {
+  const api = nativeApi();
+  mockClients[0].handlers.get("close")();
+  const operation = api.isCleaning("robot-a").catch((error) => error);
+  await jest.advanceTimersByTimeAsync(29999);
+  expect(connector.readiness.waiters.size).toBe(1);
+  await jest.advanceTimersByTimeAsync(1);
+  expect(await operation).toMatchObject({
+    code: "MQTT_READINESS_TIMEOUT",
+    requestNotSent: true,
+    unansweredRequest: false,
   });
+  expect(adapter.pendingRequests.size).toBe(0);
+  const fresh = mockClients.at(-1);
+  fresh.handlers.get("connect")({});
+  acknowledge();
+  await jest.advanceTimersByTimeAsync(0);
+  expect(fresh.publish).not.toHaveBeenCalled();
+  expect(connector.readiness.waiters.size).toBe(0);
+  expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
 });

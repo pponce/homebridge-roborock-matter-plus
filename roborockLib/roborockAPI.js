@@ -1,5 +1,4 @@
 "use strict";
-const { inspectCloudJobs } = require("./lib/inspectCloudJobs");
 
 const path = require("path");
 const fs = require("fs");
@@ -2225,7 +2224,7 @@ class Roborock {
       // Latched before anything is torn down, so a retry callback that fires
       // mid-shutdown reads it as already set.
       this.stopped = true;
-      this.clearTimersAndIntervals();
+      await this.clearTimersAndIntervals();
       // Timers were the only thing shutdown used to stop. Both transports
       // stayed open, so frames kept arriving into disposed accessories and
       // the process could only ever be killed rather than exit.
@@ -2271,12 +2270,6 @@ class Roborock {
         `Stopping the Roborock connection failed: ${/** @type {any} */ (e)?.stack || e}`
       );
     }
-  }
-
-  async recoverMqttSession(options = {}) {
-    if (this.stopped)
-      throw new Error("Cannot recover MQTT while Homebridge is shutting down.");
-    return this.rr_mqtt_connector.reconnectAndWaitReady(options);
   }
 
   /**
@@ -5254,26 +5247,6 @@ class Roborock {
       await this.probeOneCloudScheduleRoute(duid, route, results);
     }
 
-    // Decode complete cloud job definitions before generic diagnostics cut
-    // nested JSON strings at 500 characters. Keep the existing debug-only,
-    // once-per-robot guard and the current authenticated connection.
-    try {
-      const inspection = await inspectCloudJobs(
-        this.api,
-        duid,
-        results.schedules?.response
-      );
-      if (inspection) {
-        this.log.debug(
-          `Schedule time inspection for ${duid}: value=${JSON.stringify(inspection)}`
-        );
-      }
-    } catch {
-      this.log.debug(
-        "Schedule time inspection unavailable; normal discovery continues."
-      );
-    }
-
     // A HomeKit switch over these schedules has to WRITE, and the only write
     // route measured on this client is `user/scene/{id}/execute`, which RUNS a
     // scene rather than enabling one. The reporter's off-and-on measurement
@@ -6565,13 +6538,10 @@ class Roborock {
         reject,
         timeout: undefined,
         liveFrames: 0,
-        duid,
         transport: "cloud",
         operationClass: "secure-map",
         sessionGeneration: this.rr_mqtt_connector.getSessionGeneration?.(),
         method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD,
-        createdAt: Date.now(),
-        publishedAt: null,
       };
     });
     entry.promise = promise;
@@ -6617,7 +6587,6 @@ class Roborock {
       this.settleB01MapRequest(duid, entry, error);
     }
     if (this.pendingB01MapRequests.get(duid) === entry) {
-      entry.publishedAt = Date.now();
       entry.timeout = this.setTimeout(onTimeout, 20000);
       entry.timeout.unref?.();
     }

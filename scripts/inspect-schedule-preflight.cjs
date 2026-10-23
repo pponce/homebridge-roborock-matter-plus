@@ -2,7 +2,8 @@
 "use strict";
 
 // A fresh cloud GET plus historical robot-timer observations from existing
-// logs. Does not restart services, query MQTT, or change any schedule.
+// logs. Optional --probe-methods adds three bounded OPTIONS requests.
+// Does not restart services, query MQTT, or change any schedule.
 const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
@@ -12,7 +13,10 @@ const {
   readState,
   writePrivate,
 } = require("./test-schedule-time.cjs");
-const { scheduleShape } = require("../roborockLib/lib/inspectCloudJobs");
+const {
+  scheduleShape,
+  inspectCloudJobs,
+} = require("../roborockLib/lib/inspectCloudJobs");
 const { TrialError } = require("../roborockLib/lib/cloudJobTimeTrial");
 const alias = (value) =>
   createHash("sha256").update(String(value)).digest("hex").slice(0, 12);
@@ -99,7 +103,14 @@ function describeJob(job, selectedJobId, logged) {
   };
 }
 
-async function inspect({ request, collectionPath, jobId, storage, duid }) {
+async function inspect({
+  request,
+  collectionPath,
+  jobId,
+  storage,
+  duid,
+  probeMethods = false,
+}) {
   const requestedAt = new Date().toISOString();
   const response = await request("GET", collectionPath);
   if (
@@ -118,7 +129,7 @@ async function inspect({ request, collectionPath, jobId, storage, duid }) {
   if (new Set(jobs.map((j) => String(j.id))).size !== jobs.length)
     throw new TrialError("DUPLICATE_JOB_IDS");
   const logged = lastLoggedTimers(storage, duid);
-  return {
+  const report = {
     formatVersion: 1,
     mode: "read-only preflight",
     success: true,
@@ -137,6 +148,26 @@ async function inspect({ request, collectionPath, jobId, storage, duid }) {
     },
     jobs: jobs.map((job) => describeJob(job, jobId, logged)),
   };
+  if (probeMethods) {
+    const selected = jobs.find((job) => String(job.id) === String(jobId));
+    const inspection = await inspectCloudJobs(
+      {
+        options: async (route) => {
+          const response = await request("OPTIONS", `/${route}`);
+          const result = {
+            status: response.status,
+            headers: { allow: response.allow },
+          };
+          if (response.status >= 400) throw { response: result };
+          return result;
+        },
+      },
+      duid,
+      selected ? [selected] : []
+    );
+    report.methodChecks = inspection.methodChecks;
+  }
+  return report;
 }
 
 async function main(argv) {
@@ -144,7 +175,11 @@ async function main(argv) {
   try {
     const names = new Set(["storage", "robot", "model", "job-id", "output"]);
     const args = {};
-    for (let i = 0; i < argv.length; i += 2) {
+    for (let i = 0; i < argv.length; i++) {
+      if (argv[i] === "--probe-methods" && args.probeMethods === undefined) {
+        args.probeMethods = true;
+        continue;
+      }
       const key = argv[i].slice(2);
       if (
         !argv[i].startsWith("--") ||
@@ -154,7 +189,7 @@ async function main(argv) {
         argv[i + 1].startsWith("--")
       )
         throw new TrialError("INVALID_ARGUMENTS");
-      args[key] = argv[i + 1];
+      args[key] = argv[++i];
     }
     if (
       [...names].some((key) => !args[key]) ||
@@ -187,7 +222,7 @@ async function main(argv) {
       collectionPath,
       args["job-id"],
       globalThis.fetch,
-      { readOnly: true }
+      { readOnly: true, allowMethodProbes: args.probeMethods === true }
     );
     report = await inspect({
       request,
@@ -195,6 +230,7 @@ async function main(argv) {
       jobId: args["job-id"],
       storage,
       duid: device.duid,
+      probeMethods: args.probeMethods === true,
     });
     Object.assign(report, {
       robot: args.robot,
