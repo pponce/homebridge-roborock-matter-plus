@@ -91,6 +91,12 @@ timer commands, scheduling-related start/stop commands, timezone, status, and
 clean-history reads. It does not record login traffic, headers, credentials,
 maps, images, or MQTT connection secrets.
 
+HTTP records distinguish JSON from form encoding, including repeated form
+fields. Response/error records also contain the sanitized final request body
+after signing and Axios serialization; the earlier request event may contain
+the caller's original object. Only the two recognized content types are kept,
+not the request headers.
+
 Cloud and robot IDs use consistent salted references within a capture. Identity
 objects include the original scalar type. User labels and unknown strings are
 also replaced; known protocol words, cron, timezone, numeric settings, and

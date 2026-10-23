@@ -18,27 +18,17 @@ function interceptors() {
   let id = 0;
   return {
     handlers,
-    use(ok, fail) {
-      handlers.set(++id, { ok, fail });
-      return id;
-    },
-    eject(key) {
-      handlers.delete(key);
-    },
+    use(ok, fail) { handlers.set(++id, { ok, fail }); return id; },
+    eject(key) { handlers.delete(key); },
   };
 }
 
 function fixture(t, options = {}) {
-  const storagePath = fs.mkdtempSync(
-    path.join(os.tmpdir(), "schedule-capture-")
-  );
+  const storagePath = fs.mkdtempSync(path.join(os.tmpdir(), "schedule-capture-"));
   const calls = [];
   const api = {
     interceptors: { request: interceptors(), response: interceptors() },
-    async get(url) {
-      calls.push({ verb: "GET", url });
-      return { data: { result: [] } };
-    },
+    async get(url) { calls.push({ verb: "GET", url }); return { data: { result: [] } }; },
   };
   const adapter = {
     config: { storagePath, enableScheduleProtocolCapture: true },
@@ -52,36 +42,20 @@ function fixture(t, options = {}) {
         calls.push({ duid, method, params });
         return this.exchangeOverCloud({ duid, method, params, messageID: 123 });
       },
-      async exchangeOverCloud() {
-        return [["private-timer", "off", ["0 9 * * 1", "start_clean", {}]]];
-      },
-      async exchangeOverLocal() {
-        return [];
-      },
+      async exchangeOverCloud() { return [["private-timer", "off", ["0 9 * * 1", "start_clean", {}]]]; },
+      async exchangeOverLocal() { return []; },
     },
   };
   const original = adapter.messageQueueHandler.sendRequest;
-  const capture = new ScheduleProtocolCapture(adapter, {
-    snapshots: false,
-    ...options,
-  });
-  t.after(() => {
-    capture.stop();
-    fs.rmSync(storagePath, { recursive: true, force: true });
-  });
-  const records = () =>
-    fs.readFileSync(capture.file, "utf8").trim().split("\n").map(JSON.parse);
+  const capture = new ScheduleProtocolCapture(adapter, { snapshots: false, ...options });
+  t.after(() => { capture.stop(); fs.rmSync(storagePath, { recursive: true, force: true }); });
+  const records = () => fs.readFileSync(capture.file, "utf8").trim().split("\n").map(JSON.parse);
   return { adapter, capture, calls, records, original, storagePath };
 }
 
 test("disabled by default: no file, observer or extra request", () => {
   assert.equal(startScheduleProtocolCapture({ config: {} }), null);
-  assert.equal(
-    startScheduleProtocolCapture({
-      config: { enableScheduleProtocolCapture: "true" },
-    }),
-    null
-  );
+  assert.equal(startScheduleProtocolCapture({ config: { enableScheduleProtocolCapture: "true" } }), null);
 });
 
 test("sanitizes nested JSON, preserves job/timer linkage and complete lists", () => {
@@ -92,15 +66,9 @@ test("sanitizes nested JSON, preserves job/timer linkage and complete lists", ()
     cron: "15 9 * * 1,2,4",
     localKey: "TOP-SECRET-KEY",
     password: 123456,
-    param: JSON.stringify({
-      method: "server_scheduled_start",
-      params: [{ name: "secret-timer", fan: 102, token: "TOP-SECRET-TOKEN" }],
-    }),
+    param: JSON.stringify({ method: "server_scheduled_start", params: [{ name: "secret-timer", fan: 102, token: "TOP-SECRET-TOKEN" }] }),
     timers: [["secret-timer", "off"]],
-    jobs: Array.from({ length: 15 }, (_, id) => ({
-      id,
-      cron: "15 9 * * 1,2,4",
-    })),
+    jobs: Array.from({ length: 15 }, (_, id) => ({ id, cron: "15 9 * * 1,2,4" })),
   };
   const sanitized = s.clean(value);
   assert.equal(sanitized.enabled, true);
@@ -108,10 +76,7 @@ test("sanitizes nested JSON, preserves job/timer linkage and complete lists", ()
   assert.equal(sanitized.timeZoneId, value.timeZoneId);
   assert.equal(sanitized.jobs.length, 15);
   assert.equal(sanitized.param.jsonString.method, "server_scheduled_start");
-  assert.deepEqual(
-    sanitized.param.jsonString.params[0].name,
-    sanitized.timers[0][0]
-  );
+  assert.deepEqual(sanitized.param.jsonString.params[0].name, sanitized.timers[0][0]);
   assert.equal(sanitized.jobs[0].id.type, "number");
   assert.equal(sanitized.param.jsonString.params[0].fan, 102);
   assert(!JSON.stringify(sanitized).includes("TOP-SECRET"));
@@ -122,49 +87,27 @@ test("sanitizes nested JSON, preserves job/timer linkage and complete lists", ()
 
 test("unexpected diagnostic values fail closed", () => {
   const s = createSanitizer();
-  const cycle = {};
-  cycle.child = cycle;
+  const cycle = {}; cycle.child = cycle;
   assert(JSON.stringify(s.clean(cycle)).includes("<depth limit>"));
-  const getters = Object.defineProperty({}, "secret", {
-    enumerable: true,
-    get() {
-      throw new Error("SECRET");
-    },
-  });
+  const getters = Object.defineProperty({}, "secret", { enumerable: true, get() { throw new Error("SECRET"); } });
   assert.equal(s.clean(getters), "<unavailable>");
-  assert(
-    !JSON.stringify(
-      s.clean({ note: "SECRET", val: '{"password":"SECRET"}' })
-    ).includes("SECRET")
-  );
+  assert(!JSON.stringify(s.clean({ note: "SECRET", val: '{"password":"SECRET"}' })).includes("SECRET"));
 });
 
 test("only schedule HTTP routes qualify, with no host, headers or query", () => {
   const { ref } = createSanitizer();
   assert.equal(describeRoute({ url: "/login?token=SECRET" }, ref), null);
   assert.equal(describeRoute({ url: "/user/homes/123" }, ref), null);
-  const result = describeRoute(
-    {
-      url: "https://private.example/user/devices/private-robot/jobs/private-job?token=SECRET",
-    },
-    ref
-  );
+  const result = describeRoute({ url: "https://private.example/user/devices/private-robot/jobs/private-job?token=SECRET" }, ref);
   assert.equal(result.route, "/user/devices/{robot}/jobs/{job}");
   assert(!JSON.stringify(result).includes("private"));
   assert(!JSON.stringify(result).includes("SECRET"));
-  assert.equal(
-    describeRoute({ url: "/user/scene/123/param" }, ref).route,
-    "/user/scene/{scene}/param"
-  );
+  assert.equal(describeRoute({ url: "/user/scene/123/param" }, ref).route, "/user/scene/{scene}/param");
 });
 
 test("RPC observes payload and selected transport; preserves original result and receiver", async (t) => {
   const h = fixture(t);
-  const result = await h.adapter.messageQueueHandler.sendRequest(
-    "private-robot",
-    "upd_timer",
-    ["private-timer", "off"]
-  );
+  const result = await h.adapter.messageQueueHandler.sendRequest("private-robot", "upd_timer", ["private-timer", "off"]);
   assert.equal(result[0][0], "private-timer");
   const records = h.records();
   const request = records.find((r) => r.event === "rpc-request");
@@ -177,11 +120,7 @@ test("RPC observes payload and selected transport; preserves original result and
   assert(!JSON.stringify(records).includes("private-robot"));
   assert(!JSON.stringify(records).includes("private-timer"));
   const count = records.length;
-  await h.adapter.messageQueueHandler.sendRequest(
-    "private-robot",
-    "get_network_info",
-    []
-  );
+  await h.adapter.messageQueueHandler.sendRequest("private-robot", "get_network_info", []);
   assert.equal(h.records().length, count);
 });
 
@@ -194,55 +133,28 @@ test("RPC errors and concurrent calls retain their identities", async (t) => {
   };
   const results = await Promise.allSettled([
     h.adapter.messageQueueHandler.sendRequest("private-robot", "get_timer", []),
-    h.adapter.messageQueueHandler.sendRequest(
-      "private-robot",
-      "get_server_timer",
-      []
-    ),
+    h.adapter.messageQueueHandler.sendRequest("private-robot", "get_server_timer", []),
   ]);
   assert.equal(results[0].reason, failure);
   assert.deepEqual(results[1].value, ["ok"]);
   const error = h.records().find((r) => r.event === "rpc-error");
   assert.equal(error.robotCode, "-10007");
   assert(!JSON.stringify(h.records()).includes("PRIVATE"));
-  assert.equal(
-    new Set(
-      h
-        .records()
-        .filter((r) => r.event === "rpc-request")
-        .map((r) => r.callId)
-    ).size,
-    2
-  );
+  assert.equal(new Set(h.records().filter((r) => r.event === "rpc-request").map((r) => r.callId)).size, 2);
 });
 
 test("HTTP interceptors preserve signed body, headers, response and error", async (t) => {
   const h = fixture(t);
-  const requestHook = [
-    ...h.adapter.api.interceptors.request.handlers.values(),
-  ][0];
-  const responseHook = [
-    ...h.adapter.api.interceptors.response.handlers.values(),
-  ][0];
-  const config = {
-    url: "user/devices/private-robot/jobs/123",
-    method: "put",
-    data: JSON.stringify({ cron: "0 9 * * *", token: "SECRET" }),
-    headers: { Authorization: "SECRET" },
-  };
+  const requestHook = [...h.adapter.api.interceptors.request.handlers.values()][0];
+  const responseHook = [...h.adapter.api.interceptors.response.handlers.values()][0];
+  const config = { url: "user/devices/private-robot/jobs/123", method: "put", data: JSON.stringify({ cron: "0 9 * * *", token: "SECRET" }), headers: { Authorization: "SECRET" } };
   const before = JSON.stringify(config);
   assert.equal(requestHook.ok(config), config);
   assert.equal(JSON.stringify(config), before);
   const response = { config, status: 200, data: { success: true } };
   assert.equal(responseHook.ok(response), response);
-  const error = Object.assign(new Error("SECRET"), {
-    config,
-    response: { config, status: 400, data: { error: "SECRET" } },
-  });
-  await assert.rejects(
-    responseHook.fail(error),
-    (received) => received === error
-  );
+  const error = Object.assign(new Error("SECRET"), { config, response: { config, status: 400, data: { error: "SECRET" } } });
+  await assert.rejects(responseHook.fail(error), (received) => received === error);
   const records = h.records();
   assert(records.some((r) => r.event === "http-request" && r.verb === "PUT"));
   assert(records.some((r) => r.event === "http-error" && r.status === 400));
@@ -253,36 +165,37 @@ test("HTTP interceptors preserve signed body, headers, response and error", asyn
 test("snapshot adds only reads and records HTTP and RPC failures separately", async (t) => {
   const h = fixture(t);
   await h.capture.snapshot();
-  assert.deepEqual(
-    h.calls.filter((r) => r.verb).map((r) => r.verb),
-    ["GET", "GET"]
-  );
-  assert.deepEqual(
-    h.calls.filter((r) => r.method).map((r) => r.method),
-    ["get_server_timer", "get_timer", "get_timezone", "get_status"]
-  );
-  assert(
-    h.records().some((r) => r.event === "snapshot-end" && r.atomic === false)
-  );
+  assert.deepEqual(h.calls.filter((r) => r.verb).map((r) => r.verb), ["GET", "GET"]);
+  assert.deepEqual(h.calls.filter((r) => r.method).map((r) => r.method), ["get_server_timer", "get_timer", "get_timezone", "get_status"]);
+  assert(h.records().some((r) => r.event === "snapshot-end" && r.atomic === false));
   h.adapter.config.isScheduleOperationPending = () => true;
   const count = h.calls.length;
   await h.capture.snapshot();
   assert.equal(h.calls.length, count);
   h.adapter.config.isScheduleOperationPending = () => false;
-  h.adapter.api.get = async () => {
-    throw Object.assign(new Error("SECRET"), { response: { status: 503 } });
-  };
+  h.adapter.api.get = async () => { throw Object.assign(new Error("SECRET"), { response: { status: 503 } }); };
   await h.capture.snapshot();
-  assert(
-    h
-      .records()
-      .some(
-        (r) =>
-          r.event === "snapshot-read-error" &&
-          r.read === "jobs" &&
-          r.status === 503
-      )
-  );
+  assert(h.records().some((r) => r.event === "snapshot-read-error" && r.read === "jobs" && r.status === 503));
+});
+
+test("captures form fields and final JSON serialization without exposing headers", (t) => {
+  const h = fixture(t);
+  const request = [...h.adapter.api.interceptors.request.handlers.values()][0].ok;
+  const response = [...h.adapter.api.interceptors.response.handlers.values()][0].ok;
+  const form = { url: "user/scene/12/enable", method: "put", headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "SECRET" }, data: "enabled=true&enabled=false&token=SECRET" };
+  assert.equal(request(form), form);
+  response({ config: form, status: 200, data: { success: true } });
+  const fields = h.records().find((r) => r.event === "http-request").body.form;
+  assert.deepEqual(fields, [{ enabled: "true" }, { enabled: "false" }, { token: "<redacted>" }]);
+  const json = { url: "user/devices/robot/jobs/12", method: "put", headers: { "Content-Type": "application/json" }, data: { cron: "0 9 * * *" } };
+  request(json);
+  json.data = JSON.stringify(json.data);
+  response({ config: json, status: 200, data: { success: true } });
+  const final = h.records().at(-1);
+  assert.equal(final.requestBody.contentType, "application/json");
+  assert.equal(final.requestBody.value.jsonString.cron, "0 9 * * *");
+  assert(!JSON.stringify(h.records()).includes("SECRET"));
+  assert(!JSON.stringify(h.records()).includes("Authorization"));
 });
 
 test("snapshots do not send classic RPC to B01 robots and stop on rate limiting", async (t) => {
@@ -291,10 +204,7 @@ test("snapshots do not send classic RPC to B01 robots and stop on rate limiting"
   await h.capture.snapshot();
   assert.equal(h.calls.filter((r) => r.method).length, 0);
   let count = 0;
-  h.adapter.api.get = async () => {
-    count++;
-    throw { response: { status: 429 } };
-  };
+  h.adapter.api.get = async () => { count++; throw { response: { status: 429 } }; };
   await h.capture.snapshot();
   assert.equal(count, 1);
   assert.equal(h.capture.active, false);
@@ -304,10 +214,7 @@ test("snapshots do not send classic RPC to B01 robots and stop on rate limiting"
 test("failed diagnostic reads are bounded and snapshots cannot overlap", async (t) => {
   const h = fixture(t);
   let count = 0;
-  h.adapter.api.get = async () => {
-    count++;
-    throw new Error("unavailable");
-  };
+  h.adapter.api.get = async () => { count++; throw new Error("unavailable"); };
   for (let i = 0; i < 5; i++) await h.capture.snapshot();
   assert.equal(count, 6);
   h.capture.snapshotRunning = true;
@@ -317,11 +224,7 @@ test("failed diagnostic reads are bounded and snapshots cannot overlap", async (
 
 test("size limit detaches observers without interrupting a command", async (t) => {
   const h = fixture(t, { maxBytes: 2500 });
-  const result = await h.adapter.messageQueueHandler.sendRequest(
-    "private-robot",
-    "set_timer",
-    [{ settings: Array(500).fill(999999) }]
-  );
+  const result = await h.adapter.messageQueueHandler.sendRequest("private-robot", "set_timer", [{ settings: Array(500).fill(999999) }]);
   assert.equal(result[0][0], "private-timer");
   assert.equal(h.capture.active, false);
   assert.equal(h.adapter.messageQueueHandler.sendRequest, h.original);
@@ -358,11 +261,7 @@ test("download uses only bounded regular capture files, including an active capt
 
 test("unavailable storage leaves robot control usable", () => {
   const original = () => Promise.resolve("ok");
-  const adapter = {
-    config: {},
-    log: { info() {}, warn() {} },
-    messageQueueHandler: { sendRequest: original },
-  };
+  const adapter = { config: {}, log: { info() {}, warn() {} }, messageQueueHandler: { sendRequest: original } };
   const capture = new ScheduleProtocolCapture(adapter);
   assert.equal(capture.active, false);
   assert.equal(adapter.messageQueueHandler.sendRequest, original);
@@ -371,15 +270,9 @@ test("unavailable storage leaves robot control usable", () => {
 test("a disk write failure does not fail or replay a robot command", async (t) => {
   const h = fixture(t);
   const write = fs.writeSync;
-  fs.writeSync = () => {
-    throw new Error("disk full");
-  };
+  fs.writeSync = () => { throw new Error("disk full"); };
   try {
-    const result = await h.adapter.messageQueueHandler.sendRequest(
-      "private-robot",
-      "upd_timer",
-      ["private-timer", "off"]
-    );
+    const result = await h.adapter.messageQueueHandler.sendRequest("private-robot", "upd_timer", ["private-timer", "off"]);
     assert.equal(result[0][0], "private-timer");
     assert.equal(h.calls.length, 1);
     assert.equal(h.capture.active, false);
