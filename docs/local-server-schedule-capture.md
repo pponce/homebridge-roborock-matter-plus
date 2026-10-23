@@ -39,7 +39,7 @@ This is evidence for the models captured, not proof for every Roborock model.
    **Capture schedule protocol for 30 minutes**. Save, then restart the
    Roborock child bridge. General debug logging and Homebridge `-D` are not
    required.
-3. Look for **Schedule capture started** in the Homebridge log. Capture begins
+3. Look for **Schedule capture started (format 2)** in the Homebridge log. Capture begins
    after the connection is ready; the first snapshot starts about five seconds
    later. Snapshots repeat sixty seconds after the preceding snapshot finishes.
 4. Use **Download schedule capture** in Advanced settings. It downloads the
@@ -63,8 +63,10 @@ while testing schedule edits and restore the original settings afterward.
    expected schedules in the Roborock app.
 2. Toggle one schedule off from its Home app switch. Wait at least seventy-five
    seconds. Toggle it back and wait again. Record its original enabled state.
-3. Use the Homebridge **Delay** control for that robot, wait for read-back, then
-   cancel **Delay Active** and verify the original times in the Roborock app.
+3. Use the Homebridge **Delay** control for that robot and wait for read-back
+   plus at least seventy-five seconds for a fresh snapshot. Then cancel
+   **Delay Active**, wait another seventy-five seconds, and verify the
+   original times in the Roborock app.
    This records the existing-job PUT and restoration used by our controller.
    Delay deliberately affects eligible schedules and docks active cleaning;
    this is a user action, not something the capture performs automatically.
@@ -100,9 +102,17 @@ not the request headers.
 Cloud and robot IDs use consistent salted references within a capture. Identity
 objects include the original scalar type. User labels and unknown strings are
 also replaced; known protocol words, cron, timezone, numeric settings, and
-booleans are retained. Nested JSON strings are decoded and sanitized. These
+booleans are retained. Capture format 2 also retains recognized `nextFireTime`
+timestamp strings (ISO/date-time or Unix seconds/milliseconds) and numeric
+comma-separated `segments` strings, including their original spacing and order.
+These exceptions apply only to those field names; arbitrary text stays masked.
+Nested JSON strings are decoded and sanitized. These
 reports are comparison evidence, not restorable schedule backups. The file
 still contains schedule times, room numbers, and robot activity.
+
+The first record identifies the recorder with `formatVersion: 2`. Older
+format-1 files may contain aliases instead of these time and room-list values;
+reinstalling does not restore values already masked in an older capture.
 
 The observer does not change request bodies, signatures, responses, errors,
 transport choices, or retry decisions. Its own extra traffic is GET requests

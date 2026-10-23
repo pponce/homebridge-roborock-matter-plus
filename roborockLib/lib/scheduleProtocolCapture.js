@@ -9,6 +9,7 @@ const { createHmac, randomBytes } = require("node:crypto");
 const { AsyncLocalStorage } = require("node:async_hooks");
 
 const CAPTURE_DIRECTORY = "roborock-schedule-captures";
+const FORMAT_VERSION = 2;
 const MAX_BYTES = 2 * 1024 * 1024;
 const DURATION_MS = 30 * 60 * 1000;
 const INTERVAL_MS = 60 * 1000;
@@ -36,6 +37,10 @@ const SECRET =
   /password|token|secret|local.?key|authorization|cookie|rriot|client.?id|serial|^sn$|mac|ssid|bssid|email|url|host|^ip$/i;
 const IDENTITY =
   /^(?:id|name|duid|deviceId|robotId|homeId|sceneId|jobId|timerId)$/i;
+const NEXT_FIRE_TIME_STRING =
+  /^(?:\d{10}|\d{13}|\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})?)$/;
+const SEGMENT_LIST_STRING =
+  /^[ \t]*\d{1,4}(?:[ \t]*,[ \t]*\d{1,4}){0,499}[ \t]*$/;
 const SAFE_WORDS = new Set([
   "on",
   "off",
@@ -99,6 +104,15 @@ function createSanitizer() {
         return "<unparseable JSON string>";
       }
     }
+    // Retain protocol text only in its expected field. Keep the original
+    // representation so delay comparisons preserve timezone offsets, string
+    // types, room order, and spacing; unknown text still becomes an alias.
+    if (
+      (key === "nextFireTime" && NEXT_FIRE_TIME_STRING.test(value)) ||
+      (key === "segments" &&
+        (value === "" || SEGMENT_LIST_STRING.test(value)))
+    )
+      return value;
     if (
       SAFE_WORDS.has(value) ||
       (key === "method" && /^[a-z_][a-z_0-9]{0,79}$/.test(value)) ||
@@ -209,7 +223,7 @@ class ScheduleProtocolCapture {
       this.fd = fs.openSync(this.file, "wx", 0o600);
       this.active = true;
       this.record("capture-start", {
-        formatVersion: 1,
+        formatVersion: FORMAT_VERSION,
         pluginVersion: require("../../package.json").version,
         durationMinutes: (this.deadline - this.startedAt) / 60000,
         hostTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -228,7 +242,7 @@ class ScheduleProtocolCapture {
       this.endTimer.unref?.();
       if (options.snapshots !== false) this.scheduleSnapshot(5000);
       adapter.log.info(
-        `Schedule capture started for ${(this.deadline - this.startedAt) / 60000} minutes: ${this.file}. Debug logging is not required.`
+        `Schedule capture started (format ${FORMAT_VERSION}) for ${(this.deadline - this.startedAt) / 60000} minutes: ${this.file}. Debug logging is not required.`
       );
     } catch {
       this.stop("capture-unavailable");

@@ -120,6 +120,81 @@ test("sanitizes nested JSON, preserves job/timer linkage and complete lists", ()
   assert.notEqual(s.ref("secret-timer"), createSanitizer().ref("secret-timer"));
 });
 
+test("keeps next-fire timestamps without exposing the same text in identity fields", () => {
+  const s = createSanitizer();
+  for (const nextFireTime of [
+    "2026-10-24T15:45:00Z",
+    "2026-10-24T15:45:00.123456789Z",
+    "2026-10-24T08:45:00-07:00",
+    "2026-10-24T08:45:00.000-0700",
+    "2026-10-24 08:45:00",
+    "2026-10-24 08:45:00.000",
+    "1792856700",
+    "1792856700000",
+    1792856700000,
+    null,
+  ]) {
+    const value = { nextFireTime };
+    assert.deepEqual(s.clean(value), value);
+    assert.deepEqual(s.clean(JSON.stringify(value)), { jsonString: value });
+  }
+
+  const timestamp = "2026-10-24T15:45:00Z";
+  const cleaned = s.clean({
+    nextFireTime: timestamp,
+    name: timestamp,
+    jobId: timestamp,
+    note: timestamp,
+    token: timestamp,
+  });
+  assert.equal(cleaned.nextFireTime, timestamp);
+  assert.equal(cleaned.name.type, "string");
+  assert.equal(cleaned.jobId.type, "string");
+  assert.equal(cleaned.note.type, "string");
+  assert.equal(cleaned.token, "<redacted>");
+  for (const nextFireTime of [
+    "tomorrow",
+    "2026-10-24T15:45:00Z SECRET",
+    "https://example.invalid/?token=SECRET",
+    "1792856700000-SECRET",
+  ]) {
+    assert.equal(s.clean({ nextFireTime }).nextFireTime.type, "string");
+    assert(!JSON.stringify(s.clean({ nextFireTime })).includes("SECRET"));
+  }
+});
+
+test("keeps numeric room-list strings and nested JSON while masking labels", () => {
+  const s = createSanitizer();
+  for (const segments of ["", "18", "18,19", " 18, 19,20 ", [18, 19]]) {
+    const value = { segments };
+    assert.deepEqual(s.clean(value), value);
+    assert.deepEqual(s.clean(JSON.stringify(value)), { jsonString: value });
+  }
+  const rooms = Array.from({ length: 500 }, (_, i) => i + 1).join(",");
+  assert.equal(s.clean({ segments: rooms }).segments, rooms);
+  for (const segments of [
+    rooms + ",501",
+    "18,Kitchen",
+    "18,19;token=SECRET",
+    "18,19\nSECRET",
+  ]) {
+    assert.equal(s.clean({ segments }).segments.type, "string");
+    assert(!JSON.stringify(s.clean({ segments })).includes("SECRET"));
+  }
+  const cleaned = s.clean({
+    segments: "18,19",
+    name: "18,19",
+    timerId: "18,19",
+    note: "18,19",
+    localKey: "18,19",
+  });
+  assert.equal(cleaned.segments, "18,19");
+  assert.equal(cleaned.name.type, "string");
+  assert.equal(cleaned.timerId.type, "string");
+  assert.equal(cleaned.note.type, "string");
+  assert.equal(cleaned.localKey, "<redacted>");
+});
+
 test("unexpected diagnostic values fail closed", () => {
   const s = createSanitizer();
   const cycle = {};
@@ -322,6 +397,68 @@ test("captures form fields and final JSON serialization without exposing headers
   assert.equal(final.requestBody.value.jsonString.cron, "0 9 * * *");
   assert(!JSON.stringify(h.records()).includes("SECRET"));
   assert(!JSON.stringify(h.records()).includes("Authorization"));
+});
+
+test("records room lists and next-fire read-back across JSON and form requests", (t) => {
+  const h = fixture(t);
+  const request = [...h.adapter.api.interceptors.request.handlers.values()][0]
+    .ok;
+  const response = [...h.adapter.api.interceptors.response.handlers.values()][0]
+    .ok;
+  const param = JSON.stringify({
+    method: "server_scheduled_start",
+    params: [{ name: "private-timer", segments: "18, 19", fan_power: 104 }],
+  });
+  const payload = { cron: "45 9 ? * 0,6", param, token: "SECRET" };
+  const job = {
+    ...payload,
+    id: 123456,
+    nextFireTime: "2026-10-24T16:45:00Z",
+  };
+  const before = JSON.stringify({ payload, job });
+  for (const contentType of [
+    "application/json",
+    "application/x-www-form-urlencoded",
+  ]) {
+    const config = {
+      url: "user/devices/private-robot/jobs/123456",
+      method: "put",
+      headers: { "Content-Type": contentType, Authorization: "SECRET" },
+      data:
+        contentType === "application/json"
+          ? payload
+          : new URLSearchParams(payload).toString(),
+    };
+    const originalData = config.data;
+    assert.equal(request(config), config);
+    assert.equal(config.data, originalData);
+    if (contentType === "application/json") {
+      config.data = JSON.stringify(payload);
+    }
+    const reply = { config, status: 200, data: { result: [job] } };
+    const serializedData = config.data;
+    assert.equal(response(reply), reply);
+    assert.equal(config.data, serializedData);
+
+    const recorded = h.records().at(-1);
+    const savedJob = recorded.body.result[0];
+    assert.equal(savedJob.nextFireTime, job.nextFireTime);
+    assert.equal(savedJob.param.jsonString.params[0].segments, "18, 19");
+    assert.equal(savedJob.param.jsonString.params[0].name.type, "string");
+    assert.equal(savedJob.token, "<redacted>");
+    const sent =
+      contentType === "application/json"
+        ? recorded.requestBody.value.jsonString
+        : Object.assign({}, ...recorded.requestBody.form);
+    assert.equal(sent.param.jsonString.params[0].segments, "18, 19");
+    assert.equal(sent.token, "<redacted>");
+  }
+  assert.equal(JSON.stringify({ payload, job }), before);
+  const records = h.records();
+  assert.equal(records[0].formatVersion, 2);
+  assert(!JSON.stringify(records).includes("SECRET"));
+  assert(!JSON.stringify(records).includes("private-timer"));
+  assert(!JSON.stringify(records).includes("private-robot"));
 });
 
 test("snapshots do not send classic RPC to B01 robots and stop on rate limiting", async (t) => {
