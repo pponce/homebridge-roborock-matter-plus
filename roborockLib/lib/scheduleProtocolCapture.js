@@ -34,7 +34,8 @@ const RPC_METHODS = new Set([
 ]);
 const SECRET =
   /password|token|secret|local.?key|authorization|cookie|rriot|client.?id|serial|^sn$|mac|ssid|bssid|email|url|host|^ip$/i;
-const IDENTITY = /^(?:id|name|duid|deviceId|robotId|homeId|sceneId|jobId|timerId)$/i;
+const IDENTITY =
+  /^(?:id|name|duid|deviceId|robotId|homeId|sceneId|jobId|timerId)$/i;
 const SAFE_WORDS = new Set([
   "on",
   "off",
@@ -54,10 +55,7 @@ function createSanitizer() {
   const salt = randomBytes(32);
   const ref = (value) =>
     "ref-" +
-    createHmac("sha256", salt)
-      .update(String(value))
-      .digest("hex")
-      .slice(0, 16);
+    createHmac("sha256", salt).update(String(value)).digest("hex").slice(0, 16);
   const identity = (value) => ({ ref: ref(value), type: typeof value });
   function walk(value, key = "", depth = 0) {
     if (SECRET.test(key)) return "<redacted>";
@@ -71,11 +69,10 @@ function createSanitizer() {
       const result = value
         .slice(0, 500)
         .map((entry, index) =>
-          timer && index === 0
-            ? identity(entry)
-            : walk(entry, "", depth + 1)
+          timer && index === 0 ? identity(entry) : walk(entry, "", depth + 1)
         );
-      if (value.length > 500) result.push({ omittedEntries: value.length - 500 });
+      if (value.length > 500)
+        result.push({ omittedEntries: value.length - 500 });
       return result;
     }
     if (typeof value === "object") {
@@ -106,7 +103,9 @@ function createSanitizer() {
       SAFE_WORDS.has(value) ||
       (key === "method" && /^[a-z_][a-z_0-9]{0,79}$/.test(value)) ||
       /^[\d*/?,\-]+(?:\s+[\d*/?,\-]+){4,6}$/.test(value) ||
-      /^(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc)\/[A-Za-z_+\-/0-9]+$/.test(value) ||
+      /^(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Europe|Indian|Pacific|Etc)\/[A-Za-z_+\-/0-9]+$/.test(
+        value
+      ) ||
       /^roborock\.vacuum\.[a-z0-9]+$/.test(value) ||
       /^\d{1,4}$/.test(value)
     )
@@ -115,8 +114,11 @@ function createSanitizer() {
   }
   return {
     clean(value) {
-      try { return walk(value); }
-      catch { return "<unavailable>"; }
+      try {
+        return walk(value);
+      } catch {
+        return "<unavailable>";
+      }
     },
     ref,
     identity,
@@ -131,10 +133,14 @@ function describeRoute(config, ref) {
   } catch {
     return null;
   }
-  const jobs = pathname.match(/\/user\/devices\/([^/]+)\/jobs(?:\/([^/]+))?\/?$/);
+  const jobs = pathname.match(
+    /\/user\/devices\/([^/]+)\/jobs(?:\/([^/]+))?\/?$/
+  );
   if (jobs)
     return {
-      route: jobs[2] ? "/user/devices/{robot}/jobs/{job}" : "/user/devices/{robot}/jobs",
+      route: jobs[2]
+        ? "/user/devices/{robot}/jobs/{job}"
+        : "/user/devices/{robot}/jobs",
       robot: ref(decodeURIComponent(jobs[1])),
       ...(jobs[2] ? { job: ref(decodeURIComponent(jobs[2])) } : {}),
     };
@@ -144,10 +150,15 @@ function describeRoute(config, ref) {
       route: "/user/scene/device/{robot}",
       robot: ref(decodeURIComponent(deviceScenes[1])),
     };
-  const scene = pathname.match(/\/user\/scene(?:\/([^/]+)(?:\/(param|enable|disable|execute))?)?\/?$/);
+  const scene = pathname.match(
+    /\/user\/scene(?:\/([^/]+)(?:\/(param|enable|disable|execute))?)?\/?$/
+  );
   if (!scene) return null;
   return {
-    route: "/user/scene" + (scene[1] ? "/{scene}" : "") + (scene[2] ? "/" + scene[2] : ""),
+    route:
+      "/user/scene" +
+      (scene[1] ? "/{scene}" : "") +
+      (scene[2] ? "/" + scene[2] : ""),
     ...(scene[1] ? { scene: ref(decodeURIComponent(scene[1])) } : {}),
   };
 }
@@ -179,13 +190,22 @@ class ScheduleProtocolCapture {
     this.failures = new Map();
     this.snapshotRunning = false;
     try {
-      const directory = path.join(adapter.config.storagePath, CAPTURE_DIRECTORY);
+      const directory = path.join(
+        adapter.config.storagePath,
+        CAPTURE_DIRECTORY
+      );
       fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
       // Keep at most three previous captures. Never touch unrelated files.
-      const old = fs.readdirSync(directory).filter((name) => FILE_NAME.test(name)).sort();
+      const old = fs
+        .readdirSync(directory)
+        .filter((name) => FILE_NAME.test(name))
+        .sort();
       for (const name of old.slice(0, Math.max(0, old.length - 3)))
         fs.unlinkSync(path.join(directory, name));
-      this.file = path.join(directory, `schedule-${this.startedAt}-${randomBytes(8).toString("hex")}.jsonl`);
+      this.file = path.join(
+        directory,
+        `schedule-${this.startedAt}-${randomBytes(8).toString("hex")}.jsonl`
+      );
       this.fd = fs.openSync(this.file, "wx", 0o600);
       this.active = true;
       this.record("capture-start", {
@@ -193,19 +213,28 @@ class ScheduleProtocolCapture {
         pluginVersion: require("../../package.json").version,
         durationMinutes: (this.deadline - this.startedAt) / 60000,
         hostTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        scope: "Plugin HTTP/RPC traffic and read-only snapshots; not a cloud-to-robot packet capture.",
-        identities: "Salted aliases remain consistent only within this capture. Identity objects retain original value types.",
+        scope:
+          "Plugin HTTP/RPC traffic and read-only snapshots; not a cloud-to-robot packet capture.",
+        identities:
+          "Salted aliases remain consistent only within this capture. Identity objects retain original value types.",
       });
       if (!this.active) return;
       this.attachRpc();
       this.attachHttp(adapter.api);
-      this.endTimer = setTimeout(() => this.stop("time-limit"), this.deadline - Date.now());
+      this.endTimer = setTimeout(
+        () => this.stop("time-limit"),
+        this.deadline - Date.now()
+      );
       this.endTimer.unref?.();
       if (options.snapshots !== false) this.scheduleSnapshot(5000);
-      adapter.log.info(`Schedule capture started for ${(this.deadline - this.startedAt) / 60000} minutes: ${this.file}. Debug logging is not required.`);
+      adapter.log.info(
+        `Schedule capture started for ${(this.deadline - this.startedAt) / 60000} minutes: ${this.file}. Debug logging is not required.`
+      );
     } catch {
       this.stop("capture-unavailable");
-      adapter.log.warn("Schedule capture could not be started; normal robot control continues.");
+      adapter.log.warn(
+        "Schedule capture could not be started; normal robot control continues."
+      );
     }
   }
 
@@ -213,7 +242,13 @@ class ScheduleProtocolCapture {
     if (!this.active) return;
     if (Date.now() >= this.deadline) return this.stop("time-limit");
     try {
-      const line = JSON.stringify({ at: new Date().toISOString(), sequence: ++this.sequence, event, ...detail }) + "\n";
+      const line =
+        JSON.stringify({
+          at: new Date().toISOString(),
+          sequence: ++this.sequence,
+          event,
+          ...detail,
+        }) + "\n";
       if (this.bytes + Buffer.byteLength(line) > this.maxBytes - 1024)
         return this.stop("size-limit");
       fs.writeSync(this.fd, line);
@@ -229,16 +264,36 @@ class ScheduleProtocolCapture {
     clearTimeout(this.endTimer);
     clearTimeout(this.snapshotTimer);
     for (const restore of this.restorers.splice(0)) {
-      try { restore(); } catch { /* Observation must not break control. */ }
+      try {
+        restore();
+      } catch {
+        /* Observation must not break control. */
+      }
     }
     if (this.fd !== undefined) {
       try {
-        fs.writeSync(this.fd, JSON.stringify({ at: new Date().toISOString(), sequence: ++this.sequence, event: "capture-end", reason }) + "\n");
-      } catch { /* A full/unavailable disk must not break control. */ }
-      try { fs.closeSync(this.fd); } catch { /* Already unavailable. */ }
+        fs.writeSync(
+          this.fd,
+          JSON.stringify({
+            at: new Date().toISOString(),
+            sequence: ++this.sequence,
+            event: "capture-end",
+            reason,
+          }) + "\n"
+        );
+      } catch {
+        /* A full/unavailable disk must not break control. */
+      }
+      try {
+        fs.closeSync(this.fd);
+      } catch {
+        /* Already unavailable. */
+      }
       this.fd = undefined;
     }
-    this.adapter.log.info(`Schedule capture ended (${reason}). Download it from the plugin's Advanced settings.`);
+    this.adapter.log.info(
+      `Schedule capture ended (${reason}). Download it from the plugin's Advanced settings.`
+    );
   }
 
   attachRpc() {
@@ -247,17 +302,22 @@ class ScheduleProtocolCapture {
     const original = queue.sendRequest;
     const wrapped = function (...args) {
       const [duid, method, params] = args;
-      if (!capture.active || !RPC_METHODS.has(method)) return original.apply(this, args);
+      if (!capture.active || !RPC_METHODS.has(method))
+        return original.apply(this, args);
       const callId = ++capture.requestId;
       const common = { callId, robot: capture.sanitize.ref(duid), method };
-      const body = /^del_(?:server_)?timer$/.test(method) && Array.isArray(params)
-        ? params.map((value) => capture.sanitize.identity(value))
-        : capture.sanitize.clean(params);
+      const body =
+        /^del_(?:server_)?timer$/.test(method) && Array.isArray(params)
+          ? params.map((value) => capture.sanitize.identity(value))
+          : capture.sanitize.clean(params);
       capture.record("rpc-request", { ...common, params: body });
       return capture.trace.run(callId, async () => {
         try {
           const result = await original.apply(this, args);
-          capture.record("rpc-response", { ...common, result: capture.sanitize.clean(result) });
+          capture.record("rpc-response", {
+            ...common,
+            result: capture.sanitize.clean(result),
+          });
           return result;
         } catch (error) {
           capture.record("rpc-error", { ...common, ...describeError(error) });
@@ -266,8 +326,13 @@ class ScheduleProtocolCapture {
       });
     };
     queue.sendRequest = wrapped;
-    this.restorers.push(() => { if (queue.sendRequest === wrapped) queue.sendRequest = original; });
-    for (const [key, transport] of [["exchangeOverLocal", "local"], ["exchangeOverCloud", "mqtt"]]) {
+    this.restorers.push(() => {
+      if (queue.sendRequest === wrapped) queue.sendRequest = original;
+    });
+    for (const [key, transport] of [
+      ["exchangeOverLocal", "local"],
+      ["exchangeOverCloud", "mqtt"],
+    ]) {
       const originalExchange = queue[key];
       if (typeof originalExchange !== "function") continue;
       const exchange = function (context, ...args) {
@@ -282,7 +347,9 @@ class ScheduleProtocolCapture {
         return originalExchange.call(this, context, ...args);
       };
       queue[key] = exchange;
-      this.restorers.push(() => { if (queue[key] === exchange) queue[key] = originalExchange; });
+      this.restorers.push(() => {
+        if (queue[key] === exchange) queue[key] = originalExchange;
+      });
     }
   }
 
@@ -293,11 +360,20 @@ class ScheduleProtocolCapture {
       try {
         const route = describeRoute(config, this.sanitize.ref);
         if (this.active && route) {
-          const common = { callId: ++this.requestId, verb: String(config.method || "GET").toUpperCase(), ...route };
+          const common = {
+            callId: ++this.requestId,
+            verb: String(config.method || "GET").toUpperCase(),
+            ...route,
+          };
           pending.set(config, common);
-          this.record("http-request", { ...common, body: this.httpBody(config) });
+          this.record("http-request", {
+            ...common,
+            body: this.httpBody(config),
+          });
         }
-      } catch { /* A diagnostic must never change request handling. */ }
+      } catch {
+        /* A diagnostic must never change request handling. */
+      }
       return config;
     });
     const reply = (response, error) => {
@@ -313,13 +389,22 @@ class ScheduleProtocolCapture {
             requestBody: this.httpBody(response?.config || error?.config),
             ...(error ? { error: describeError(error) } : {}),
           });
-          if ((response?.status ?? error?.response?.status) === 429) this.stop("http-rate-limit");
+          if ((response?.status ?? error?.response?.status) === 429)
+            this.stop("http-rate-limit");
         }
-      } catch { /* Preserve the exact response or rejection. */ }
+      } catch {
+        /* Preserve the exact response or rejection. */
+      }
     };
     const response = api.interceptors.response.use(
-      (value) => { reply(value); return value; },
-      (error) => { reply(error?.response, error); return Promise.reject(error); }
+      (value) => {
+        reply(value);
+        return value;
+      },
+      (error) => {
+        reply(error?.response, error);
+        return Promise.reject(error);
+      }
     );
     this.restorers.push(() => {
       api.interceptors.request.eject(request);
@@ -329,15 +414,35 @@ class ScheduleProtocolCapture {
 
   httpBody(config) {
     if (!config) return null;
-    const rawType = config.headers?.get?.("Content-Type") ?? config.headers?.["Content-Type"] ?? config.headers?.["content-type"];
-    const type = String(rawType || "").split(";")[0].trim().toLowerCase();
-    const contentType = ["application/json", "application/x-www-form-urlencoded"].includes(type) ? type : "unspecified-or-other";
-    const data = config.data instanceof URLSearchParams ? config.data.toString() : config.data;
-    if (contentType === "application/x-www-form-urlencoded" && typeof data === "string" && data.length <= 128 * 1024)
+    const rawType =
+      config.headers?.get?.("Content-Type") ??
+      config.headers?.["Content-Type"] ??
+      config.headers?.["content-type"];
+    const type = String(rawType || "")
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
+    const contentType = [
+      "application/json",
+      "application/x-www-form-urlencoded",
+    ].includes(type)
+      ? type
+      : "unspecified-or-other";
+    const data =
+      config.data instanceof URLSearchParams
+        ? config.data.toString()
+        : config.data;
+    if (
+      contentType === "application/x-www-form-urlencoded" &&
+      typeof data === "string" &&
+      data.length <= 128 * 1024
+    )
       return {
         contentType,
         // A list retains repeated form fields instead of dropping duplicates.
-        form: [...new URLSearchParams(data)].slice(0, 200).map(([key, value]) => this.sanitize.clean({ [key]: value })),
+        form: [...new URLSearchParams(data)]
+          .slice(0, 200)
+          .map(([key, value]) => this.sanitize.clean({ [key]: value })),
       };
     return { contentType, value: this.sanitize.clean(data) };
   }
@@ -345,7 +450,11 @@ class ScheduleProtocolCapture {
   scheduleSnapshot(delay = INTERVAL_MS) {
     if (!this.active) return;
     this.snapshotTimer = setTimeout(async () => {
-      try { await this.snapshot(); } catch { this.record("snapshot-error", {}); }
+      try {
+        await this.snapshot();
+      } catch {
+        this.record("snapshot-error", {});
+      }
       this.scheduleSnapshot();
     }, delay);
     this.snapshotTimer.unref?.();
@@ -353,8 +462,15 @@ class ScheduleProtocolCapture {
 
   async snapshot() {
     if (!this.active || this.snapshotRunning || this.adapter.stopped) return;
-    const available = () => this.active && !this.adapter.stopped && Date.now() < this.deadline && !this.adapter.config.isScheduleOperationPending?.();
-    if (!available()) return this.record("snapshot-skipped", { reason: "schedule-operation-pending" });
+    const available = () =>
+      this.active &&
+      !this.adapter.stopped &&
+      Date.now() < this.deadline &&
+      !this.adapter.config.isScheduleOperationPending?.();
+    if (!available())
+      return this.record("snapshot-skipped", {
+        reason: "schedule-operation-pending",
+      });
     this.snapshotRunning = true;
     this.record("snapshot-start", { atomic: false });
     try {
@@ -363,15 +479,52 @@ class ScheduleProtocolCapture {
         if (!duid || !available()) break;
         this.record("robot", {
           robot: this.sanitize.ref(duid),
-          model: this.sanitize.clean(this.adapter.getProductAttribute?.(duid, "model")),
+          model: this.sanitize.clean(
+            this.adapter.getProductAttribute?.(duid, "model")
+          ),
         });
         const reads = [
-          ["jobs", () => this.adapter.api.get(`user/devices/${encodeURIComponent(duid)}/jobs`, { timeout: 10000 })],
-          ["scenes", () => this.adapter.api.get(`user/scene/device/${encodeURIComponent(duid)}`, { timeout: 10000 })],
+          [
+            "jobs",
+            () =>
+              this.adapter.api.get(
+                `user/devices/${encodeURIComponent(duid)}/jobs`,
+                { timeout: 10000 }
+              ),
+          ],
+          [
+            "scenes",
+            () =>
+              this.adapter.api.get(
+                `user/scene/device/${encodeURIComponent(duid)}`,
+                { timeout: 10000 }
+              ),
+          ],
         ];
         if (!this.adapter.isB01Device?.(duid)) {
-          for (const method of ["get_server_timer", "get_timer", "get_timezone", "get_status"])
-            reads.push([method, () => this.adapter.messageQueueHandler.sendRequest(duid, method, [], false, false, { preferCloud: true, operationClass: "read", requestTimeoutMs: 10000, cloudGateTimeoutMs: 8000 })]);
+          for (const method of [
+            "get_server_timer",
+            "get_timer",
+            "get_timezone",
+            "get_status",
+          ])
+            reads.push([
+              method,
+              () =>
+                this.adapter.messageQueueHandler.sendRequest(
+                  duid,
+                  method,
+                  [],
+                  false,
+                  false,
+                  {
+                    preferCloud: true,
+                    operationClass: "read",
+                    requestTimeoutMs: 10000,
+                    cloudGateTimeoutMs: 8000,
+                  }
+                ),
+            ]);
         }
         for (const [name, read] of reads) {
           if (!available()) break;
@@ -379,10 +532,15 @@ class ScheduleProtocolCapture {
           // Failed/unsupported reads cannot turn a diagnostic into endless
           // retries. A new capture is needed after three failed attempts.
           if ((this.failures.get(key) || 0) >= 3) continue;
-          try { await read(); }
-          catch (error) {
+          try {
+            await read();
+          } catch (error) {
             this.failures.set(key, (this.failures.get(key) || 0) + 1);
-            this.record("snapshot-read-error", { robot: this.sanitize.ref(duid), read: name, ...describeError(error) });
+            this.record("snapshot-read-error", {
+              robot: this.sanitize.ref(duid),
+              read: name,
+              ...describeError(error),
+            });
             if (error?.response?.status === 429) this.stop("http-rate-limit");
           }
         }
@@ -402,20 +560,50 @@ function startScheduleProtocolCapture(adapter) {
 function readLatestScheduleCapture(storagePath) {
   try {
     const directory = path.join(storagePath, CAPTURE_DIRECTORY);
-    const names = fs.readdirSync(directory).filter((name) => FILE_NAME.test(name)).sort().reverse();
-    if (!names.length) return { ok: false, message: "No schedule capture yet. Enable capture and restart the Roborock child bridge." };
+    const names = fs
+      .readdirSync(directory)
+      .filter((name) => FILE_NAME.test(name))
+      .sort()
+      .reverse();
+    if (!names.length)
+      return {
+        ok: false,
+        message:
+          "No schedule capture yet. Enable capture and restart the Roborock child bridge.",
+      };
     const name = names[0];
-    const fd = fs.openSync(path.join(directory, name), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(
+      path.join(directory, name),
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+    );
     try {
       const stat = fs.fstatSync(fd);
-      if (!stat.isFile() || stat.size > MAX_BYTES) throw new Error("Invalid capture");
+      if (!stat.isFile() || stat.size > MAX_BYTES)
+        throw new Error("Invalid capture");
       const content = fs.readFileSync(fd, "utf8");
       // A download while a write is in progress omits an incomplete last line.
-      return { ok: true, name, content: content.slice(0, content.lastIndexOf("\n") + 1) };
-    } finally { fs.closeSync(fd); }
+      return {
+        ok: true,
+        name,
+        content: content.slice(0, content.lastIndexOf("\n") + 1),
+      };
+    } finally {
+      fs.closeSync(fd);
+    }
   } catch {
-    return { ok: false, message: "No readable schedule capture. Enable capture and restart the Roborock child bridge." };
+    return {
+      ok: false,
+      message:
+        "No readable schedule capture. Enable capture and restart the Roborock child bridge.",
+    };
   }
 }
 
-module.exports = { ScheduleProtocolCapture, startScheduleProtocolCapture, readLatestScheduleCapture, createSanitizer, describeRoute, MAX_BYTES };
+module.exports = {
+  ScheduleProtocolCapture,
+  startScheduleProtocolCapture,
+  readLatestScheduleCapture,
+  createSanitizer,
+  describeRoute,
+  MAX_BYTES,
+};
