@@ -23,7 +23,7 @@ async function until(predicate) {
   }
 }
 
-test("a real dropped connection is replaced by a new client with a new id, which acknowledges generation 2 with one SUBSCRIBE per connection", async () => {
+test.each([false, true])("a real dropped connection is replaced by a new client with a new id, which acknowledges generation 2 with one SUBSCRIBE per connection (experimental recovery=%s)", async (enableMqttSessionRecovery) => {
   const connections = [];
   const errors = [];
   const callbackGrants = [];
@@ -83,7 +83,7 @@ test("a real dropped connection is replaced by a new client with a new id, which
   });
   let latest;
   const adapter = {
-    config: {},
+    config: { enableMqttSessionRecovery },
     log: {
       debug: jest.fn(),
       info: jest.fn(),
