@@ -67,7 +67,7 @@ and #46 (historical eligible-read evidence). The remaining PR additions are:
 | --- | -------------------------------------------------------------------------------- |
 | #31 | Optional recovery triggers and diagnostics, adapted here to upstream's lifecycle |
 | #37 | Wait for reply readiness without blocking a working LAN route                    |
-| #38 | Preserve early HAP refusals, persist confirmed state and handle unknown outcomes               |
+| #38 | Preserve early HAP refusals, persist confirmed state and handle unknown outcomes |
 | #39 | Acknowledge Find/Routine presses promptly and suppress duplicate runs            |
 
 The remaining PRs are rebased onto 3.40.1. This integration includes #37's caller-budget/LAN-error fixes and #38's early HAP refusal handling.
