@@ -13,11 +13,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: pr31-lts-prev
+          - target: pr39-lts-prev
             node: lts/-1
-          - target: pr31-lts
+          - target: pr39-lts
             node: lts/*
-          - target: pr31-current
+          - target: pr39-current
             node: current
     runs-on: ubuntu-latest
     timeout-minutes: 25
