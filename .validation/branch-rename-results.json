@@ -1,0 +1,163 @@
+[
+  {
+    "name": "backup/cleanup340/SCHEDULE_PAUSE_DELAY",
+    "new_name": "delete/backup/cleanup340/SCHEDULE_PAUSE_DELAY",
+    "expected_sha": "d42eb597dd79960e3cd4f78319e985ad68c40708",
+    "status": "renamed",
+    "sha": "d42eb597dd79960e3cd4f78319e985ad68c40708"
+  },
+  {
+    "name": "backup/mqtt-session-instrumentation-before-review-20260930",
+    "new_name": "delete/backup/mqtt-session-instrumentation-before-review-20260930",
+    "expected_sha": "42e070a9f7bbe9bb4fd088ee3cf2afa56d1424e0",
+    "status": "renamed",
+    "sha": "42e070a9f7bbe9bb4fd088ee3cf2afa56d1424e0"
+  },
+  {
+    "name": "backup/stable340/SCHEDULE_PAUSE_DELAY",
+    "new_name": "delete/backup/stable340/SCHEDULE_PAUSE_DELAY",
+    "expected_sha": "465ff53012d6b3f2904356dd8b29f5f8f64a2428",
+    "status": "renamed",
+    "sha": "465ff53012d6b3f2904356dd8b29f5f8f64a2428"
+  },
+  {
+    "name": "backup/stable341/SCHEDULE_PAUSE_DELAY",
+    "new_name": "delete/backup/stable341/SCHEDULE_PAUSE_DELAY",
+    "expected_sha": "b38a23ef118764beaed4732ed8de1625c9ba4696",
+    "status": "renamed",
+    "sha": "b38a23ef118764beaed4732ed8de1625c9ba4696"
+  },
+  {
+    "name": "codex/publish-current-branch-to-repository",
+    "new_name": "delete/codex/publish-current-branch-to-repository",
+    "expected_sha": "3c7aaeded264e491536a9cd30898fcd2975d35b1",
+    "status": "renamed",
+    "sha": "3c7aaeded264e491536a9cd30898fcd2975d35b1"
+  },
+  {
+    "name": "codex/publish-current-branch-to-repository-zbmzh9",
+    "new_name": "delete/codex/publish-current-branch-to-repository-zbmzh9",
+    "expected_sha": "7d975345a528bbe482bff372c34a3d70f98d0dbe",
+    "status": "renamed",
+    "sha": "7d975345a528bbe482bff372c34a3d70f98d0dbe"
+  },
+  {
+    "name": "codex/recover-schedules-after-mqtt-silence",
+    "new_name": "delete/codex/recover-schedules-after-mqtt-silence",
+    "expected_sha": "8917ce07b589eae94b9c41d5ec9e4ff9619d2bc8",
+    "status": "renamed",
+    "sha": "8917ce07b589eae94b9c41d5ec9e4ff9619d2bc8"
+  },
+  {
+    "name": "codex/review-conclusions-and-recommendations-af9o1z",
+    "new_name": "delete/codex/review-conclusions-and-recommendations-af9o1z",
+    "expected_sha": "ad28bc9a03252df91fa6ea5821bd5c2c974eaa88",
+    "status": "renamed",
+    "sha": "ad28bc9a03252df91fa6ea5821bd5c2c974eaa88"
+  },
+  {
+    "name": "codex/set-up-local-homebridge-instance-for-testing",
+    "new_name": "delete/codex/set-up-local-homebridge-instance-for-testing",
+    "expected_sha": "5ca2b81e5e7073bd81a8af636c4a791f55a90f88",
+    "status": "renamed",
+    "sha": "5ca2b81e5e7073bd81a8af636c4a791f55a90f88"
+  },
+  {
+    "name": "codex/set-up-local-homebridge-instance-for-testing-c0htrj",
+    "new_name": "delete/codex/set-up-local-homebridge-instance-for-testing-c0htrj",
+    "expected_sha": "c7205ca2a44567fa48f7aedf20a7b5a5d193806d",
+    "status": "renamed",
+    "sha": "c7205ca2a44567fa48f7aedf20a7b5a5d193806d"
+  },
+  {
+    "name": "codex/set-up-local-homebridge-instance-for-testing-cq4361",
+    "new_name": "delete/codex/set-up-local-homebridge-instance-for-testing-cq4361",
+    "expected_sha": "1f31421d6cf6cad4beadf73433380ab3a8542c3e",
+    "status": "renamed",
+    "sha": "1f31421d6cf6cad4beadf73433380ab3a8542c3e"
+  },
+  {
+    "name": "codex/set-up-local-homebridge-instance-for-testing-dpb9vd",
+    "new_name": "delete/codex/set-up-local-homebridge-instance-for-testing-dpb9vd",
+    "expected_sha": "11ca22a9ada36492f9d6db29024b0068d6ab1609",
+    "status": "renamed",
+    "sha": "11ca22a9ada36492f9d6db29024b0068d6ab1609"
+  },
+  {
+    "name": "codex/set-up-local-homebridge-instance-for-testing-u2wgbm",
+    "new_name": "delete/codex/set-up-local-homebridge-instance-for-testing-u2wgbm",
+    "expected_sha": "3feab11e264f1f11950cae66270f8ed5059cb597",
+    "status": "renamed",
+    "sha": "3feab11e264f1f11950cae66270f8ed5059cb597"
+  },
+  {
+    "name": "codex/set-up-local-homebridge-instance-for-testing-ud5rli",
+    "new_name": "delete/codex/set-up-local-homebridge-instance-for-testing-ud5rli",
+    "expected_sha": "d39e020f9f337362d23b1d18a2ffb5db1aa7ecef",
+    "status": "renamed",
+    "sha": "d39e020f9f337362d23b1d18a2ffb5db1aa7ecef"
+  },
+  {
+    "name": "home-extras-pr5-discussion",
+    "new_name": "delete/home-extras-pr5-discussion",
+    "expected_sha": "1dfd27b5457b2690250161fdfb2565444dbda690",
+    "status": "renamed",
+    "sha": "1dfd27b5457b2690250161fdfb2565444dbda690"
+  },
+  {
+    "name": "mqtt-last-eligible-read",
+    "new_name": "delete/mqtt-last-eligible-read",
+    "expected_sha": "6d2e681fe6738ec32800e101dc59bb5836030541",
+    "status": "renamed",
+    "sha": "6d2e681fe6738ec32800e101dc59bb5836030541"
+  },
+  {
+    "name": "mqtt-session-breaker",
+    "new_name": "delete/mqtt-session-breaker",
+    "expected_sha": "9b44272aa5c15ea8d1bbf4249e9b68c950880618",
+    "status": "renamed",
+    "sha": "9b44272aa5c15ea8d1bbf4249e9b68c950880618"
+  },
+  {
+    "name": "mqtt-session-instrumentation",
+    "new_name": "delete/mqtt-session-instrumentation",
+    "expected_sha": "1facd4f90f3ec733bf8c2bdd1dd766d345d418d4",
+    "status": "renamed",
+    "sha": "1facd4f90f3ec733bf8c2bdd1dd766d345d418d4"
+  },
+  {
+    "name": "review-delay/off-dock-battery-combined",
+    "new_name": "delete/review-delay/off-dock-battery-combined",
+    "expected_sha": "d335b6126a9b522745c94689d9d5d18836f64ae4",
+    "status": "renamed",
+    "sha": "d335b6126a9b522745c94689d9d5d18836f64ae4"
+  },
+  {
+    "name": "review-delay/off-dock-battery-minimal",
+    "new_name": "delete/review-delay/off-dock-battery-minimal",
+    "expected_sha": "e89e37e41e52a77c3bbacc7e5c338c733b7b588f",
+    "status": "renamed",
+    "sha": "e89e37e41e52a77c3bbacc7e5c338c733b7b588f"
+  },
+  {
+    "name": "schedule-cloud-call-improvements",
+    "new_name": "delete/schedule-cloud-call-improvements",
+    "expected_sha": "b0808cc2eb90471e93eb51e3f762d0e767523807",
+    "status": "renamed",
+    "sha": "b0808cc2eb90471e93eb51e3f762d0e767523807"
+  },
+  {
+    "name": "schedule-refresh-recovery-live-install",
+    "new_name": "delete/schedule-refresh-recovery-live-install",
+    "expected_sha": "ae88995ee6df43e7ce5d57b03041186eb27232a0",
+    "status": "renamed",
+    "sha": "ae88995ee6df43e7ce5d57b03041186eb27232a0"
+  },
+  {
+    "name": "schedule-write-reconciliation",
+    "new_name": "delete/schedule-write-reconciliation",
+    "expected_sha": "010ad35789e9895807c520e5c21313e8065b40a3",
+    "status": "renamed",
+    "sha": "010ad35789e9895807c520e5c21313e8065b40a3"
+  }
+]
