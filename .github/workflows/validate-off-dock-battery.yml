@@ -53,6 +53,8 @@ jobs:
           fi
           cp "$RUNNER_TEMP/fixed-matter.ts" src/matter_vacuum_accessory.ts
           node -e 'const r=require(process.argv[1]); const t=r.testResults.flatMap(t=>t.assertionResults); if(!t.some(t=>t.fullName.includes("captured sleeping S7 MaxV") && t.status==="failed")) throw Error("Expected hardware regression did not fail"); console.log("::notice title=Regression confirmed::"+r.numFailedTests+" regression cases failed before the fix");' "$RUNNER_TEMP/before.json"
+      - name: Format the new regression test
+        run: ./node_modules/.bin/prettier --write __tests__/an-off-dock-robot-does-not-report-a-charging-battery.test.js
       - name: Check formatting
         run: npm run lint
       - name: Typecheck
@@ -82,17 +84,20 @@ jobs:
           if [ -d tests ]; then
             python3 -m unittest discover -s tests -p 'test_*.py'
           fi
-      - name: Commit generated dist on the installable staging branches
-        if: matrix.variant != 'upstream'
+      - name: Commit validated formatting and installable dist
         env:
           TARGET_BRANCH: ${{ matrix.branch }}
+          VARIANT: ${{ matrix.variant }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f dist
-          if ! git diff --cached --quiet -- dist; then
+          git add __tests__/an-off-dock-robot-does-not-report-a-charging-battery.test.js
+          if [ "$VARIANT" != upstream ]; then
+            git add -f dist
+          fi
+          if ! git diff --cached --quiet; then
             git diff --cached --stat
-            git commit -m "Build dist for off-dock battery charge-state fix"
+            git commit -m "Format regression test and build off-dock battery fix"
             git push origin "HEAD:refs/heads/$TARGET_BRANCH"
           fi
           echo "::notice title=Validated install commit::$(git rev-parse HEAD)"
