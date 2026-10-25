@@ -21,9 +21,6 @@ jobs:
           - variant: minimal
             branch: review-delay/off-dock-battery-minimal
             sha: 1ad702356d831f3c6d18a6cdaae64066e9c0853c
-          - variant: upstream
-            branch: fix/matter-off-dock-battery-charge-state
-            sha: b2f8179c3aa5c4025d99d04061d6ad21b25666fe
     steps:
       - uses: actions/checkout@v5
         with:
@@ -64,12 +61,12 @@ jobs:
       - name: Full Jest suite
         env:
           CI: true
-        run: npm test -- --runInBand --json --outputFile "$RUNNER_TEMP/tests.json"
-      - name: Report Jest results
-        if: always()
         run: |
-          if [ -f "$RUNNER_TEMP/tests.json" ]; then
-            node -e 'const r=require(process.argv[1]); console.log("::notice title=Jest results::"+r.numPassedTests+" passed, "+r.numFailedTests+" failed, "+r.numPendingTests+" skipped; "+r.numPassedTestSuites+" suites passed");' "$RUNNER_TEMP/tests.json"
+          if npm test -- --runInBand --json --outputFile "$RUNNER_TEMP/tests.json" > "$RUNNER_TEMP/jest.log" 2>&1; then
+            tail -n 60 "$RUNNER_TEMP/jest.log"
+          else
+            tail -n 160 "$RUNNER_TEMP/jest.log"
+            exit 1
           fi
       - name: Native Node tests
         shell: bash
@@ -80,10 +77,56 @@ jobs:
             node --test "${test_files[@]}"
           fi
       - name: Python diagnostic tests
+        shell: bash
         run: |
-          if [ -d tests ]; then
-            python3 -m unittest discover -s tests -p 'test_*.py'
+          shopt -s nullglob
+          test_files=(tests/test_*.py)
+          if [ "${#test_files[@]}" -gt 0 ]; then
+            if python3 -m unittest discover -s tests -p 'test_*.py' > "$RUNNER_TEMP/python.log" 2>&1; then
+              cat "$RUNNER_TEMP/python.log"
+            else
+              cat "$RUNNER_TEMP/python.log"
+              exit 1
+            fi
           fi
+      - name: Save validation results
+        if: always()
+        env:
+          REPORT_BRANCH: review-delay/battery-results-${{ matrix.variant }}-${{ github.run_id }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          node <<'NODE' > "$RUNNER_TEMP/battery-validation.json"
+          const fs = require("node:fs");
+          const read = name => {
+            const p = process.env.RUNNER_TEMP + "/" + name;
+            return fs.existsSync(p) ? fs.readFileSync(p, "utf8") : null;
+          };
+          const raw = read("tests.json");
+          const r = raw ? JSON.parse(raw) : null;
+          const failed = r?.testResults.filter(t => t.status !== "passed").map(t => ({
+            name: t.name, status: t.status, message: t.message,
+            failedAssertions: t.assertionResults.filter(a => a.status === "failed")
+          }));
+          const regression = r?.testResults.find(t => t.name.includes("an-off-dock-robot"));
+          console.log(JSON.stringify({
+            jobStatus: process.env.JOB_STATUS,
+            success: r?.success,
+            passed: r?.numPassedTests,
+            failed: r?.numFailedTests,
+            skipped: r?.numPendingTests,
+            suites: r?.numPassedTestSuites,
+            regression: regression && {status: regression.status, assertions: regression.assertionResults.length},
+            failures: failed,
+            python: read("python.log"),
+            jestTail: r?.success ? null : read("jest.log")?.slice(-16000)
+          }, null, 2));
+          NODE
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          report_blob=$(git hash-object -w "$RUNNER_TEMP/battery-validation.json")
+          report_tree=$(printf '100644 blob %s\tvalidation.json\n' "$report_blob" | git mktree)
+          report_commit=$(printf 'Off-dock battery validation results\n' | git commit-tree "$report_tree")
+          git push origin "$report_commit:refs/heads/$REPORT_BRANCH"
       - name: Commit validated formatting and installable dist
         env:
           TARGET_BRANCH: ${{ matrix.branch }}

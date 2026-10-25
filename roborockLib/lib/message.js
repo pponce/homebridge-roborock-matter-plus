@@ -1,0 +1,380 @@
+"use strict";
+
+const crypto = require("crypto");
+const CRC32 = require("crc-32");
+const Parser = require("binary-parser").Parser;
+const roborockCrypto = require("./roborockCrypto");
+const { describeDevice } = require("./describeDevice");
+
+let seq = 1;
+let random = 4711; // Should be initialized with a number 0 - 1999?
+
+// This value is stored hardcoded in librrcodec.so, encrypted by the value of "com.roborock.iotsdk.appsecret" from AndroidManifest.xml.
+const salt = "TXdfu$jyZ#TZHsg4";
+const b01Salt = "5wwh9ikChRjASpMU8cxg7o1d2E";
+
+const messageParser = new Parser()
+  .endianess("big")
+  .string("version", {
+    length: 3,
+  })
+  .uint32("seq")
+  .uint32("random")
+  .uint32("timestamp")
+  .uint16("protocol")
+  .uint16("payloadLen")
+  .buffer("payload", {
+    length: "payloadLen",
+  })
+  .uint32("crc32");
+
+class message {
+  constructor(adapter) {
+    this.adapter = adapter;
+    this.missingLocalKeyWarnings = new Set();
+  }
+
+  /**
+   * @param {string} duid
+   * @param {number} protocol
+   * @param {any} messageID
+   * @param {string} method
+   * @param {any} params
+   * @param {boolean} [secure]
+   * @param {boolean} [_unused] the photo flag's old slot, kept so positional
+   *   callers stay valid; nothing asks for a photo
+   * @param {{b01Q10Dps?: Record<string, any>}} [options] `b01Q10Dps` carries a
+   *   pre-built Q10 datapoint map from the send choke point, which is the only
+   *   place that knows the device family. Absent for every other device.
+   */
+  async buildPayload(
+    duid,
+    protocol,
+    messageID,
+    method,
+    params,
+    secure = false,
+    _unused = false,
+    options = {}
+  ) {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const endpoint = this.adapter.rr_mqtt_connector.getEndpoint();
+    const version = await this.adapter.getRobotVersion(duid);
+
+    const inner = {
+      id: messageID,
+      method: method,
+      params: params,
+    };
+    // Every V1 request over MQTT carries it, as python-roborock's MQTT
+    // strategy encodes every request with its security data; its local
+    // strategy encodes none.
+    if (secure || protocol === 101) {
+      inner.security = {
+        endpoint: endpoint,
+        // Lowercase, as python-roborock's SecurityData.to_dict sends it.
+        nonce: this.adapter.nonce.toString("hex"),
+      };
+    }
+
+    let payload;
+    if (options && options.b01Q10Dps) {
+      // B01 Q10 (`ss*`) wire format: the datapoint is written directly. No
+      // RPC envelope, no `method`, no `msgId`, no top-level `t`, and no
+      // datapoint 10000 — that datapoint does not exist on this family, which
+      // is why the Q7 form below was discarded by the robot without reply
+      // (#14). The dps map is built in b01Q10Adapter and passed through here
+      // rather than rebuilt, so the family test lives in exactly one place.
+      payload = JSON.stringify({ dps: options.b01Q10Dps });
+    } else if (version == "B01" || version == "\x81S\x19") {
+      // Q7/B01 wire format (verified against the python-roborock reference
+      // fixtures): a single object on dps 10000 carrying method/msgId/params
+      // only. No top-level "t", no numeric "id", no security block; method
+      // translation happens in b01Q7Adapter before this point.
+      payload = JSON.stringify({
+        dps: {
+          10000: {
+            method: method,
+            msgId: String(messageID),
+            params: params !== undefined && params !== null ? params : [],
+          },
+        },
+      });
+    } else {
+      // Datapoint 101 on BOTH transports, as python-roborock sends it
+      // (`RequestMessage._as_payload`). Until 3.36.0 a local request went on
+      // datapoint 4 — the protocol number, not the RPC datapoint — which some
+      // robots accept and nothing guarantees.
+      payload = JSON.stringify({
+        dps: {
+          101: JSON.stringify(inner),
+        },
+        t: timestamp,
+      });
+    }
+
+    return payload;
+  }
+
+  async buildRoborockMessage(duid, protocol, timestamp, payload) {
+    // A LOCAL frame (protocol 4) is encrypted in the protocol the robot
+    // answered the local hello in, which need not be the one its account
+    // lists (localConnector.negotiateLocalProtocol). Cloud frames keep `pv`.
+    const negotiated =
+      protocol == 4
+        ? this.adapter.localConnector?.getNegotiatedVersion?.(duid)
+        : undefined;
+    const version = negotiated || (await this.adapter.getRobotVersion(duid));
+
+    let encrypted;
+
+    const currentSeq = seq & 0xffffffff;
+    const currentRandom = random & 0xffffffff;
+
+    if (version == "1.0") {
+      const localKey =
+        this.adapter.localKeys instanceof Map
+          ? this.adapter.localKeys.get(duid)
+          : null;
+      const aesKey = roborockCrypto.md5bin(
+        roborockCrypto.encodeTimestamp(timestamp) + localKey + salt
+      );
+      const cipher = crypto.createCipheriv("aes-128-ecb", aesKey, null);
+      encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
+    } else if (version == "A01") {
+      const localKey = this.adapter.localKeys.get(duid);
+
+      const iv = roborockCrypto
+        .md5hex(
+          currentRandom.toString(16).padStart(8, "0") +
+            "726f626f726f636b2d67a6d6da"
+        )
+        .substring(8, 24); // 726f626f726f636b2d67a6d6da can be found in librrcodec.so of version 4.0 of the roborock app
+      const cipher = crypto.createCipheriv("aes-128-cbc", localKey, iv);
+      encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
+    } else if (version == "L01") {
+      const localKey = this.adapter.localKeys.get(duid);
+      const { connectNonce, ackNonce } = this._getL01Nonces(duid);
+      const aesKey = crypto
+        .createHash("sha256")
+        .update(roborockCrypto.encodeTimestamp(timestamp) + localKey + salt)
+        .digest();
+      const iv = this._deriveL01Iv(currentSeq, currentRandom, timestamp);
+      const aad = this._deriveL01Aad(
+        currentSeq,
+        connectNonce,
+        ackNonce,
+        currentRandom,
+        timestamp
+      );
+      const cipher = crypto.createCipheriv("aes-256-gcm", aesKey, iv);
+      cipher.setAAD(aad);
+      const encryptedPayload = Buffer.concat([
+        cipher.update(payload),
+        cipher.final(),
+      ]);
+      encrypted = Buffer.concat([encryptedPayload, cipher.getAuthTag()]);
+    } else if (version == "B01" || version == "\x81S\x19") {
+      const localKey = this.adapter.localKeys.get(duid);
+      const iv = this._deriveB01Iv(currentRandom);
+      const cipher = crypto.createCipheriv("aes-128-cbc", localKey, iv);
+      encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
+    }
+
+    if (encrypted) {
+      const msg = Buffer.alloc(23 + encrypted.length);
+      // latin1, not the UTF-8 default: the protocol version is three raw
+      // bytes, and one of the versions this file handles explicitly is
+      // "\x81S\x19". UTF-8 encodes 0x81 as two bytes (c2 81), so write()
+      // returned 4 and produced `c2 81 53 19`; the writeUint32BE below then
+      // overwrote the fourth byte, leaving a corrupt version AND a wrong
+      // sequence number. _decodeMsg already reads it back with latin1.
+      msg.write(version, "latin1");
+      msg.writeUint32BE(currentSeq, 3);
+      msg.writeUint32BE(currentRandom, 7);
+      msg.writeUint32BE(timestamp, 11);
+      msg.writeUint16BE(protocol, 15);
+      msg.writeUint16BE(encrypted.length, 17);
+      encrypted.copy(msg, 19);
+      const crc32 = CRC32.buf(msg.subarray(0, msg.length - 4)) >>> 0;
+      msg.writeUint32BE(crc32, msg.length - 4);
+      seq++;
+      random++;
+
+      return msg;
+    }
+
+    return false;
+  }
+
+  _decodeMsg(message, duid) {
+    try {
+      // Do some checks before trying to decode the message.
+      const version = message.toString("latin1", 0, 3);
+
+      if (
+        version !== "1.0" &&
+        version !== "A01" &&
+        version !== "L01" &&
+        version !== "B01" &&
+        version !== "\x81S\x19"
+      ) {
+        throw new Error(`Unknown protocol version ${version}`);
+      }
+      const crc32 = CRC32.buf(message.subarray(0, message.length - 4)) >>> 0;
+      const expectedCrc32 = message.readUint32BE(message.length - 4);
+      if (crc32 != expectedCrc32) {
+        throw new Error(`Wrong CRC32 ${crc32}, expected ${expectedCrc32}`);
+      }
+
+      const data = this.getParsedData(message);
+      delete data.payloadLen;
+
+      const localKey = this.adapter.localKeys.get(duid);
+      if (!localKey) {
+        if (!this.missingLocalKeyWarnings.has(duid)) {
+          this.missingLocalKeyWarnings.add(duid);
+          this.adapter.log.warn(
+            `Skipping MQTT message for ${describeDevice(this.adapter, duid)}: no localKey available.`
+          );
+        }
+
+        const error = new Error(
+          `No localKey found for ${describeDevice(this.adapter, duid)}`
+        );
+        error.code = "ERR_MISSING_LOCAL_KEY";
+        throw error;
+      }
+
+      if (version == "1.0") {
+        const aesKey = roborockCrypto.md5bin(
+          roborockCrypto.encodeTimestamp(data.timestamp) + localKey + salt
+        );
+        const decipher = crypto.createDecipheriv("aes-128-ecb", aesKey, null);
+        data.payload = Buffer.concat([
+          decipher.update(data.payload),
+          decipher.final(),
+        ]);
+      } else if (version == "A01") {
+        const iv = roborockCrypto
+          .md5hex(
+            data.random.toString(16).padStart(8, "0") +
+              "726f626f726f636b2d67a6d6da"
+          )
+          .substring(8, 24);
+        const decipher = crypto.createDecipheriv("aes-128-cbc", localKey, iv);
+        data.payload = Buffer.concat([
+          decipher.update(data.payload),
+          decipher.final(),
+        ]);
+      } else if (version == "L01") {
+        const { connectNonce, ackNonce } = this._getL01Nonces(duid);
+        const aesKey = crypto
+          .createHash("sha256")
+          .update(
+            roborockCrypto.encodeTimestamp(data.timestamp) + localKey + salt
+          )
+          .digest();
+        const iv = this._deriveL01Iv(data.seq, data.random, data.timestamp);
+        const aad = this._deriveL01Aad(
+          data.seq,
+          connectNonce,
+          ackNonce,
+          data.random,
+          data.timestamp
+        );
+        const authTag = data.payload.subarray(data.payload.length - 16);
+        const encryptedPayload = data.payload.subarray(
+          0,
+          data.payload.length - 16
+        );
+        const decipher = crypto.createDecipheriv("aes-256-gcm", aesKey, iv);
+        decipher.setAAD(aad);
+        decipher.setAuthTag(authTag);
+        data.payload = Buffer.concat([
+          decipher.update(encryptedPayload),
+          decipher.final(),
+        ]);
+      } else if (version == "B01" || version == "\x81S\x19") {
+        const iv = this._deriveB01Iv(data.random);
+        const decipher = crypto.createDecipheriv("aes-128-cbc", localKey, iv);
+        data.payload = Buffer.concat([
+          decipher.update(data.payload),
+          decipher.final(),
+        ]);
+      }
+
+      return data;
+    } catch (error) {
+      if (error && error.code === "ERR_MISSING_LOCAL_KEY") {
+        return null;
+      }
+
+      const preview = message
+        .subarray(0, Math.min(message.length, 12))
+        .toString("hex");
+      const reason = error && error.message ? error.message : String(error);
+      this.adapter.log.error(
+        `failed to _decodeMsg for ${describeDevice(this.adapter, duid)}: ${reason} (len=${message.length}, preview=${preview})`
+      );
+      return null;
+    }
+  }
+
+  getParsedData(data) {
+    return messageParser.parse(data);
+  }
+
+  _deriveB01Iv(randomSeed) {
+    const randomBuffer = Buffer.alloc(4);
+    randomBuffer.writeUInt32BE(randomSeed >>> 0, 0);
+
+    const randomHex = randomBuffer.toString("hex").toLowerCase();
+    const hash = roborockCrypto.md5hex(randomHex + b01Salt);
+    const iv = hash.substring(9, 25);
+
+    return Buffer.from(iv, "utf8");
+  }
+
+  _deriveL01Iv(sequence, randomSeed, timestamp) {
+    const digestInput = Buffer.alloc(12);
+    digestInput.writeUInt32BE(sequence >>> 0, 0);
+    digestInput.writeUInt32BE(randomSeed >>> 0, 4);
+    digestInput.writeUInt32BE(timestamp >>> 0, 8);
+    return crypto
+      .createHash("sha256")
+      .update(digestInput)
+      .digest()
+      .subarray(0, 12);
+  }
+
+  _deriveL01Aad(sequence, connectNonce, ackNonce, randomSeed, timestamp) {
+    const aad = Buffer.alloc(20);
+    aad.writeUInt32BE(sequence >>> 0, 0);
+    aad.writeUInt32BE(connectNonce >>> 0, 4);
+    aad.writeUInt32BE(ackNonce >>> 0, 8);
+    aad.writeUInt32BE(randomSeed >>> 0, 12);
+    aad.writeUInt32BE(timestamp >>> 0, 16);
+    return aad;
+  }
+
+  _getL01Nonces(duid) {
+    const nonces =
+      this.adapter.localL01Nonces && this.adapter.localL01Nonces.get(duid);
+    if (
+      !nonces ||
+      typeof nonces.connectNonce !== "number" ||
+      typeof nonces.ackNonce !== "number"
+    ) {
+      throw new Error(
+        `Missing L01 nonces for ${describeDevice(this.adapter, duid)}`
+      );
+    }
+
+    return nonces;
+  }
+}
+
+module.exports = {
+  message,
+};

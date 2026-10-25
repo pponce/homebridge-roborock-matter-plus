@@ -1,0 +1,1206 @@
+"use strict";
+
+const rrMessage = require("./message").message;
+const RRMapParser = require("./RRMapParser");
+const fs = require("fs");
+const { describeDevice } = require("./describeDevice");
+const { isKnownStatusAttribute } = require("./deviceFeatures");
+
+// Minimum spacing between periodic (non-forced) get_status polls per robot.
+// MQTT push remains the primary live channel; this is the safety net that
+// catches a dropped push long before the 3-minute full refresh would.
+const STATUS_POLL_MIN_INTERVAL_MS = 60 * 1000;
+
+// Longest rendering of a single unmapped attribute value in the report line
+// below. `cleaning_info` is an object, and one robot's status can carry a
+// nested blob big enough to bury the rest of the message.
+const MAX_REPORTED_STATUS_VALUE_LENGTH = 60;
+
+/**
+ * The one list of caller options that travel with a request to the queue.
+ *
+ * Both `command` and `getParameter` derive theirs here on purpose. A
+ * hand-written copy of a list like this in two places is the fault shape this
+ * project keeps finding: the copies drift, and the one nobody looked at goes
+ * on sending requests the caller never asked for.
+ *
+ * @param {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number }} [options]
+ * @returns {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number }}
+ */
+function buildForwardedRequestOptions(options = {}) {
+  /** @type {{ preferCloud?: boolean, preferLocal?: boolean, allowOfflineCloudSend?: boolean, requestTimeoutMs?: number }} */
+  const requestOptions = {};
+
+  if (options.preferCloud) {
+    requestOptions.preferCloud = true;
+  }
+  if (options.preferLocal) {
+    requestOptions.preferLocal = true;
+  }
+  if (options.allowOfflineCloudSend) {
+    requestOptions.allowOfflineCloudSend = true;
+  }
+  // A non-positive or non-finite timeout is not an override to
+  // messageQueueHandler — it silently restores that layer's ten-second
+  // default. Only a usable budget is forwarded.
+  if (
+    typeof options.requestTimeoutMs === "number" &&
+    Number.isFinite(options.requestTimeoutMs) &&
+    options.requestTimeoutMs > 0
+  ) {
+    requestOptions.requestTimeoutMs = options.requestTimeoutMs;
+  }
+
+  return requestOptions;
+}
+
+/**
+ * The floor number the last `get_status` reported, or null if none has landed.
+ *
+ * The value in this state is ALREADY right-shifted — the status handler does
+ * `map_status >> 2` before storing it — so it is returned as-is. Shifting it a
+ * second time would file every room on floor 1 under floor 0.
+ *
+ * UNDER HOMEBRIDGE THIS IS ALWAYS NULL, and that is now on purpose. The write
+ * it expects sits behind the ioBroker `getObjectAsync()` gate in the status
+ * loop, which is an empty dummy here, so 3.33.0 and 3.34.0's "the floor
+ * normally comes from the status the plugin already polled" never happened:
+ * every room poll asked `get_status` right after `get_room_mapping`. 3.35.0
+ * briefly made the cache real, and review showed why it should not be — the
+ * status poll is up to a minute old, so a map switched in the Roborock app
+ * inside that minute got its rooms filed under the OLD map's id, in the room
+ * cache that is persisted and only refilled for maps with no rooms at all.
+ * A fresh `get_status` is one request every few minutes; a corrupted room
+ * list is a robot cleaning the wrong room. Do not populate this.
+ *
+ * @param {{ getStateAsync?: (id: string) => {val?: unknown} | null | undefined }} adapter
+ * @param {string} duid
+ * @returns {number | null}
+ */
+function readCachedRoomFloor(adapter, duid) {
+  const cached = adapter.getStateAsync?.(
+    `Devices.${duid}.deviceStatus.map_status`
+  );
+  const floor = Number(cached?.val);
+
+  // `Number(null)` is 0 and `Number(undefined)` is NaN, so the emptiness test
+  // has to be on the value rather than on the conversion: a real floor of 0 is
+  // the common case for a home with one map.
+  if (cached?.val === undefined || cached?.val === null) {
+    return null;
+  }
+
+  return Number.isFinite(floor) ? floor : null;
+}
+
+/**
+ * Render a `get_status` value for a log line. The old per-attribute warning
+ * interpolated the raw value, so an object arrived as the useless
+ * `[object Object]` — visible in skmzwanke's log for `cleaning_info`, which is
+ * the one field where the shape was the interesting part.
+ *
+ * @param {unknown} value
+ * @returns {string}
+ */
+function describeStatusValue(value) {
+  let text;
+
+  if (value === null || typeof value !== "object") {
+    text = String(value);
+  } else {
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      text = "[unserialisable]";
+    }
+  }
+
+  return text.length > MAX_REPORTED_STATUS_VALUE_LENGTH
+    ? `${text.slice(0, MAX_REPORTED_STATUS_VALUE_LENGTH)}…`
+    : text;
+}
+
+const mappedCleanSummary = {
+  0: "clean_time",
+  1: "clean_area",
+  2: "clean_count",
+  3: "records",
+};
+
+const mappedCleaningRecordAttribute = {
+  0: "begin",
+  1: "end",
+  2: "duration",
+  3: "area",
+  4: "error",
+  5: "complete",
+  6: "start_type",
+  7: "clean_type",
+  8: "finish_reason",
+  9: "dust_collection_status",
+};
+
+class vacuum {
+  constructor(adapter, robotModel) {
+    this.adapter = adapter;
+
+    this.adapter.log.debug(`Robot key: ${robotModel}`);
+    this.robotModel = robotModel;
+
+    this.message = new rrMessage(this.adapter);
+
+    this.mapParser = new RRMapParser(this.adapter);
+
+    this.parameterFolders = {
+      get_mop_mode: "deviceStatus",
+      get_water_box_mode: "deviceStatus",
+      get_water_box_custom_mode: "deviceStatus",
+      get_network_info: "networkInfo",
+      get_consumable: "consumables",
+      get_fw_features: "firmwareFeatures",
+      get_carpet_mode: "deviceStatus",
+      get_carpet_clean_mode: "deviceStatus",
+      get_carpet_cleaning_mode: "deviceStatus",
+    };
+
+    /** @type {Map<string, number>} last periodic status poll, per duid */
+    this.lastStatusPollAt = new Map();
+
+    /**
+     * The robot's last `get_status` reply as it arrived, per duid. Startup
+     * waits for the first one before the Matter accessories exist, so this is
+     * how they can start from it (roborockAPI.getLastKnownLiveStatus).
+     *
+     * @type {Map<string, Record<string, unknown>>}
+     */
+    this.lastStatusReply = new Map();
+
+    /**
+     * `get_status` attributes with no mapping in the robot's feature profile
+     * that have already been reported, per duid. The set of unmapped fields a
+     * given robot sends is fixed by its firmware, so reporting it once says
+     * everything a repeat would; a time-based throttle would still bring the
+     * message back forever, which is the complaint, not the fix.
+     *
+     * @type {Map<string, Set<string>>}
+     */
+    this.reportedUnmappedStatusAttributes = new Map();
+
+    /**
+     * The dock type last seen from a robot's live `get_status`, per duid.
+     *
+     * `processDockType()` is idempotent and cheap, so it keeps running on
+     * every poll. Telling the platform about it does not: the notification
+     * re-runs the HomeKit action-switch sync behind it. A robot that reports
+     * `dock_type` in every `get_status` — which is most of them — therefore
+     * re-announced unchanged capabilities roughly once a minute per robot,
+     * and a user who had opted the Empty Bin switch on for a robot without an
+     * auto-empty dock collected the "Not publishing the Empty Bin switch"
+     * debug line at that same rate. A dock type is worth announcing when it
+     * is new or has actually changed; a repeat of the same value cannot tell
+     * the platform anything it did not already act on.
+     *
+     * @type {Map<string, unknown>}
+     */
+    this.lastSeenDockType = new Map();
+  }
+
+  /**
+   * Record the dock type a robot just reported, and say whether it is news.
+   *
+   * @param {string} duid
+   * @param {unknown} dockType
+   * @returns {boolean} true on the first sighting, and on every real change
+   */
+  rememberDockType(duid, dockType) {
+    const isNews =
+      !this.lastSeenDockType.has(duid) ||
+      this.lastSeenDockType.get(duid) !== dockType;
+
+    this.lastSeenDockType.set(duid, dockType);
+
+    return isNews;
+  }
+
+  /**
+   * Record that an unmapped `get_status` attribute is about to be reported for
+   * a robot, and say whether this is the initial sighting.
+   *
+   * @param {string} duid
+   * @param {string} attribute
+   * @returns {boolean} true only the one time the pair has not been seen before
+   */
+  rememberUnmappedStatusAttribute(duid, attribute) {
+    let reported = this.reportedUnmappedStatusAttributes.get(duid);
+
+    if (!reported) {
+      reported = new Set();
+      this.reportedUnmappedStatusAttributes.set(duid, reported);
+    }
+
+    if (reported.has(attribute)) {
+      return false;
+    }
+
+    reported.add(attribute);
+    return true;
+  }
+
+  /**
+   * True when this robot's periodic status poll is due again.
+   * @param {string} duid
+   */
+  shouldPollStatusNow(duid) {
+    const last = this.lastStatusPollAt.get(duid);
+    return (
+      last === undefined || Date.now() - last >= STATUS_POLL_MIN_INTERVAL_MS
+    );
+  }
+
+  /** @param {string} duid */
+  markStatusPolled(duid) {
+    this.lastStatusPollAt.set(duid, Date.now());
+  }
+
+  async updateDiagnosticSnapshot(duid, key, payload) {
+    if (typeof this.adapter.updateRoborockDiagnostics !== "function") {
+      return;
+    }
+
+    await this.adapter.updateRoborockDiagnostics(duid, key, {
+      capturedAt: new Date().toISOString(),
+      payload,
+    });
+  }
+
+  async command(duid, parameter, value, options = {}) {
+    try {
+      const requestOptions = buildForwardedRequestOptions(options);
+      const hasRequestOptions = Object.keys(requestOptions).length > 0;
+      const sendCommandRequest = (method, params) =>
+        hasRequestOptions
+          ? this.adapter.messageQueueHandler.sendRequest(
+              duid,
+              method,
+              params,
+              false,
+              false,
+              requestOptions
+            )
+          : this.adapter.messageQueueHandler.sendRequest(duid, method, params);
+
+      switch (parameter) {
+        case "app_segment_clean": {
+          this.adapter.log.debug("Start room cleaning");
+
+          const roomList = {};
+          roomList.segments = [];
+          const roomFloor = await this.adapter.getStateAsync(
+            `Devices.${duid}.deviceStatus.map_status`
+          );
+          const mappedRoomList = await sendCommandRequest(
+            "get_room_mapping",
+            []
+          );
+
+          if (mappedRoomList) {
+            const roomStates = await Promise.all(
+              Object.keys(mappedRoomList).map((mappedRoom) =>
+                this.adapter.getStateAsync(
+                  `Devices.${duid}.floors.${roomFloor.val}.${mappedRoomList[mappedRoom][0]}`
+                )
+              )
+            );
+
+            Object.keys(mappedRoomList).forEach((mappedRoom, index) => {
+              if (roomStates[index].val) {
+                roomList.segments.push(mappedRoomList[mappedRoom][0]);
+              }
+            });
+          }
+
+          const cleanCount = await this.adapter.getStateAsync(
+            `Devices.${duid}.floors.cleanCount`
+          );
+          roomList["repeat"] = cleanCount.val;
+
+          const result = await sendCommandRequest("app_segment_clean", [
+            roomList,
+          ]);
+          this.adapter.log.debug(
+            `app_segment_clean with roomIDs: ${JSON.stringify(roomList)} result: ${result}`
+          );
+          this.adapter.setStateAsync(`Devices.${duid}.floors.cleanCount`, {
+            val: 1,
+            ack: true,
+          });
+
+          break;
+        }
+        case "app_segment_clean_by_ids": {
+          const requestedSegments =
+            value && Array.isArray(value.segments) ? value.segments : [];
+          const segments = Array.from(
+            new Set(
+              requestedSegments
+                .map((segment) => Number(segment))
+                .filter((segment) => Number.isInteger(segment) && segment >= 0)
+            )
+          );
+          const repeat = Number(value && value.repeat);
+          const roomList = {
+            segments,
+            repeat: Number.isInteger(repeat) && repeat > 0 ? repeat : 1,
+          };
+
+          if (roomList.segments.length === 0) {
+            this.adapter.log.warn(
+              `No room segments supplied for app_segment_clean_by_ids on ${describeDevice(this.adapter, duid)}.`
+            );
+            break;
+          }
+
+          const result = await sendCommandRequest("app_segment_clean", [
+            roomList,
+          ]);
+          this.adapter.log.debug(
+            `app_segment_clean_by_ids with roomIDs: ${JSON.stringify(roomList)} result: ${result}`
+          );
+
+          break;
+        }
+        case "reset_consumable":
+          await sendCommandRequest(parameter, [value]);
+          this.adapter.log.info(`Consumable ${parameter} successfully reset.`);
+
+          break;
+
+        case "app_set_dryer_status": {
+          const result = await sendCommandRequest(parameter, JSON.parse(value));
+          this.adapter.log.debug(`Command: ${parameter} result: ${result}`);
+
+          break;
+        }
+        case "app_goto_target":
+        case "app_zoned_clean": {
+          const result = await sendCommandRequest(parameter, value);
+          this.adapter.log.debug(
+            `Command: ${parameter} with value: ${JSON.stringify(value)} result: ${result}`
+          );
+
+          break;
+        }
+        case "load_multi_map": {
+          const mapId = Number(value);
+          if (!Number.isInteger(mapId) || mapId < 0) {
+            this.adapter.log.warn(
+              `Invalid map id '${value}' supplied for load_multi_map on ${describeDevice(this.adapter, duid)}.`
+            );
+            break;
+          }
+
+          const result = await sendCommandRequest(parameter, [mapId]);
+          this.adapter.log.debug(
+            `Command: ${parameter} with value: ${mapId} result: ${result}`
+          );
+          // The caller is waiting for this mapping, so it stays awaited — but
+          // it is still the caller's request and carries the caller's options.
+          return await this.getParameter(
+            duid,
+            "get_room_mapping",
+            undefined,
+            options
+          );
+        }
+        case "set_water_box_distance_off": {
+          const mappedValue = ((value - 1) / (30 - 1)) * (60 - 205) + 205;
+          const parameterValue = { distance_off: mappedValue };
+
+          const result = await sendCommandRequest(parameter, parameterValue);
+          this.adapter.log.debug(
+            `Command: ${parameter} with value: ${JSON.stringify(parameterValue)} result: ${result}`
+          );
+          break;
+        }
+        default:
+          if (value && typeof value !== "boolean") {
+            const valueType = typeof value;
+
+            if (valueType === "string") {
+              value = await JSON.parse(value);
+            } else if (valueType === "number") {
+              value = [value];
+            }
+
+            // await is important here!!! Wait for the command to finish before sending the request to update deviceConfig!!!
+            const result = await sendCommandRequest(parameter, value);
+            this.adapter.log.debug(
+              `Command: ${parameter} with value: ${JSON.stringify(value)} result: ${result}`
+            );
+
+            this.refreshStateAfterCommand(duid, parameter, options);
+            return result;
+          } else {
+            const result = await sendCommandRequest(parameter, []);
+            this.adapter.log.debug(`Command: ${parameter} result: ${result}`);
+            return result;
+          }
+      }
+    } catch (error) {
+      this.adapter.catchError(error, parameter, duid, this.robotModel);
+      if (options.throwOnError) {
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Refresh this plugin's own state cache after a `set_*` command. Bookkeeping,
+   * not part of the command.
+   *
+   * A command is finished when the robot acknowledges it. The paired `get_*`
+   * that follows only updates state objects on this side — but it used to be
+   * awaited inside the caller's latency budget AND issued with no options at
+   * all, so it reverted to the local transport and the ten-second default no
+   * matter what the caller had asked for.
+   *
+   * skmzwanke's 3.4.14 log (#8) is that arithmetic in the field. His water
+   * command was acknowledged over the cloud in about a tenth of a second
+   * inside a 2500 ms clean-mode window; the refresh then went out over a LAN
+   * he had configured the plugin away from and hung for ten seconds. The
+   * window closed, the start command overtook his "Vacuum" choice, and the
+   * fallback water command was never tried — all of it spent on a read nobody
+   * was waiting for. Two rounds of fixes had sized the *commands* against the
+   * window while this read sat outside the accounting entirely.
+   *
+   * So it inherits the caller's transport, never the caller's deadline, is not
+   * awaited, and cannot fail the command.
+   *
+   * @param {string} duid
+   * @param {string} parameter The command that was just acknowledged.
+   * @param {object} options The caller's command options.
+   */
+  refreshStateAfterCommand(duid, parameter, options) {
+    const getCommand = parameter.replace("set", "get");
+    // Nothing to read back: a command with no `set` in its name would other-
+    // wise be re-sent to the robot as its own "refresh". A B01 robot has no v1
+    // reads at all — its state comes from its own status loop and pushes —
+    // and reading back its suction logged "Unknown parameter: []" after
+    // every start from Apple Home.
+    if (getCommand === parameter || this.adapter.isB01Device?.(duid)) {
+      return;
+    }
+
+    // The deadline is dropped on purpose: it was the caller's budget for the
+    // command, and the refresh is no longer inside it.
+    const { requestTimeoutMs, ...transport } =
+      buildForwardedRequestOptions(options);
+    void requestTimeoutMs;
+
+    Promise.resolve()
+      .then(() => this.getParameter(duid, getCommand, undefined, transport))
+      .catch((error) => {
+        this.adapter.log.debug(
+          `State refresh ${getCommand} after ${parameter} failed for ${describeDevice(this.adapter, duid)}; the command itself was acknowledged. ${error?.message || error}`
+        );
+      });
+  }
+
+  async getServerTimers(duid, options = {}) {
+    try {
+      const requestOptions = buildForwardedRequestOptions(options);
+
+      return await this.adapter.messageQueueHandler.sendRequest(
+        duid,
+        "get_server_timer",
+        [],
+        false,
+        false,
+        requestOptions
+      );
+    } catch (error) {
+      this.adapter.catchError(error, "get_server_timer", duid, this.robotModel);
+      throw error;
+    }
+  }
+
+  async updateServerTimer(duid, timerId, enabled, options = {}) {
+    try {
+      const requestOptions = buildForwardedRequestOptions(options);
+
+      return await this.adapter.messageQueueHandler.sendRequest(
+        duid,
+        "upd_server_timer",
+        [timerId, enabled ? "on" : "off"],
+        false,
+        false,
+        requestOptions
+      );
+    } catch (error) {
+      this.adapter.catchError(error, "upd_server_timer", duid, this.robotModel);
+      throw error;
+    }
+  }
+
+  async getParameter(duid, parameter, attribute, options = {}) {
+    if (this.adapter.isPollCommandUnsupported?.(duid, parameter)) {
+      return;
+    }
+    let mode;
+
+    // Every request below is issued on the caller's behalf, so it carries the
+    // caller's transport and timeout. Until 3.4.15 only the `get_status` branch
+    // did, by hand, and every other branch reverted to the local transport and
+    // the ten-second default however the caller had been configured (#8).
+    const requestOptions = buildForwardedRequestOptions(options);
+    /**
+     * @param {string} method
+     * @param {unknown} params
+     * @param {boolean} [secure]
+     */
+    const sendParameterRequest = (method, params, secure = false) =>
+      this.adapter.messageQueueHandler.sendRequest(
+        duid,
+        method,
+        params,
+        secure,
+        false,
+        requestOptions
+      );
+
+    try {
+      if (parameter == "get_network_info") {
+        mode = parameter;
+        const networkInfo = await sendParameterRequest(parameter, []);
+
+        for (const attribute in networkInfo) {
+          if (
+            attribute == "ip" &&
+            !this.adapter.isCloudOnlyModeEnabled?.() &&
+            !(await this.adapter.isRemoteDevice(duid))
+          ) {
+            this.adapter.localDevices[duid] = networkInfo[attribute];
+          }
+          this.adapter.setStateAsync(
+            `Devices.${duid}.networkInfo.${attribute}`,
+            { val: networkInfo[attribute], ack: true }
+          );
+        }
+      } else if (parameter == "get_consumable") {
+        const consumables = (
+          await sendParameterRequest("get_consumable", [])
+        )[0];
+
+        for (const consumable in consumables) {
+          const divider =
+            this.adapter.vacuums[duid].features.getConsumablesDivider(
+              consumable
+            );
+          if (divider) {
+            const consumable_val = divider
+              ? Math.round(consumables[consumable] / divider)
+              : consumables[consumable];
+
+            this.adapter.setStateAsync(
+              `Devices.${duid}.consumables.${consumable}`,
+              { val: consumable_val, ack: true }
+            );
+          }
+        }
+      } else if (parameter == "get_status") {
+        const force = attribute == "force";
+
+        // Periodic status refresh, throttled per robot.
+        //
+        // The inherited gate here read `config.updateInterval` (a key this
+        // plugin never sets) and `adapter.socket` (permanently null), so the
+        // expression was `NaN == 0` — always false. The refresh the comment
+        // promised has therefore never run: classic robots relied entirely on
+        // MQTT push plus the slow 3-minute full poll, and a silently dropped
+        // push left Apple Home stale for minutes. An explicit elapsed-time
+        // throttle restores the safety net, and being relative rather than
+        // aligned to wall-clock seconds also stops every robot in a fleet
+        // from polling in the same instant.
+        if (force || this.shouldPollStatusNow(duid)) {
+          this.markStatusPolled(duid);
+
+          // const deviceStatus = await sendParameterRequest("get_status", []);
+          const deviceStatus = await sendParameterRequest("get_prop", [
+            "get_status",
+          ]);
+          if (deviceStatus?.[0] && typeof deviceStatus[0] === "object") {
+            // A copy: the loop below rewrites some fields in place.
+            this.lastStatusReply.set(duid, { ...deviceStatus[0] });
+          }
+
+          await this.updateDiagnosticSnapshot(duid, "lastStatus", {
+            method: "get_status",
+            status: deviceStatus[0] || null,
+          });
+
+          // MEASUREMENT, NOT A FEATURE — and deliberately so.
+          //
+          // Live-room tracking on a classic robot depends on `get_map_v1`,
+          // which on some robots is never answered: 95 timeouts in a row on
+          // my own a70, 40 on the a75 in #9. If the robot's own status
+          // carries the segment it is cleaning, the whole map round-trip is
+          // unnecessary on those robots.
+          //
+          // `cleaning_info` is documented in deviceFeatures.js as
+          // `{target_segment_id, segment_id, fan_power, water_box_mode, ...}`
+          // and a real capture from a Saros 10R (a144) in
+          // `__tests__/saros10-status-fields.test.js` shows
+          // `cleaning_info={"target_segment_id":-1,...}` — truncated at 60
+          // characters, which is exactly why nobody has ever seen the rest.
+          // Every poll receives this object and throws it away.
+          //
+          // So print it whole, once per distinct value, while the robot is
+          // cleaning. One clean answers the question: if `segment_id` tracks
+          // the room, classic live-room tracking needs no map at all. If it
+          // does not, this costs nothing and the line stops.
+          const cleaningInfo = deviceStatus[0]?.cleaning_info;
+          if (cleaningInfo && typeof cleaningInfo === "object") {
+            const rendered = JSON.stringify(cleaningInfo);
+            if (!this._lastCleaningInfo) {
+              this._lastCleaningInfo = new Map();
+            }
+            if (this._lastCleaningInfo.get(duid) !== rendered) {
+              this._lastCleaningInfo.set(duid, rendered);
+              this.adapter.log.debug(
+                `cleaning_info for ${describeDevice(this.adapter, duid)}: ${rendered}. Reported in full because this field may carry the room the robot is in, which would give live-room tracking a source that does not need the map. If you are reading this while a clean is running, the number to watch is segment_id.`
+              );
+            }
+          }
+
+          // Collected across the whole poll and reported as one line. Eight
+          // separate warnings, once a minute, was ~11,500 identical requests a
+          // day to contact the dev about the same eight fields (#8).
+          /** @type {string[]} */
+          const newlyUnmappedAttributes = [];
+          let dockCapabilityUpdated = false;
+
+          for (const attribute in deviceStatus[0]) {
+            const isCleaning = this.adapter.isCleaning(
+              deviceStatus[0]["state"]
+            );
+
+            // Homebridge has no ioBroker object database, so getObjectAsync()
+            // below intentionally returns nothing and the inherited loop skips
+            // its state-writing path. Dock capability is runtime metadata, not
+            // an ioBroker state: apply it before that compatibility gate.
+            if (attribute === "dock_type") {
+              this.adapter.vacuums[duid].features.processDockType(
+                deviceStatus[0][attribute]
+              );
+              dockCapabilityUpdated = this.rememberDockType(
+                duid,
+                deviceStatus[0][attribute]
+              );
+            }
+
+            if (
+              !(await this.adapter.getObjectAsync(
+                `Devices.${duid}.deviceStatus.${attribute}`
+              ))
+            ) {
+              // Renamed from `isKnownStatusAttribute` on purpose: it is not
+              // what it used to be called. The feature profile answers "is
+              // this field switched on for THIS robot", which is a narrower
+              // question than "does this plugin know the field", and the old
+              // name invited the loop below to confuse the two.
+              const isEnabledForThisRobot =
+                typeof this.adapter.vacuums[duid].features
+                  .hasDeviceStatusAttribute === "function" &&
+                this.adapter.vacuums[duid].features.hasDeviceStatusAttribute(
+                  attribute
+                );
+
+              // A known attribute is skipped in silence. The line that used
+              // to be written here dated from this library's ioBroker origins,
+              // where `getObjectAsync` returns a state object that exists;
+              // under Homebridge it never exists, so the branch fired for
+              // EVERY known attribute on EVERY poll and said only that the
+              // plugin is not ioBroker. Measured on three robots with debug
+              // on: fifty lines a minute, and the log ring — the thing you
+              // need when something real goes wrong — held ninety minutes.
+              //
+              // The distinction below is the part that carries information,
+              // and it now has three cases rather than two. Asking only the
+              // per-robot question is what sent jcoz00 (#6) after a model
+              // report for fifteen fields that were already mapped: his Qrevo
+              // CurvX sends them, his robot's capability detection never
+              // switched them on, and the warning read that as "this plugin
+              // has no mapping for them". A warning that says "no mapping"
+              // and points at GitHub is only true of a field no table
+              // anywhere names — which for his robot was three of eighteen.
+              const isKnownToPlugin = isKnownStatusAttribute(attribute);
+
+              if (!isEnabledForThisRobot) {
+                const isFirstSighting = this.rememberUnmappedStatusAttribute(
+                  duid,
+                  attribute
+                );
+
+                if (isKnownToPlugin) {
+                  // Worth seeing once when we go looking — a gate that did not
+                  // fire for a field the robot demonstrably sends is a lead —
+                  // but not worth waking a user for, and nothing they can act
+                  // on. Repeats are silent rather than a debug line: the field
+                  // is mapped and the gate is not going to change mid-run, so
+                  // a per-poll line would be fifteen of them a minute on a
+                  // Qrevo CurvX saying nothing the first one did not.
+                  if (isFirstSighting) {
+                    this.adapter.log.debug(
+                      `get_status attribute ${attribute}=${describeStatusValue(deviceStatus[0][attribute])} arrived from ${describeDevice(this.adapter, duid)}, but this robot's capability detection did not switch it on. This plugin maps the field, so there is nothing to report.`
+                    );
+                  }
+                } else if (isFirstSighting) {
+                  newlyUnmappedAttributes.push(
+                    `${attribute}=${describeStatusValue(deviceStatus[0][attribute])}`
+                  );
+                } else {
+                  this.adapter.log.debug(
+                    `Unmapped get_status attribute ${attribute}=${describeStatusValue(deviceStatus[0][attribute])} for ${describeDevice(this.adapter, duid)}; already reported, not repeating.`
+                  );
+                }
+              }
+              continue; // skip unsupported attributes
+            }
+
+            const divider =
+              this.adapter.vacuums[duid].features.getStatusDivider(attribute);
+            if (divider) {
+              deviceStatus[0][attribute] = Math.round(
+                deviceStatus[0][attribute] / divider
+              );
+            }
+
+            if (typeof deviceStatus[0][attribute] == "object") {
+              deviceStatus[0][attribute] = JSON.stringify(
+                deviceStatus[0][attribute]
+              );
+            }
+
+            switch (attribute) {
+              case "dock_type":
+                // Applied above, before the ioBroker object-compatibility gate.
+                break;
+              case "dss":
+                await this.adapter.createDockingStationObject(duid);
+                const dockingStationStatus =
+                  await this.parseDockingStationStatus(
+                    deviceStatus[0][attribute]
+                  );
+
+                for (const state in dockingStationStatus) {
+                  this.adapter.setStateAsync(
+                    `Devices.${duid}.dockingStationStatus.${state}`,
+                    { val: parseInt(dockingStationStatus[state]), ack: true }
+                  );
+                }
+                break;
+              case "map_status": {
+                deviceStatus[0][attribute] =
+                  deviceStatus[0][attribute] >> 2 ?? -1; // to get the currently selected map perform bitwise right shift
+
+                if (isCleaning) {
+                  this.adapter.startMapUpdater(duid);
+                } else {
+                  this.adapter.stopMapUpdater(duid);
+                }
+
+                break;
+              }
+              case "last_clean_t":
+                deviceStatus[0][attribute] = new Date(
+                  deviceStatus[0][attribute]
+                ).toString();
+
+                break;
+            }
+            this.adapter.setStateChangedAsync(
+              `Devices.${duid}.deviceStatus.${attribute}`,
+              { val: deviceStatus[0][attribute], ack: true }
+            );
+          }
+
+          if (newlyUnmappedAttributes.length > 0) {
+            this.adapter.log.warn(
+              `${describeDevice(this.adapter, duid)} (${this.robotModel}) sends ${newlyUnmappedAttributes.length} get_status field(s) this plugin has no mapping for: ${newlyUnmappedAttributes.join(", ")}. Control, battery, rooms and state come from a model-agnostic path and do not depend on them, so nothing is broken — but a model report issue on GitHub quoting this line is how they get added. Logged once per field per robot, so it will not repeat.`
+            );
+          }
+
+          // Classic S7-family robots report their dock type in the first live
+          // get_status response, after HomeData discovery has already built
+          // the Matter accessory and run the initial HomeKit switch sync. Tell
+          // the platform only after processDockType() has applied the feature,
+          // so an opt-in Empty Bin switch can be reconciled from verified live
+          // capability instead of a timer or a model-name guess.
+          if (dockCapabilityUpdated && this.adapter.deviceNotify) {
+            this.adapter.deviceNotify("DeviceCapabilities", { duid });
+          }
+
+          this.adapter.manageDeviceIntervals(duid);
+        }
+      } else if (parameter == "get_room_mapping") {
+        // Room data on B01/Q7 robots travels over the protobuf map channel,
+        // and `get_room_mapping` itself is answered from the dialect's neutral
+        // table without touching the network — so this branch looked free.
+        // It was not: it opened by fetching `get_status` to read `map_status`,
+        // a v1-only field that Q7 status dictionaries have never carried, and
+        // on B01 `get_status` translates to a real `prop.get`. That was one
+        // cloud round-trip per poll cycle per robot spent on an answer this
+        // code cannot read — reported under the caller's label, which is why
+        // #14's log line names `get_room_mapping` but times out on `prop.get`.
+        if (this.adapter.isB01Device?.(duid)) {
+          return;
+        }
+
+        // On classic robots the request is answerable, so 3.11.0 left it in
+        // place. It still should not be made: the status poll runs on its own
+        // interval and has already stored this exact number, and
+        // `app_segment_clean` has always read the floor from there rather
+        // than asking again.
+        //
+        // AND IT COST MORE THAN A ROUND-TRIP. The give-up register counts the
+        // method that goes on the WIRE, and only for pairs a caller claimed
+        // with `govern()`. `pollParameter` claims `get_room_mapping`; the
+        // wire saw `get_status`, which the register must never govern. So the
+        // claimed pair recorded nothing and could never reach six strikes —
+        // the one method #22 and #24 name most often was the one the new
+        // register could not see. Worse, when `get_status` was the request
+        // timing out, this threw before `get_room_mapping` was ever sent, so
+        // the robot was not even asked the question it was failing.
+        //
+        // 3.33.0 read the floor from the cache and kept a `get_status`
+        // fallback for the one cycle after a restart where nothing has landed
+        // yet. That assumption is what it got wrong, and both reporters
+        // measured it: on #24's a51 and #22's a144 the STATUS POLL ITSELF
+        // never gets an answer, so `deviceStatus.map_status` is never written
+        // and the fallback is not a first cycle — it is every cycle, forever.
+        // The branch therefore still opened with `get_status`, still died
+        // there, and still never sent `get_room_mapping`. Marrand ran 3.33.0
+        // overnight and reported exactly that: seven other governed methods
+        // reached their six-strike cooldown and this one did not.
+        //
+        // So the claimed method goes on the wire FIRST, unconditionally. The
+        // floor is a filing detail; the request is the part the register has
+        // to see, and no fallback may be allowed to front it.
+        const mappedRooms = await sendParameterRequest("get_room_mapping", []);
+
+        let roomFloor = readCachedRoomFloor(this.adapter, duid);
+
+        if (roomFloor === null) {
+          // The first cycle after a restart on a healthy robot: both
+          // intervals start together, so the cache is genuinely empty. Asking
+          // once files the rooms under the real floor rather than a guess,
+          // which is what `app_segment_clean` looks them up under.
+          //
+          // On a robot whose `get_status` never answers, this request dies
+          // too. That must no longer take the whole branch down with it — but
+          // it must not be papered over either. A floor is what the rooms are
+          // FILED under: `updateRoomMappingCache` stamps every room with it
+          // and `app_segment_clean` looks them up by it. Inventing one here
+          // would stamp a working Matter service-area cache with a map id
+          // that does not exist. So the rooms are simply left unfiled for
+          // this cycle and the poll returns them; the next cycle after any
+          // status lands files them under the real floor.
+          //
+          // Note this is NOT the `-1` case below. A status reply that carries
+          // no `map_status` at all still answers the question — the robot has
+          // no map selected — and `-1` has been this branch's sentinel for
+          // that since long before the register existed. An unanswered
+          // request answers nothing.
+          let deviceStatus;
+
+          try {
+            deviceStatus = await sendParameterRequest("get_status", []);
+          } catch (error) {
+            this.adapter.log.debug(
+              `Could not read the active map for ${describeDevice(this.adapter, duid)}, so its ${Array.isArray(mappedRooms) ? mappedRooms.length : 0} room(s) stay unfiled until a status poll lands: ${error instanceof Error ? error.message : String(error)}`
+            );
+
+            return mappedRooms;
+          }
+
+          const mapStatus = Array.isArray(deviceStatus)
+            ? deviceStatus[0]?.["map_status"]
+            : undefined;
+          // to get the currently selected map perform bitwise right shift
+          roomFloor = typeof mapStatus === "number" ? mapStatus >> 2 : -1;
+        }
+
+        if (typeof this.adapter.updateRoomMappingCache === "function") {
+          this.adapter.updateRoomMappingCache(duid, roomFloor, mappedRooms);
+        }
+
+        // if no rooms have been named, processing them can't work
+        if (!Array.isArray(mappedRooms) || mappedRooms.length < 1) {
+          this.adapter.log.info(
+            `No room mappings returned for ${describeDevice(this.adapter, duid)}, so room-based controls stay unavailable. The usual reason is that the rooms on the map have not been given names yet: open the Roborock app, edit the map, name each room, and they show up in Apple Home on the next refresh. A robot that has never finished a mapping run has nothing to name yet.`
+          );
+        } else {
+          let unnamedRooms = 0;
+          for (const mappedRoom of mappedRooms) {
+            const roomID = mappedRoom[1];
+            const roomName = this.adapter.roomIDs[roomID] || `Room ${roomID}`;
+
+            if (!this.adapter.roomIDs[roomID]) {
+              unnamedRooms++;
+            }
+
+            this.adapter.log.debug(
+              `Mapped room matched: ${roomID} with name: ${roomName}`
+            );
+            const objectString = `Devices.${duid}.floors.${roomFloor}.${mappedRoom[0]}`;
+            await this.adapter.createStateObjectHelper(
+              objectString,
+              roomName,
+              "boolean",
+              null,
+              true,
+              "value",
+              true,
+              true
+            );
+          }
+
+          if (unnamedRooms > 0) {
+            this.adapter.log.info(
+              `${unnamedRooms} room(s) for ${describeDevice(this.adapter, duid)} were missing names from HomeData. Using fallback labels like 'Room <id>' until the Roborock app syncs names.`
+            );
+          }
+        }
+
+        const objectString = `Devices.${duid}.floors.cleanCount`;
+        await this.adapter.createStateObjectHelper(
+          objectString,
+          "Clean count",
+          "number",
+          null,
+          1,
+          "value",
+          true,
+          true
+        );
+
+        return mappedRooms;
+      } else if (parameter == "get_multi_maps_list") {
+        const mapList = await sendParameterRequest("get_multi_maps_list", []);
+        const mapInfo = mapList[0]?.map_info || [];
+        const maps = {};
+
+        if (typeof this.adapter.updateMapListCache === "function") {
+          this.adapter.updateMapListCache(duid, mapInfo);
+        }
+
+        // Set states for numeric parameters
+        for (const mapParameter in mapList[0] || {}) {
+          if (typeof mapList[0][mapParameter] === "number") {
+            const statePath = `Devices.${duid}.floors.${mapParameter}`;
+            this.adapter.setStateAsync(statePath, {
+              val: mapList[0][mapParameter],
+              ack: true,
+            });
+          }
+        }
+
+        // Create map folders
+        for (const map in mapInfo) {
+          const roomFloor = mapInfo[map]["mapFlag"];
+          const mapName = mapInfo[map]["name"];
+          maps[roomFloor] = mapName;
+
+          const objectPath = `Devices.${duid}.floors.${roomFloor}`;
+          this.adapter.setObjectAsync(objectPath, {
+            type: "folder",
+            common: {
+              name: mapName,
+            },
+            native: {},
+          });
+        }
+
+        // Handle the load_multi_map command
+        const commandPath = `Devices.${duid}.commands.load_multi_map`;
+        if ((mapList[0]?.max_multi_map || 0) > 1) {
+          await this.adapter.createStateObjectHelper(
+            commandPath,
+            "Load map",
+            "number",
+            null,
+            0,
+            "value",
+            true,
+            true,
+            maps
+          );
+        } else {
+          this.adapter.delObjectAsync(commandPath);
+        }
+
+        return mapInfo;
+      } else if (parameter == "get_fw_features") {
+        const firmwareFeatures = await sendParameterRequest(parameter, []);
+        for (const firmwareFeature in firmwareFeatures) {
+          const featureID = firmwareFeatures[firmwareFeature];
+
+          const objectString = `Devices.${duid}.firmwareFeatures.${firmwareFeature}`;
+          await this.adapter.createStateObjectHelper(
+            objectString,
+            featureID.toString(),
+            "string",
+            null,
+            null,
+            "value",
+            true,
+            false
+          );
+
+          const featureName =
+            this.adapter.vacuums[duid].features.getFirmwareFeature(featureID);
+
+          // this dynamically processes robot features by ID if they are supported
+          if (
+            typeof this.adapter.vacuums[duid].features[featureName] ===
+            "function"
+          ) {
+            this.adapter.vacuums[duid].features[featureName]();
+          }
+
+          this.adapter.setStateAsync(objectString, {
+            val: featureName,
+            ack: true,
+          });
+        }
+      } else if (parameter == "get_server_timer") {
+        if (this.adapter.config.debug) {
+          const serverTimers = await sendParameterRequest(parameter, []);
+          await this.updateDiagnosticSnapshot(duid, "lastServerTimer", {
+            method: parameter,
+            response: serverTimers,
+          });
+          this.adapter.log.debug(
+            `Roborock ${parameter} diagnostic for ${duid}: ${JSON.stringify(this.adapter.compactDiagnosticPayload(serverTimers))}`
+          );
+        }
+      } else if (parameter == "get_timer") {
+        if (this.adapter.config.debug) {
+          const timers = await sendParameterRequest(parameter, []);
+          await this.updateDiagnosticSnapshot(duid, "lastTimer", {
+            method: parameter,
+            response: timers,
+          });
+          this.adapter.log.debug(
+            `Roborock ${parameter} diagnostic for ${duid}: ${JSON.stringify(this.adapter.compactDiagnosticPayload(timers))}`
+          );
+
+          // Both device-side timer methods have now answered for this robot,
+          // so this is the one moment where their answers can be compared with
+          // what the cloud holds (#22). The probe is read-only, debug-only and
+          // runs once per robot per session; it must not be able to fail the
+          // poll it is riding along on.
+          try {
+            await this.adapter.probeCloudScheduleRoutes?.(duid);
+          } catch (error) {
+            this.adapter.log.debug(
+              `Roborock cloud schedule probe for ${duid} could not run: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+      } else if (
+        parameter == "get_dust_collection_switch_status" ||
+        parameter == "get_wash_towel_mode" ||
+        parameter == "get_smart_wash_params" ||
+        parameter == "get_dust_collection_mode"
+      ) {
+        const attribute_val = JSON.stringify(
+          await sendParameterRequest(parameter, {})
+        );
+        this.adapter.setStateAsync(
+          `Devices.${duid}.commands.${parameter.replace("get", "set")}`,
+          { val: attribute_val, ack: true }
+        );
+      } else if (parameter == "app_get_dryer_setting") {
+        const attribute_val = await sendParameterRequest(parameter, {});
+        const actualVal = JSON.stringify({
+          on: { dry_time: attribute_val.on.dry_time },
+          status: attribute_val.status,
+        });
+        this.adapter.setStateAsync(
+          `Devices.${duid}.commands.${parameter.replace("get", "set")}`,
+          { val: actualVal, ack: true }
+        );
+      } else if (this.parameterFolders[parameter]) {
+        mode = parameter.substring(4);
+        const attribute_val = await sendParameterRequest(parameter, []);
+
+        if (typeof attribute_val[0] == "object") {
+          attribute_val[0] = JSON.stringify(attribute_val[0]);
+        }
+        const targetFolder = this.parameterFolders[parameter];
+        this.adapter.setStateAsync(`Devices.${duid}.${targetFolder}.${mode}`, {
+          val: attribute_val[0],
+          ack: true,
+        });
+      } else {
+        // unknown parameter
+        const unknown_parameter_val = await sendParameterRequest(parameter, []);
+
+        // this.adapter.setStateAsync("Devices." + duid + "." + targetFolder + "." + mode, { val: attribute_val[0], ack: true });
+        if (typeof unknown_parameter_val == "object") {
+          if (typeof unknown_parameter_val[0] != "number") {
+            this.adapter.catchError(
+              `Unknown parameter: ${JSON.stringify(unknown_parameter_val)}`,
+              parameter,
+              duid,
+              this.robotModel
+            );
+          }
+        } else {
+          this.adapter.catchError(
+            `Unknown parameter: ${unknown_parameter_val}`,
+            parameter,
+            duid,
+            this.robotModel
+          );
+        }
+      }
+    } catch (error) {
+      if (
+        this.adapter.rememberUnsupportedPollCommand?.(duid, parameter, error)
+      ) {
+        return;
+      }
+      this.adapter.catchError(error, parameter, duid, this.robotModel);
+    }
+  }
+
+  async setUpObjects(duid) {
+    await this.adapter.setObjectAsync("Devices." + duid, {
+      type: "device",
+      common: {
+        name: this.adapter.vacuums[duid].name,
+        statusStates: {
+          onlineId: `${this.adapter.name}.${this.adapter.instance}.Devices.${duid}.deviceInfo.online`,
+        },
+      },
+      native: {},
+    });
+  }
+
+  async parseDockingStationStatus(dss) {
+    return {
+      cleanFluidStatus: (dss >> 10) & 0b11,
+      waterBoxFilterStatus: (dss >> 8) & 0b11,
+      dustBagStatus: (dss >> 6) & 0b11,
+      dirtyWaterBoxStatus: (dss >> 4) & 0b11,
+      clearWaterBoxStatus: (dss >> 2) & 0b11,
+      isUpdownWaterReady: dss & 0b11,
+    };
+  }
+}
+
+module.exports = {
+  vacuum,
+};
