@@ -1,32 +1,24 @@
 [
   {
-    "name": "review-delay/local-server-fast-refresh-combined",
-    "new_name": "delete/review-delay/local-server-fast-refresh-combined",
-    "sha": "0b64604dc677ca66b4b31533eadfce0da7c90c71",
-    "reason": "completed validation workspace; feature source retained",
+    "name": "backup/schedule-pause-delay-before-v339-20261016",
+    "new_name": "delete/backup/schedule-pause-delay-before-v339-20261016",
+    "sha": "81560529180d75f3a4f3af512633d05e0da05ef5",
+    "reason": "all commits reachable from retained branch",
     "retained_by": {
       "repo": "pponce/homebridge-roborock-matter-plus",
-      "name": "SCHEDULE_PAUSE_DELAY"
+      "name": "SCHEDULE_TIME_INVESTIGATION",
+      "sha": "81560529180d75f3a4f3af512633d05e0da05ef5"
     }
   },
   {
-    "name": "review-delay/local-server-fast-refresh-minimal",
-    "new_name": "delete/review-delay/local-server-fast-refresh-minimal",
-    "sha": "0b7fd726266d7ad801c1331f3330ae1acd02c519",
-    "reason": "completed validation workspace; feature source retained",
+    "name": "build/schedule-control-options-20261010",
+    "new_name": "delete/build/schedule-control-options-20261010",
+    "sha": "81560529180d75f3a4f3af512633d05e0da05ef5",
+    "reason": "all commits reachable from retained branch",
     "retained_by": {
       "repo": "pponce/homebridge-roborock-matter-plus",
-      "name": "upstream_plus_SCHEDULE_PAUSE_DELAY"
-    }
-  },
-  {
-    "name": "review-delay/local-server-fast-refresh-pr",
-    "new_name": "delete/review-delay/local-server-fast-refresh-pr",
-    "sha": "36123cf6ff69fdb7eda34828ae460259a83e17ab",
-    "reason": "completed validation workspace; feature source retained",
-    "retained_by": {
-      "repo": "pponce/homebridge-roborock-matter-plus",
-      "name": "local-server-fast-refresh"
+      "name": "SCHEDULE_TIME_INVESTIGATION",
+      "sha": "81560529180d75f3a4f3af512633d05e0da05ef5"
     }
   }
 ]
