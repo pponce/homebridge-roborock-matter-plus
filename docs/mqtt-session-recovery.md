@@ -1,6 +1,6 @@
 # Optional MQTT recovery in the home build
 
-This home build is based on **3.40.0 stable**. Upstream already creates a fresh
+This home build is based on **3.40.1 stable**. Upstream already creates a fresh
 client with a random ID on reconnection. The optional recovery layer supplies
 additional triggers and request draining; the connector owns client creation,
 teardown and retry backoff. It does not run a second replacement loop.
@@ -85,7 +85,7 @@ the extra per-robot activity-age snapshot have been removed. Shutdown still
 cancels readiness waiters.
 
 The extra recovery triggers remain experimental; their benefit over upstream
-3.40.0 has not been established. With both options off, upstream recovery remains
+3.40.1 has not been established. With both options off, upstream recovery remains
 active and native pause/delay controls continue to work.
 
 Automated regression tests cover real queue timeouts, replacement timing,

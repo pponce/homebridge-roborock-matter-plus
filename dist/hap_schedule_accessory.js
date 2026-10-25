@@ -13,7 +13,8 @@ const hap_name_1 = require("./hap_name");
 const hap_schedule_api_1 = require("./hap_schedule_api");
 const timers_1 = require("./timers");
 const VERIFY_DELAY_MS = 3000;
-// HomeKit accepts the provisional display immediately; confirmation is separate.
+// Preserve upstream's short refusal window before accepting a provisional state.
+const SCHEDULE_WRITE_ANSWER_BUDGET_MS = 2500;
 const WRITE_SUPPRESSION_MS = 5000;
 // WHY FIVE MINUTES, IN THE AUTHOR'S OWN WORDS. Recorded here rather than left
 // in the pull request, because the next person to look at this number will
@@ -1183,7 +1184,8 @@ class RoborockHapScheduleAccessory {
             return failures;
         }
         finally {
-            this.platform.log.info(`Schedule reconciliation for ${this.robotName}: requested=${requests.length}; ambiguous=${ambiguous.size}; primaryConfirmed=${primaryConfirmed}; retried=${fallback.length}; fallbackSent=${finalCandidates.length}; failed=${failures.size}.`);
+            // Every toggle ends here; a failure has its own warning above.
+            this.platform.log.debug(`Schedule reconciliation for ${this.robotName}: requested=${requests.length}; ambiguous=${ambiguous.size}; primaryConfirmed=${primaryConfirmed}; retried=${fallback.length}; fallbackSent=${finalCandidates.length}; failed=${failures.size}.`);
         }
     }
     /**
@@ -1540,6 +1542,7 @@ class RoborockHapScheduleSwitchAccessory {
         this.failedCommands = new Map();
         this.disposed = false;
         this.intentSequence = 0;
+        this.answerWaiters = new Set();
         this.schedule = {
             id: scheduleId,
             enabled: false,
@@ -1571,9 +1574,7 @@ class RoborockHapScheduleSwitchAccessory {
         }
         service
             .getCharacteristic(this.platform.Characteristic.On)
-            .onSet((value) => {
-            void this.setSchedule(Boolean(value));
-        })
+            .onSet((value) => this.setSchedule(Boolean(value)))
             .onGet(() => {
             void this.coordinator.refreshIfNeeded();
             return this.displayValue();
@@ -1618,6 +1619,9 @@ class RoborockHapScheduleSwitchAccessory {
             this.saveDisplayState();
         }
         this.disposed = true;
+        for (const stop of this.answerWaiters)
+            stop();
+        this.answerWaiters.clear();
         if (this.followUpTimer)
             (0, timers_1.clearTimer)(this.followUpTimer);
         if (this.correctionTimer)
@@ -1632,7 +1636,7 @@ class RoborockHapScheduleSwitchAccessory {
         if (this.disposed)
             return Promise.resolve();
         if (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.enabled) === enabled)
-            return this.pendingCommand.promise;
+            return this.pendingCommand.acknowledgement;
         const recent = this.suppression.get(this.scheduleId);
         if (!this.pendingCommand &&
             (recent === null || recent === void 0 ? void 0 : recent.enabled) === enabled &&
@@ -1647,15 +1651,23 @@ class RoborockHapScheduleSwitchAccessory {
                 RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS) {
             this.restoreConfirmedDisplay();
             this.platform.log.warn(`Schedule request suppressed after failure for ${this.displayLabel()}; retaining confirmed ${this.schedule.enabled ? "on" : "off"} state.`);
-            return Promise.resolve();
+            return Promise.reject(this.writeFailed());
         }
+        let markSent = () => undefined;
+        const sent = new Promise((resolve) => {
+            markSent = () => resolve("sent");
+        });
+        let markRefused = (_error) => undefined;
+        const refused = new Promise((resolve) => {
+            markRefused = (error) => resolve({ error });
+        });
         const startedAt = Date.now();
         const intent = ++this.intentSequence;
         const promise = Promise.resolve().then(async () => {
             var _a, _b, _c, _d;
             try {
                 this.platform.log.info(`Schedule command: queueing ${enabled ? "enable" : "disable"} for ${this.displayLabel()}. Display is provisional until confirmed.`);
-                const executed = await this.coordinator.enqueueScheduleWrite(this.scheduleId, enabled);
+                const executed = await this.coordinator.enqueueScheduleWrite(this.scheduleId, enabled, { onSent: markSent, onRefused: markRefused });
                 if (this.disposed)
                     return;
                 if (executed) {
@@ -1681,6 +1693,8 @@ class RoborockHapScheduleSwitchAccessory {
                     return;
                 const unverified = (error === null || error === void 0 ? void 0 : error.code) === "SCHEDULE_OUTCOME_UNKNOWN";
                 const unknown = unverified || Boolean(this.uncertain);
+                if (!unknown)
+                    markRefused(error);
                 if (unknown && intent === this.intentSequence) {
                     if (unverified)
                         this.uncertain = { enabled, startedAt, showRequested: true };
@@ -1716,11 +1730,61 @@ class RoborockHapScheduleSwitchAccessory {
                 }
             }
         });
-        this.pendingCommand = { enabled, startedAt, promise };
-        // Persist confirmation separately before acknowledging the optimistic value.
+        const acknowledgement = this.answerScheduleWrite(promise, sent, refused);
+        this.pendingCommand = {
+            enabled,
+            startedAt,
+            promise,
+            acknowledgement,
+            showRequested: false,
+        };
+        // Persist confirmation and intent before Homebridge can cache either value.
         this.saveDisplayState();
-        this.updateService(enabled);
-        return promise;
+        return acknowledgement;
+    }
+    async answerScheduleWrite(operation, sent, refused) {
+        var _a;
+        let timer;
+        let stop = () => undefined;
+        const stopped = new Promise((resolve) => {
+            stop = () => resolve("stopped");
+            this.answerWaiters.add(stop);
+        });
+        const budget = new Promise((resolve) => {
+            timer = (0, timers_1.scheduleTimer)(() => resolve("budget"), SCHEDULE_WRITE_ANSWER_BUDGET_MS);
+            (0, timers_1.unrefTimer)(timer);
+        });
+        try {
+            const first = await Promise.race([
+                refused,
+                sent,
+                budget,
+                stopped,
+                operation.then(() => "complete"),
+            ]);
+            if (this.disposed)
+                throw this.writeFailed();
+            // A known refusal inside the answer window must reach HAP as an error.
+            // Verification/unknown outcomes continue through the persisted state path.
+            if (typeof first === "object")
+                throw this.writeFailed();
+            if (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.promise) === operation) {
+                this.pendingCommand.showRequested = true;
+                this.updateService(this.displayValue());
+            }
+        }
+        finally {
+            if (timer)
+                (0, timers_1.clearTimer)(timer);
+            this.answerWaiters.delete(stop);
+        }
+    }
+    writeFailed() {
+        var _a;
+        const hap = (_a = this.platform.api) === null || _a === void 0 ? void 0 : _a.hap;
+        return typeof (hap === null || hap === void 0 ? void 0 : hap.HapStatusError) === "function"
+            ? new hap.HapStatusError(-70402 /* hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE */)
+            : new Error("The Roborock schedule write failed.");
     }
     restoreConfirmedDisplay() {
         this.updateService(this.displayValue());
@@ -1738,7 +1802,9 @@ class RoborockHapScheduleSwitchAccessory {
     }
     displayValue() {
         var _a, _b, _c;
-        return ((_b = (_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.enabled) !== null && _b !== void 0 ? _b : (((_c = this.uncertain) === null || _c === void 0 ? void 0 : _c.showRequested)
+        return ((_b = (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.showRequested)
+            ? this.pendingCommand.enabled
+            : undefined)) !== null && _b !== void 0 ? _b : (((_c = this.uncertain) === null || _c === void 0 ? void 0 : _c.showRequested)
             ? this.uncertain.enabled
             : this.schedule.enabled));
     }

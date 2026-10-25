@@ -68,7 +68,7 @@ function sceneParam(enabled) {
   });
 }
 
-function setup({ refuse, ambiguous = false }) {
+function setup({ refuse, ambiguous = false, refusalDelay = 0 }) {
   let failReads = false;
   const scenes = [
     {
@@ -90,6 +90,8 @@ function setup({ refuse, ambiguous = false }) {
     }),
     updateCloudSceneParam: jest.fn(async (sceneId, param) => {
       if (refuse) {
+        if (refusalDelay)
+          await new Promise((resolve) => setTimeout(resolve, refusalDelay));
         throw new Error("The Roborock cloud refused the change (HTTP 500).");
       }
       scenes[0].param = JSON.stringify(param);
@@ -138,30 +140,45 @@ function onOf(manager) {
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
 
-test("a refused write leaves HAP's value on the state Roborock still has", async () => {
-  const { coordinator, manager, platform } = setup({ refuse: true });
-  await coordinator.initialize("Rocky");
-  const on = onOf(manager);
-  expect(on.value).toBe(true);
-  const changes = [];
-  on.on("change", (change) => changes.push(change.newValue));
+test.each([0, 500, 3000])(
+  "a refusal after %sms preserves the HAP refusal window and later rollback",
+  async (refusalDelay) => {
+    const { coordinator, manager, platform } = setup({
+      refuse: true,
+      refusalDelay,
+    });
+    await coordinator.initialize("Rocky");
+    const on = onOf(manager);
+    expect(on.value).toBe(true);
+    const changes = [];
+    on.on("change", (change) => changes.push(change.newValue));
+    const request = on.handleSetRequest(false).then(
+      () => "resolved",
+      (status) => status
+    );
+    await jest.advanceTimersByTimeAsync(2500);
+    const early = refusalDelay < 2500;
+    expect(await request).toBe(
+      early ? hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE : "resolved"
+    );
+    expect(on.value).toBe(early);
+    if (early) expect(changes).not.toContain(false);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(on.value).toBe(true);
+    expect(platform.log.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Schedule display rollback.*Rocky.*Mornings.*not a user change/
+      )
+    );
+    coordinator.stopRuntime();
+  }
+);
 
-  const request = on.handleSetRequest(false).then(
-    () => "resolved",
-    (status) => status
-  );
-  await jest.advanceTimersByTimeAsync(5000);
-
-  expect(await request).toBe("resolved");
-  expect(on.value).toBe(true);
-  expect(changes).toContain(false);
-  expect(changes.at(-1)).toBe(true);
-  expect(platform.log.warn).toHaveBeenCalledWith(
-    expect.stringMatching(
-      /Schedule display rollback.*Rocky.*Mornings.*not a user change/
-    )
-  );
-});
+async function acceptedPress(on, enabled) {
+  const request = on.handleSetRequest(enabled);
+  await jest.advanceTimersByTimeAsync(2500);
+  await request;
+}
 
 test("a write that succeeds still reads as the new state", async () => {
   const { coordinator, manager } = setup({ refuse: false });
@@ -193,7 +210,7 @@ test("a cooldown-suppressed retry is corrected after real HAP stores the request
   );
   await jest.advanceTimersByTimeAsync(10);
 
-  expect(await retry).toBe("resolved");
+  expect(await retry).toBe(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
   expect(on.value).toBe(true);
 });
 
@@ -208,7 +225,7 @@ test("a cached optimistic characteristic is restored from separately saved confi
       })
   );
   const on = onOf(manager);
-  await on.handleSetRequest(false);
+  await acceptedPress(on, false);
   expect(on.value).toBe(false);
   // Homebridge serializes this BEFORE signalling shutdown.
   const cachedContext = JSON.parse(JSON.stringify(manager.context));
@@ -240,8 +257,8 @@ test.each([true, false])(
     });
     await coordinator.initialize("Rocky");
     const on = onOf(manager);
-    await on.handleSetRequest(false);
-    await jest.advanceTimersByTimeAsync(5001);
+    await acceptedPress(on, false);
+    await jest.advanceTimersByTimeAsync(2501);
     expect(on.value).toBe(false);
     expect(manager.context.scheduleDisplayStates["scene:1"].confirmed).toBe(
       true
@@ -291,11 +308,11 @@ test("outcome unknown does not block a correct re-tap for thirty seconds", async
   });
   await coordinator.initialize("Rocky");
   const on = onOf(manager);
-  await on.handleSetRequest(false);
-  await jest.advanceTimersByTimeAsync(5001);
+  await acceptedPress(on, false);
+  await jest.advanceTimersByTimeAsync(2501);
   setReadFailure(false);
   // A new explicit assignment can proceed before the failure cooldown would end.
-  await on.handleSetRequest(false);
+  await acceptedPress(on, false);
   await jest.advanceTimersByTimeAsync(2001);
   expect(platform.roborockAPI.updateCloudSceneParam).toHaveBeenCalledTimes(2);
   expect(platform.log.warn.mock.calls.flat().join("\n")).not.toContain(
@@ -316,7 +333,7 @@ test("shutdown cancels pending feedback timers and late completions cannot chang
       })
   );
   const on = onOf(manager);
-  await on.handleSetRequest(false);
+  await acceptedPress(on, false);
   coordinator.stopRuntime();
   const before = on.value;
   reject(new Error("late shutdown failure"));
@@ -324,4 +341,26 @@ test("shutdown cancels pending feedback timers and late completions cannot chang
   expect(on.value).toBe(before);
   expect(jest.getTimerCount()).toBe(0);
   expect(manager.context.scheduleDisplayStates["scene:1"].confirmed).toBe(true);
+});
+
+test("shutdown during the answer window rejects HAP and cancels its deadline", async () => {
+  const { coordinator, manager } = setup({ refuse: false });
+  await coordinator.initialize("Rocky");
+  let reject;
+  coordinator.enqueueScheduleWrite = jest.fn(
+    () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      })
+  );
+  const on = onOf(manager);
+  const request = on.handleSetRequest(false).catch((status) => status);
+  await jest.advanceTimersByTimeAsync(0);
+  expect(on.value).toBe(true);
+  coordinator.stopRuntime();
+  reject(new Error("late shutdown failure"));
+  await jest.advanceTimersByTimeAsync(0);
+  expect(await request).toBe(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+  expect(on.value).toBe(true);
+  expect(jest.getTimerCount()).toBe(0);
 });

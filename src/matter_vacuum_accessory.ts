@@ -508,6 +508,21 @@ const ROBOROCK_MOPPING_STATE_FIRST = 6301;
 const ROBOROCK_MOPPING_STATE_LAST_ON_THE_FLOOR = 6309;
 const ROBOROCK_BACK_TO_DOCK_WASHING_DUSTER = 6310;
 
+/** Idle (3) and Charger Disconnected (2): stopped, and not on the charger. */
+function isRoborockOnTheFloorAtRest(state: number | null): boolean {
+  return state === 2 || state === 3;
+}
+
+/** Driving to the dock: Returning (6), Docking (15), going to wash the mop. */
+function isRoborockHeadingForTheDock(state: number | null): boolean {
+  return (
+    state === 6 ||
+    state === 15 ||
+    state === 26 ||
+    state === ROBOROCK_BACK_TO_DOCK_WASHING_DUSTER
+  );
+}
+
 function isRoborockMoppingOnTheFloor(state: number | null): boolean {
   return (
     state !== null &&
@@ -515,6 +530,9 @@ function isRoborockMoppingOnTheFloor(state: number | null): boolean {
     state <= ROBOROCK_MOPPING_STATE_LAST_ON_THE_FLOOR
   );
 }
+
+/** Roborock state 10: a run paused where the robot stands. */
+const ROBOROCK_STATE_PAUSED = 10;
 
 /** `in_cleaning` values that each have their own resume verb. */
 const IN_CLEANING_ZONE = 2;
@@ -2140,11 +2158,12 @@ export default class RoborockMatterVacuumAccessory {
     }
 
     try {
-      await findMe.call(
-        this.api,
-        this.getDuid(),
-        this.getMatterCommandOptions()
-      );
+      await findMe.call(this.api, this.getDuid(), {
+        ...this.getMatterCommandOptions(),
+        // Locate/Identify await this operation. Keep readiness plus reply
+        // within HomeKit's response window, like clean-mode selections.
+        requestTimeoutMs: 2500,
+      });
     } catch (error) {
       this.platform.log.warn(
         `Unable to locate ${this.getVacuumName()} from ${surfacePhrase(surface)} identify: ${this.getErrorMessage(error)}`
@@ -2203,6 +2222,15 @@ export default class RoborockMatterVacuumAccessory {
    * looking at.
    */
   private async startCleaning(surface: string = MATTER_SURFACE): Promise<void> {
+    if (this.isPausedRunTheStartWouldRepeat()) {
+      // An automation or a Shortcut has no Resume; it sets the run mode to
+      // Cleaning, which lands here. Starting again restarted the paused run, or
+      // made a paused room clean a whole-home one (#28). Home Assistant's
+      // start resumes a paused run the same way.
+      await this.resumeCleaning(surface);
+      return;
+    }
+
     const name = this.getVacuumName();
     const duid = this.getDuid();
     const selectedAreas = this.getSelectedServiceAreaSegments();
@@ -2419,38 +2447,70 @@ export default class RoborockMatterVacuumAccessory {
     return "app_start";
   }
 
-  private async resumeCleaning(): Promise<void> {
+  /**
+   * Whether a start would only repeat the run the robot has paused: it is
+   * paused, and no rooms other than the ones that run is cleaning are selected.
+   */
+  private isPausedRunTheStartWouldRepeat(): boolean {
+    if (this.getNumberStatus("state") !== ROBOROCK_STATE_PAUSED) {
+      return false;
+    }
+
+    const selected = this.getSelectedServiceAreaSegments().map(
+      (area) => area.areaId
+    );
+    const running = new Set(
+      this.serviceAreaProgress.map((entry) => entry.areaId)
+    );
+    return (
+      selected.length === 0 ||
+      (selected.length === running.size &&
+        selected.every((areaId) => running.has(areaId)))
+    );
+  }
+
+  private async resumeCleaning(
+    surface: string = MATTER_SURFACE
+  ): Promise<void> {
     // Matter's Resume has always been `app_start`. That is right for a paused
     // FULL clean and wrong for a paused ROOM or ZONE clean, where it starts a
     // new whole-home run instead of continuing the one that was interrupted
     // (#28). See getResumeVerb() for which verb goes with which clean.
     const verb = this.getResumeVerb();
+    const from = surfacePhrase(surface);
 
     this.platform.log.info(
       verb === "resume_segment_clean"
-        ? `Resuming the paused room clean on ${this.getVacuumName()} from Matter.`
+        ? `Resuming the paused room clean on ${this.getVacuumName()} from ${from}.`
         : verb === "resume_zoned_clean"
-          ? `Resuming the paused zone clean on ${this.getVacuumName()} from Matter.`
-          : `Resuming ${this.getVacuumName()} from Matter.`
+          ? `Resuming the paused zone clean on ${this.getVacuumName()} from ${from}.`
+          : `Resuming ${this.getVacuumName()} from ${from}.`
     );
     this.platform.log.debug(
       `Resume for ${this.getVacuumName()}: in_cleaning=${this.getNumberStatus("in_cleaning") ?? "unknown"}, sending ${verb}.`
     );
     const state = cleaningOptimisticState();
     this.setAndScheduleOptimisticState(state, "resume");
-    this.dispatchRoborockMatterCommand("resume", async () => {
-      await this.applyCleanModeBeforeStarting();
+    this.dispatchRoborockMatterCommand(
+      "resume",
+      async () => {
+        await this.applyCleanModeBeforeStarting();
 
-      if (verb === "resume_segment_clean" || verb === "resume_zoned_clean") {
-        // No fallback to `app_start` if this fails. A failed resume leaves a
-        // paused robot paused, and the user presses play again; falling back
-        // would silently produce the exact whole-home run #28 is about.
-        await this.api[verb]!(this.getDuid(), this.getMatterCommandOptions());
-        return;
-      }
+        if (verb === "resume_segment_clean" || verb === "resume_zoned_clean") {
+          // No fallback to `app_start` if this fails. A failed resume leaves a
+          // paused robot paused, and the user presses play again; falling back
+          // would silently produce the exact whole-home run #28 is about.
+          await this.api[verb]!(this.getDuid(), this.getMatterCommandOptions());
+          return;
+        }
 
-      await this.api.app_start(this.getDuid(), this.getMatterCommandOptions());
-    });
+        await this.api.app_start(
+          this.getDuid(),
+          this.getMatterCommandOptions()
+        );
+      },
+      { surface }
+    );
   }
 
   private async returnToDock(surface: string = MATTER_SURFACE): Promise<void> {
@@ -5276,6 +5336,9 @@ export default class RoborockMatterVacuumAccessory {
         return RVC_OPERATIONAL_STATE.DOCKED;
       case ROBOROCK_BACK_TO_DOCK_WASHING_DUSTER:
         return RVC_OPERATIONAL_STATE.SEEKING_CHARGER;
+      case 2: // Charger Disconnected
+      case 3: // Idle: charge_status is 1 off the dock too (#28)
+        return RVC_OPERATIONAL_STATE.STOPPED;
       default:
         if (isRoborockMoppingOnTheFloor(state)) {
           return RVC_OPERATIONAL_STATE.RUNNING;
@@ -5694,6 +5757,13 @@ export default class RoborockMatterVacuumAccessory {
    *
    * Reuses that predicate rather than listing the states again: a second
    * hand-written copy of a list is the most repeated defect in this codebase.
+   *
+   * A state that places the robot on the floor without cleaning answers the
+   * question too (#28): a robot that stopped at a pin & go spot reported Idle
+   * with charge_status 1 and read as docked 5 m from its dock. charge_status
+   * is not stale there; robots report 1 off the dock (the a144 sends
+   * `state: 18, charge_status: 1` in one get_status reply), and
+   * python-roborock's get_dock_state() places the robot from the state alone.
    */
   private isRoborockDockedOrCharging(
     roborockState: number | null,
@@ -5703,7 +5773,11 @@ export default class RoborockMatterVacuumAccessory {
       return true;
     }
 
-    if (this.isRoborockActivelyCleaningAwayFromDock(roborockState)) {
+    if (
+      this.isRoborockActivelyCleaningAwayFromDock(roborockState) ||
+      isRoborockOnTheFloorAtRest(roborockState) ||
+      isRoborockHeadingForTheDock(roborockState)
+    ) {
       return false;
     }
 

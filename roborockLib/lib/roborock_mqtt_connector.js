@@ -969,11 +969,15 @@ class roborock_mqtt_connector {
   }
 
   waitUntilReady({ timeoutMs = 10000 } = {}) {
+    const connectedAtWait = this.connected;
+    const linkAtWait = this.linkId;
     return this.readiness.wait(timeoutMs).catch((error) => {
       // An unsent request is not robot silence. But a connected client whose
       // reply subscription never succeeds must not stay stuck forever either.
       if (
         error.code === "MQTT_READINESS_TIMEOUT" &&
+        connectedAtWait &&
+        linkAtWait === this.linkId &&
         this.connected &&
         !this.sessionDiagnostics.subscriptionAcknowledged &&
         !this.readiness.stopped

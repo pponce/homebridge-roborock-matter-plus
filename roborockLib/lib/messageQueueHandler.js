@@ -369,6 +369,21 @@ class messageQueueHandler {
     _unused = false,
     options = {}
   ) {
+    const cloudGateTimeout = options.cloudGateTimeoutMs || 10000;
+    // An explicit timeout is the caller's total budget, including readiness.
+    const explicitTimeout = Number(options.requestTimeoutMs);
+    const deadline =
+      Number.isFinite(explicitTimeout) && explicitTimeout > 0
+        ? Date.now() + getRequestTimeout(method, explicitTimeout)
+        : undefined;
+    const budgetExpired = () =>
+      Object.assign(
+        refusal(
+          "cloud unavailable",
+          "The command budget expired before publication; this request was not sent."
+        ),
+        { requestNotSent: true, unansweredRequest: false }
+      );
     const remoteConnection = await this.adapter.isRemoteDevice(duid);
     const version = await this.adapter.getRobotVersion(duid);
 
@@ -575,8 +590,11 @@ class messageQueueHandler {
     if (useCloudConnection && (deviceOnline || allowOfflineCloudSend)) {
       // No frame or pending RPC exists while the reply subscription is pending.
       try {
+        const remaining =
+          deadline === undefined ? cloudGateTimeout : deadline - Date.now();
+        if (remaining <= 0) throw budgetExpired();
         await this.adapter.rr_mqtt_connector.waitUntilReady?.({
-          timeoutMs: options.cloudGateTimeoutMs || 10000,
+          timeoutMs: Math.min(cloudGateTimeout, remaining),
         });
       } catch (error) {
         this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
@@ -611,8 +629,11 @@ class messageQueueHandler {
       this.adapter.rr_mqtt_connector.recovery &&
       !this.adapter.rr_mqtt_connector.isReady?.()
     ) {
+      const remaining =
+        deadline === undefined ? cloudGateTimeout : deadline - Date.now();
+      if (remaining <= 0) throw budgetExpired();
       await this.adapter.rr_mqtt_connector.waitUntilReady?.({
-        timeoutMs: options.cloudGateTimeoutMs || 10000,
+        timeoutMs: Math.min(cloudGateTimeout, remaining),
       });
       mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
       roborockMessage = await this.adapter.message.buildRoborockMessage(
@@ -621,6 +642,16 @@ class messageQueueHandler {
         Math.floor(Date.now() / 1000),
         payload
       );
+    }
+
+    if (useCloudConnection && deadline !== undefined) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
+        throw budgetExpired();
+      }
+      // Frame construction and readiness have already spent this much time.
+      options = { ...options, requestTimeoutMs: remaining };
     }
 
     if (roborockMessage) {
@@ -817,7 +848,9 @@ class messageQueueHandler {
         );
         this.adapter.noteTransportOutcome?.(duid, "local", "retried");
         const readinessStartedAt = Date.now();
-        const explicitBudget = Number(options.requestTimeoutMs) > 0;
+        const explicitBudget =
+          Number.isFinite(Number(options.requestTimeoutMs)) &&
+          Number(options.requestTimeoutMs) > 0;
         try {
           await this.adapter.rr_mqtt_connector.waitUntilReady?.({
             timeoutMs: explicitBudget
@@ -826,16 +859,9 @@ class messageQueueHandler {
           });
         } catch (error) {
           this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
-          throw error;
-        }
-        const responseTimeout = explicitBudget
-          ? retryTimeout - (Date.now() - readinessStartedAt)
-          : retryTimeout;
-        if (responseTimeout <= 0) {
-          throw refusal(
-            "cloud unavailable",
-            "The cloud retry budget expired before publication; the retry was not sent."
-          );
+          // The original request DID leave over the LAN. Preserve its failure
+          // and late-reply/breaker evidence when no cloud retry was published.
+          throw localError;
         }
         const payload = await this.adapter.message.buildPayload(
           duid,
@@ -853,7 +879,10 @@ class messageQueueHandler {
           Math.floor(Date.now() / 1000),
           payload
         );
-        if (!frame) {
+        const responseTimeout = explicitBudget
+          ? retryTimeout - (Date.now() - readinessStartedAt)
+          : retryTimeout;
+        if (!frame || responseTimeout <= 0) {
           throw localError;
         }
         return await this.exchangeOverCloud(
@@ -891,10 +920,7 @@ class messageQueueHandler {
     if (!retryable) {
       return null;
     }
-    if (
-      !this.adapter.rr_mqtt_connector.isConnected() &&
-      typeof this.adapter.rr_mqtt_connector.waitUntilReady !== "function"
-    ) {
+    if (!this.adapter.rr_mqtt_connector.isConnected()) {
       return null;
     }
     if (!context.deviceOnline && !context.options.allowOfflineCloudSend) {
@@ -1069,16 +1095,17 @@ class messageQueueHandler {
           this.adapter.pendingRequests.delete(messageID);
           this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
           reject(
-            refusal(
-              "cloud unavailable",
-              `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
-            )
+            localError ??
+              refusal(
+                "cloud unavailable",
+                `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
+              )
           );
         });
       } catch (error) {
         this.adapter.pendingRequests.delete(messageID);
         this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
-        reject(error);
+        reject(localError ?? error);
         return;
       }
       if (publicationRejected) return;
