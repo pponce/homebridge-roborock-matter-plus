@@ -157,6 +157,10 @@ describe("HAP schedule names and stable group identity", () => {
       kind: "hapExtension",
       extension: "schedules",
       duid: "device-1",
+      scheduleDisplayStates: {
+        "timer-1": { confirmed: true },
+        "timer-2": { confirmed: false },
+      },
     });
 
     expect(
@@ -259,6 +263,7 @@ describe("HAP schedule names and stable group identity", () => {
       .setValue("Weekend Downstairs");
 
     const originalServices = [...accessory.services];
+    platform.api.updatePlatformAccessories.mockClear();
 
     coordinator.shutdown();
 
@@ -293,7 +298,12 @@ describe("HAP schedule names and stable group identity", () => {
 
     expect(switchService(accessory, "timer-1")).toBe(service);
     expect(service.getCharacteristic(Characteristic.On).value).toBe(false);
-    expect(platform.api.updatePlatformAccessories).not.toHaveBeenCalled();
+    expect(accessory.context.scheduleDisplayStates["timer-1"]).toEqual({
+      confirmed: false,
+    });
+    expect(platform.api.updatePlatformAccessories).toHaveBeenCalledWith([
+      accessory,
+    ]);
   });
 
   test("an authoritative deleted schedule removes only its own service", () => {
@@ -743,12 +753,10 @@ function optimisticFixture() {
   };
 }
 
+
 describe("persisted schedule feedback with the upstream answer window", () => {
   beforeEach(() => jest.useFakeTimers());
-  afterEach(() => {
-    jest.clearAllTimers();
-    jest.useRealTimers();
-  });
+  afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
   async function tap(on, enabled) {
     const answer = on.setHandler(enabled);
     await jest.advanceTimersByTimeAsync(2500);
@@ -758,9 +766,7 @@ describe("persisted schedule feedback with the upstream answer window", () => {
   test("acknowledges a pending write within the budget and explicitly rolls back a later failure", async () => {
     const { platform, on, calls, coordinator } = optimisticFixture();
     let answered = false;
-    const result = on.setHandler(true).then(() => {
-      answered = true;
-    });
+    const result = on.setHandler(true).then(() => { answered = true; });
     await jest.advanceTimersByTimeAsync(2499);
     expect(answered).toBe(false);
     expect(on.value).toBe(false);
@@ -770,11 +776,7 @@ describe("persisted schedule feedback with the upstream answer window", () => {
     calls[0].reject(new Error("cloud refused"));
     await jest.advanceTimersByTimeAsync(0);
     expect(on.value).toBe(false);
-    expect(platform.log.warn).toHaveBeenCalledWith(
-      expect.stringMatching(
-        /Schedule display rollback.*device-1\/optimistic.*cloud refused.*not a user change/
-      )
-    );
+    expect(platform.log.warn).toHaveBeenCalledWith(expect.stringMatching(/Schedule display rollback.*device-1\/optimistic.*cloud refused.*not a user change/));
     await expect(on.setHandler(true)).rejects.toThrow();
     expect(calls).toHaveLength(1);
     coordinator.stopRuntime();
@@ -801,9 +803,7 @@ describe("persisted schedule feedback with the upstream answer window", () => {
   test("an authoritative refresh keeps the accepted provisional display until confirmation", async () => {
     const { on, calls, coordinator } = optimisticFixture();
     await tap(on, true);
-    coordinator.sync([
-      { id: "optimistic", enabled: false, timer: ["optimistic", "off"] },
-    ]);
+    coordinator.sync([{ id: "optimistic", enabled: false, timer: ["optimistic", "off"] }]);
     expect(on.value).toBe(true);
     calls[0].resolve(true);
     await jest.advanceTimersByTimeAsync(0);
