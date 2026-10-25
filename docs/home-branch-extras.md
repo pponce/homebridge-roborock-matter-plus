@@ -66,12 +66,9 @@ and #46 (historical eligible-read evidence). The remaining PR additions are:
 | PR  | Remaining scope                                                                  |
 | --- | -------------------------------------------------------------------------------- |
 | #31 | Optional recovery triggers and diagnostics, adapted here to upstream's lifecycle |
-| #32 | Reconcile uncertain schedule writes and share duplicate pending requests         |
-| #36 | Distinguish retained presence snapshots from live changes                        |
 | #37 | Wait for reply readiness without blocking a working LAN route                    |
-| #38 | Persist confirmed schedule state and handle unknown write outcomes               |
+| #38 | Preserve early HAP refusals, persist confirmed state and handle unknown outcomes               |
 | #39 | Acknowledge Find/Routine presses promptly and suppress duplicate runs            |
-| #46 | Preserve historical eligible-read evidence across sessions                       |
 
 The remaining PRs are rebased onto 3.40.1. This integration includes #37's caller-budget/LAN-error fixes and #38's early HAP refusal handling.
 
