@@ -12,7 +12,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [pr38, full]
+        include:
+          - target: pr31-lts-prev
+            node: lts/-1
+          - target: pr31-lts
+            node: lts/*
+          - target: pr31-current
+            node: current
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -22,7 +28,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
       - name: Format, validate and build
         env:
@@ -85,7 +91,7 @@ jobs:
           types_status=$?
           npm run build > /tmp/build.log 2>&1
           build_status=$?
-          npm test -- --runInBand --json --outputFile=/tmp/jest.json > /tmp/jest.log 2>&1
+          npm test -- --coverage --runInBand --json --outputFile=/tmp/jest.json > /tmp/jest.log 2>&1
           jest_status=$?
           native_status=0
           : > /tmp/native.log
