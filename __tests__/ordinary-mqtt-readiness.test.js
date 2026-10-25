@@ -412,25 +412,38 @@ test("a LAN loss shares the explicit remaining budget with MQTT readiness and it
   });
 });
 
-test.each(["1.0", "B01"])("a %s command with a two-second budget cannot publish when SUBACK arrives at nine seconds", async (version) => {
-  adapter.getRobotVersion.mockResolvedValue(version);
-  adapter.getProductAttribute = () => "roborock.vacuum.sc01";
-  mockClients[0].handlers.get("connect")({});
-  const result = queue.sendRequest("robot-a", "set_custom_mode", [102], false, false, { requestTimeoutMs: 2000 }).catch(error => error);
-  await jest.advanceTimersByTimeAsync(2000);
-  expect(connector.readiness.waiters.size).toBe(0);
-  expect(await result).toMatchObject({ code: "MQTT_READINESS_TIMEOUT", requestNotSent: true, unansweredRequest: false });
-  await jest.advanceTimersByTimeAsync(7000);
-  acknowledge();
-  await jest.advanceTimersByTimeAsync(0);
-  expect(mockClients[0].publish).not.toHaveBeenCalled();
-  expect(adapter.pendingRequests.size).toBe(0);
-  expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
-});
+test.each(["1.0", "B01"])(
+  "a %s command with a two-second budget cannot publish when SUBACK arrives at nine seconds",
+  async (version) => {
+    adapter.getRobotVersion.mockResolvedValue(version);
+    adapter.getProductAttribute = () => "roborock.vacuum.sc01";
+    mockClients[0].handlers.get("connect")({});
+    const result = queue
+      .sendRequest("robot-a", "set_custom_mode", [102], false, false, {
+        requestTimeoutMs: 2000,
+      })
+      .catch((error) => error);
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(connector.readiness.waiters.size).toBe(0);
+    expect(await result).toMatchObject({
+      code: "MQTT_READINESS_TIMEOUT",
+      requestNotSent: true,
+      unansweredRequest: false,
+    });
+    await jest.advanceTimersByTimeAsync(7000);
+    acknowledge();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockClients[0].publish).not.toHaveBeenCalled();
+    expect(adapter.pendingRequests.size).toBe(0);
+    expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
+  }
+);
 
 test("initial cloud readiness spends the explicit budget and the response receives only the remainder", async () => {
   mockClients[0].handlers.get("connect")({});
-  const { result, id } = await startRequest("robot-a", "get_status", { requestTimeoutMs: 2000 });
+  const { result, id } = await startRequest("robot-a", "get_status", {
+    requestTimeoutMs: 2000,
+  });
   await jest.advanceTimersByTimeAsync(1500);
   acknowledge();
   await jest.advanceTimersByTimeAsync(0);
@@ -439,59 +452,99 @@ test("initial cloud readiness spends the explicit budget and the response receiv
   expect(adapter.pendingRequests.has(id)).toBe(true);
   await jest.advanceTimersByTimeAsync(1);
   expect(adapter.pendingRequests.size).toBe(0);
-  expect(await result).toMatchObject({ unansweredRequest: true, transientKind: "cloud timeout" });
+  expect(await result).toMatchObject({
+    unansweredRequest: true,
+    transientKind: "cloud timeout",
+  });
   expect(adapter.pendingRequests.size).toBe(0);
 });
 
 test("frame construction cannot publish after the caller's budget was spent", async () => {
-  adapter.message.buildRoborockMessage.mockImplementationOnce(() => new Promise(resolve => setTimeout(() => resolve(Buffer.from("late-frame")), 2100)));
-  const { result } = await startRequest("robot-a", "get_status", { requestTimeoutMs: 2000 });
+  adapter.message.buildRoborockMessage.mockImplementationOnce(
+    () =>
+      new Promise((resolve) =>
+        setTimeout(() => resolve(Buffer.from("late-frame")), 2100)
+      )
+  );
+  const { result } = await startRequest("robot-a", "get_status", {
+    requestTimeoutMs: 2000,
+  });
   await jest.advanceTimersByTimeAsync(2100);
-  expect(await result).toMatchObject({ requestNotSent: true, unansweredRequest: false });
+  expect(await result).toMatchObject({
+    requestNotSent: true,
+    unansweredRequest: false,
+  });
   expect(mockClients[0].publish).not.toHaveBeenCalled();
 });
 
-test.each(["timeout", "socket loss"])("with MQTT down a LAN %s retains its original timing and evidence", async kind => {
-  adapter.config.cloudOnlyMode = false;
-  adapter.localConnector.isConnected.mockReturnValue(true);
-  adapter.lateReplies = { noteTimedOut: jest.fn() };
-  adapter.localConnector.writeRequest = jest.fn((_duid, _frame, onLost) => {
-    if (kind === "socket loss") setTimeout(() => onLost("socket closed"), 1000);
-    return { release: jest.fn(), isUp: () => kind === "timeout" };
-  });
-  mockClients[0].handlers.get("close")();
-  const { result, id } = await startRequest();
-  await jest.advanceTimersByTimeAsync(kind === "timeout" ? 10000 : 1000);
-  expect(connector.readiness.waiters.size).toBe(0);
-  const error = await result;
-  expect(error.requestNotSent).not.toBe(true);
-  expect(error.transientKind).toBe(kind === "timeout" ? "local timeout" : "local connection unavailable");
-  if (kind === "timeout") {
-    expect(error.transportWasUp).toBe(true);
-    expect(adapter.noteRequestUnanswered).toHaveBeenCalledWith("robot-a", "get_status", error);
-    expect(adapter.lateReplies.noteTimedOut).toHaveBeenCalledWith(id, "robot-a", "get_status");
-  } else {
-    expect(error.localTransportLost).toBe(true);
-    expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
-    expect(adapter.lateReplies.noteTimedOut).not.toHaveBeenCalled();
+test.each(["timeout", "socket loss"])(
+  "with MQTT down a LAN %s retains its original timing and evidence",
+  async (kind) => {
+    adapter.config.cloudOnlyMode = false;
+    adapter.localConnector.isConnected.mockReturnValue(true);
+    adapter.lateReplies = { noteTimedOut: jest.fn() };
+    adapter.localConnector.writeRequest = jest.fn((_duid, _frame, onLost) => {
+      if (kind === "socket loss")
+        setTimeout(() => onLost("socket closed"), 1000);
+      return { release: jest.fn(), isUp: () => kind === "timeout" };
+    });
+    mockClients[0].handlers.get("close")();
+    const { result, id } = await startRequest();
+    await jest.advanceTimersByTimeAsync(kind === "timeout" ? 10000 : 1000);
+    expect(connector.readiness.waiters.size).toBe(0);
+    const error = await result;
+    expect(error.requestNotSent).not.toBe(true);
+    expect(error.transientKind).toBe(
+      kind === "timeout" ? "local timeout" : "local connection unavailable"
+    );
+    if (kind === "timeout") {
+      expect(error.transportWasUp).toBe(true);
+      expect(adapter.noteRequestUnanswered).toHaveBeenCalledWith(
+        "robot-a",
+        "get_status",
+        error
+      );
+      expect(adapter.lateReplies.noteTimedOut).toHaveBeenCalledWith(
+        id,
+        "robot-a",
+        "get_status"
+      );
+    } else {
+      expect(error.localTransportLost).toBe(true);
+      expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
+      expect(adapter.lateReplies.noteTimedOut).not.toHaveBeenCalled();
+    }
+    expect(connector.readiness.waiters.size).toBe(0);
+    expect(
+      mockClients.every((client) => client.publish.mock.calls.length === 0)
+    ).toBe(true);
   }
-  expect(connector.readiness.waiters.size).toBe(0);
-  expect(mockClients.every(client => client.publish.mock.calls.length === 0)).toBe(true);
-});
+);
 
 test("a retry readiness expiry preserves the LAN timeout and late-reply evidence", async () => {
   adapter.config.cloudOnlyMode = false;
   adapter.localConnector.isConnected.mockReturnValue(true);
-  adapter.localConnector.writeRequest = jest.fn(() => ({ release: jest.fn(), isUp: () => true }));
+  adapter.localConnector.writeRequest = jest.fn(() => ({
+    release: jest.fn(),
+    isUp: () => true,
+  }));
   adapter.lateReplies = { noteTimedOut: jest.fn() };
   mockClients[0].handlers.get("connect")({});
   const { result, id } = await startRequest();
   await jest.advanceTimersByTimeAsync(20000);
   const error = await result;
-  expect(error).toMatchObject({ unansweredRequest: true, transportWasUp: true, transientKind: "local timeout" });
+  expect(error).toMatchObject({
+    unansweredRequest: true,
+    transportWasUp: true,
+    transientKind: "local timeout",
+  });
   expect(error.requestNotSent).not.toBe(true);
   expect(adapter.noteRequestUnanswered).toHaveBeenCalledTimes(1);
-  expect(adapter.lateReplies.noteTimedOut).toHaveBeenCalledWith(id, "robot-a", "get_status");
+  expect(adapter.lateReplies.noteTimedOut).toHaveBeenCalledWith(
+    id,
+    "robot-a",
+    "get_status"
+  );
   expect(mockClients[0].publish).not.toHaveBeenCalled();
 });
 
@@ -504,7 +557,8 @@ test("waits from the old connection cannot restart a newly connected session", a
   await jest.advanceTimersByTimeAsync(9999);
   client.handlers.get("connect")({});
   await jest.advanceTimersByTimeAsync(1);
-  for (const request of requests) expect(await request.result).toMatchObject({ requestNotSent: true });
+  for (const request of requests)
+    expect(await request.result).toMatchObject({ requestNotSent: true });
   expect(connector.unsubscribedExpiries).toBe(0);
   expect(restart).not.toHaveBeenCalled();
 });

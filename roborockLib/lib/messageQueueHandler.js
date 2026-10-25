@@ -372,13 +372,18 @@ class messageQueueHandler {
     const cloudGateTimeout = options.cloudGateTimeoutMs || 10000;
     // An explicit timeout is the caller's total budget, including readiness.
     const explicitTimeout = Number(options.requestTimeoutMs);
-    const deadline = Number.isFinite(explicitTimeout) && explicitTimeout > 0
-      ? Date.now() + getRequestTimeout(method, explicitTimeout)
-      : undefined;
-    const budgetExpired = () => Object.assign(
-      refusal("cloud unavailable", "The command budget expired before publication; this request was not sent."),
-      { requestNotSent: true, unansweredRequest: false }
-    );
+    const deadline =
+      Number.isFinite(explicitTimeout) && explicitTimeout > 0
+        ? Date.now() + getRequestTimeout(method, explicitTimeout)
+        : undefined;
+    const budgetExpired = () =>
+      Object.assign(
+        refusal(
+          "cloud unavailable",
+          "The command budget expired before publication; this request was not sent."
+        ),
+        { requestNotSent: true, unansweredRequest: false }
+      );
     const remoteConnection = await this.adapter.isRemoteDevice(duid);
     const version = await this.adapter.getRobotVersion(duid);
 
@@ -585,7 +590,8 @@ class messageQueueHandler {
     if (useCloudConnection && (deviceOnline || allowOfflineCloudSend)) {
       // No frame or pending RPC exists while the reply subscription is pending.
       try {
-        const remaining = deadline === undefined ? cloudGateTimeout : deadline - Date.now();
+        const remaining =
+          deadline === undefined ? cloudGateTimeout : deadline - Date.now();
         if (remaining <= 0) throw budgetExpired();
         await this.adapter.rr_mqtt_connector.waitUntilReady?.({
           timeoutMs: Math.min(cloudGateTimeout, remaining),
@@ -623,9 +629,12 @@ class messageQueueHandler {
       this.adapter.rr_mqtt_connector.recovery &&
       !this.adapter.rr_mqtt_connector.isReady?.()
     ) {
-      const remaining = deadline === undefined ? cloudGateTimeout : deadline - Date.now();
+      const remaining =
+        deadline === undefined ? cloudGateTimeout : deadline - Date.now();
       if (remaining <= 0) throw budgetExpired();
-      await this.adapter.rr_mqtt_connector.waitUntilReady?.({ timeoutMs: Math.min(cloudGateTimeout, remaining) });
+      await this.adapter.rr_mqtt_connector.waitUntilReady?.({
+        timeoutMs: Math.min(cloudGateTimeout, remaining),
+      });
       mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
       roborockMessage = await this.adapter.message.buildRoborockMessage(
         duid,
@@ -839,7 +848,9 @@ class messageQueueHandler {
         );
         this.adapter.noteTransportOutcome?.(duid, "local", "retried");
         const readinessStartedAt = Date.now();
-        const explicitBudget = Number.isFinite(Number(options.requestTimeoutMs)) && Number(options.requestTimeoutMs) > 0;
+        const explicitBudget =
+          Number.isFinite(Number(options.requestTimeoutMs)) &&
+          Number(options.requestTimeoutMs) > 0;
         try {
           await this.adapter.rr_mqtt_connector.waitUntilReady?.({
             timeoutMs: explicitBudget
@@ -1084,10 +1095,11 @@ class messageQueueHandler {
           this.adapter.pendingRequests.delete(messageID);
           this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
           reject(
-            localError ?? refusal(
-              "cloud unavailable",
-              `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
-            )
+            localError ??
+              refusal(
+                "cloud unavailable",
+                `The Roborock cloud connection was lost before the ${method} request could be sent, so it was not sent.`
+              )
           );
         });
       } catch (error) {
