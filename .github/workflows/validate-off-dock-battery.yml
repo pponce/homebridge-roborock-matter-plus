@@ -1,0 +1,98 @@
+name: Validate off-dock battery fix
+
+on:
+  push:
+    branches: ["review-delay/off-dock-battery-checks"]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: combined
+            branch: review-delay/off-dock-battery-combined
+            sha: 19fdd280ea521cbba84b3228e5adc46313e86325
+          - variant: minimal
+            branch: review-delay/off-dock-battery-minimal
+            sha: 1ad702356d831f3c6d18a6cdaae64066e9c0853c
+          - variant: upstream
+            branch: fix/matter-off-dock-battery-charge-state
+            sha: b2f8179c3aa5c4025d99d04061d6ad21b25666fe
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+      - name: Verify source commit
+        env:
+          EXPECTED_SHA: ${{ matrix.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install pinned dependencies
+        run: npm ci
+      - name: Confirm regression fails before the fix
+        if: matrix.variant == 'upstream'
+        env:
+          BASE_SHA: 2faec5f957f08d19bffd9aa1b4164461848343a7
+        run: |
+          cp src/matter_vacuum_accessory.ts "$RUNNER_TEMP/fixed-matter.ts"
+          git show "$BASE_SHA:src/matter_vacuum_accessory.ts" > src/matter_vacuum_accessory.ts
+          if npm test -- --runInBand --runTestsByPath __tests__/an-off-dock-robot-does-not-report-a-charging-battery.test.js --json --outputFile "$RUNNER_TEMP/before.json"; then
+            cp "$RUNNER_TEMP/fixed-matter.ts" src/matter_vacuum_accessory.ts
+            echo "The regression unexpectedly passed before the fix."
+            exit 1
+          fi
+          cp "$RUNNER_TEMP/fixed-matter.ts" src/matter_vacuum_accessory.ts
+          node -e 'const r=require(process.argv[1]); const t=r.testResults.flatMap(t=>t.assertionResults); if(!t.some(t=>t.fullName.includes("captured sleeping S7 MaxV") && t.status==="failed")) throw Error("Expected hardware regression did not fail"); console.log("::notice title=Regression confirmed::"+r.numFailedTests+" regression cases failed before the fix");' "$RUNNER_TEMP/before.json"
+      - name: Check formatting
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Full Jest suite
+        env:
+          CI: true
+        run: npm test -- --runInBand --json --outputFile "$RUNNER_TEMP/tests.json"
+      - name: Report Jest results
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/tests.json" ]; then
+            node -e 'const r=require(process.argv[1]); console.log("::notice title=Jest results::"+r.numPassedTests+" passed, "+r.numFailedTests+" failed, "+r.numPendingTests+" skipped; "+r.numPassedTestSuites+" suites passed");' "$RUNNER_TEMP/tests.json"
+          fi
+      - name: Native Node tests
+        shell: bash
+        run: |
+          shopt -s nullglob
+          test_files=(tests/*.test.cjs)
+          if [ "${#test_files[@]}" -gt 0 ]; then
+            node --test "${test_files[@]}"
+          fi
+      - name: Python diagnostic tests
+        run: |
+          if [ -d tests ]; then
+            python3 -m unittest discover -s tests -p 'test_*.py'
+          fi
+      - name: Commit generated dist on the installable staging branches
+        if: matrix.variant != 'upstream'
+        env:
+          TARGET_BRANCH: ${{ matrix.branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f dist
+          if ! git diff --cached --quiet -- dist; then
+            git diff --cached --stat
+            git commit -m "Build dist for off-dock battery charge-state fix"
+            git push origin "HEAD:refs/heads/$TARGET_BRANCH"
+          fi
+          echo "::notice title=Validated install commit::$(git rev-parse HEAD)"
