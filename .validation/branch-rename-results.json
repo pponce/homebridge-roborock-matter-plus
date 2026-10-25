@@ -180,5 +180,19 @@
     "expected_sha": "36123cf6ff69fdb7eda34828ae460259a83e17ab",
     "status": "renamed",
     "sha": "36123cf6ff69fdb7eda34828ae460259a83e17ab"
+  },
+  {
+    "name": "backup/schedule-pause-delay-before-v339-20261016",
+    "new_name": "delete/backup/schedule-pause-delay-before-v339-20261016",
+    "expected_sha": "81560529180d75f3a4f3af512633d05e0da05ef5",
+    "status": "renamed",
+    "sha": "81560529180d75f3a4f3af512633d05e0da05ef5"
+  },
+  {
+    "name": "build/schedule-control-options-20261010",
+    "new_name": "delete/build/schedule-control-options-20261010",
+    "expected_sha": "81560529180d75f3a4f3af512633d05e0da05ef5",
+    "status": "renamed",
+    "sha": "81560529180d75f3a4f3af512633d05e0da05ef5"
   }
 ]
