@@ -37,7 +37,8 @@ for repo in [REPO, UPSTREAM]:
         if repo == REPO: preserve.add(pr['base']['ref'])
 
 manifest = json.loads(Path('.validation/branch-rename-manifest.json').read_text())
-results = []
+results_path = Path(".validation/branch-rename-results.json")
+results = json.loads(results_path.read_text()) if results_path.exists() else []
 for item in manifest:
     name, target, sha = item['name'], item['new_name'], item['sha']
     result = {'name': name, 'new_name': target, 'expected_sha': sha}
@@ -56,7 +57,16 @@ for item in manifest:
         anchor = item['retained_by']
         anchor_name = 'main' if anchor['repo'] == UPSTREAM else anchor['name']
         retained = branch(anchor['repo'], anchor_name)['commit']['sha']
-        if item['reason'] == 'all commits reachable from retained branch':
+        if item['reason'] == 'completed validation workspace; feature source retained':
+            def source_tree(ref):
+                rows = subprocess.check_output(['git', 'ls-tree', '-r', ref], text=True).splitlines()
+                excluded = {'.github/workflows/validate-local-refresh.yml', '.github/scripts/validate-local-refresh.py'}
+                return {line.split('\t', 1)[1]: line.split('\t', 1)[0] for line in rows
+                        if not line.split('\t', 1)[1].startswith(('dist/', '.validation/'))
+                        and line.split('\t', 1)[1] not in excluded}
+            if source_tree(sha) != source_tree(retained):
+                raise RuntimeError('validation source differs from its retained target')
+        elif item['reason'] == 'all commits reachable from retained branch':
             subprocess.run(['git', 'merge-base', '--is-ancestor', sha, retained], check=True)
         else:
             tree = subprocess.check_output(['git', 'rev-parse', sha + '^{tree}'], text=True).strip()
