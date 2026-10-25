@@ -1,0 +1,1997 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.HAP_ROUTINE_EXTENSION = exports.ScheduleWriteBatcher = exports.ScheduleAccountCoordinator = exports.ScheduleWriteQueue = exports.HAP_SCHEDULE_EXTENSION = exports.HAP_EXTENSION_KIND = exports.DEFAULT_SCHEDULE_POLICY = void 0;
+exports.isServerTimerRefusal = isServerTimerRefusal;
+exports.scheduleFailureBackoffMs = scheduleFailureBackoffMs;
+exports.isDefiniteScheduleThrottle = isDefiniteScheduleThrottle;
+exports.isHapRoutineAccessory = isHapRoutineAccessory;
+exports.scheduleFromCloudScene = scheduleFromCloudScene;
+exports.parseServerTimers = parseServerTimers;
+exports.isHapScheduleAccessory = isHapScheduleAccessory;
+const schedule_write_reconciliation_1 = require("./schedule_write_reconciliation");
+const hap_name_1 = require("./hap_name");
+const hap_schedule_api_1 = require("./hap_schedule_api");
+const timers_1 = require("./timers");
+const VERIFY_DELAY_MS = 3000;
+// Preserve upstream's short refusal window before accepting a provisional state.
+const SCHEDULE_WRITE_ANSWER_BUDGET_MS = 2500;
+const WRITE_SUPPRESSION_MS = 5000;
+// WHY FIVE MINUTES, IN THE AUTHOR'S OWN WORDS. Recorded here rather than left
+// in the pull request, because the next person to look at this number will
+// look at this line and not at #23.
+//
+// pponce, who contributed the cache in 3.22.0, settled on 5 minutes for these
+// reasons:
+//
+//   * HomeKit reads characteristics far more often than schedules change.
+//   * A cloud request per read would multiply traffic across every switch and
+//     every vacuum on the account.
+//   * A schedule changed in HomeKit does NOT wait for this TTL — the write
+//     path performs its own authoritative verification.
+//   * So the only staleness this bounds is a change made externally, in the
+//     Roborock app.
+//   * Five minutes bounds that case while sharply cutting steady-state cloud
+//     traffic.
+//
+// The fourth point is the one worth keeping: this TTL is not "how stale may a
+// schedule switch be", it is "how stale may a switch be after a change this
+// bridge had no way to observe". Reasoning about it as a bound on all schedule
+// changes overstates the cost considerably.
+//
+// A user-configurable setting was considered and deliberately not added: the
+// real axis is how much a given user drives schedules from the Roborock app
+// versus from HomeKit, nobody has yet reported the default as wrong, and a
+// setting in this plugin costs four places to keep in sync permanently. This
+// constant can become a setting in an afternoon; a setting cannot be withdrawn.
+const SCHEDULE_CACHE_TTL_MS = 5 * 60 * 1000;
+const SCHEDULE_FAILURE_BACKOFF_STEPS_MS = [
+    60 * 1000,
+    2 * 60 * 1000,
+    5 * 60 * 1000,
+    15 * 60 * 1000,
+    60 * 60 * 1000,
+];
+const SCHEDULE_FAILURE_JITTER_RATIO = 0.1;
+const SCHEDULE_WRITE_BATCH_WINDOW_MS = 500;
+const SCHEDULE_WRITE_SPACING_MS = 500;
+const SCHEDULE_THROTTLE_COOLDOWN_MS = 65 * 60 * 1000;
+const SERVICE_PREFIX = "roborock-schedule-";
+const ROUTINE_SERVICE_PREFIX = "roborock-routine-";
+// A routine switch is momentary: the press is the command. Same reasoning and
+// the same 1.5 s as the action switches — long enough for the Home app to draw
+// the press and an automation to record it, short enough to be ready again.
+const ROUTINE_SWITCH_AUTO_RESET_MS = 1500;
+/**
+ * How a robot's refusal of `get_server_timer` is recognised.
+ *
+ * `-10007` is the code, `Not FCC robot` the message, and "refuses" the word
+ * the shared API puts in front of both. A robot that answers this way will
+ * answer it again every time, so once seen the device-side source is not
+ * asked again this session and its absence stops counting as a failure.
+ */
+const SERVER_TIMER_REFUSAL_PATTERN = /-10007|Not FCC robot|refuses get_server_timer/i;
+function isServerTimerRefusal(error) {
+    const message = error instanceof Error ? error.message : String(error !== null && error !== void 0 ? error : "");
+    return SERVER_TIMER_REFUSAL_PATTERN.test(message);
+}
+exports.DEFAULT_SCHEDULE_POLICY = {
+    cacheTtlMs: SCHEDULE_CACHE_TTL_MS,
+    batchWindowMs: SCHEDULE_WRITE_BATCH_WINDOW_MS,
+    writeSpacingMs: SCHEDULE_WRITE_SPACING_MS,
+    throttleCooldownMs: SCHEDULE_THROTTLE_COOLDOWN_MS,
+};
+exports.HAP_EXTENSION_KIND = "hapExtension";
+exports.HAP_SCHEDULE_EXTENSION = "schedules";
+function scheduleFailureBackoffMs(consecutiveFailures, randomValue = Math.random()) {
+    const failureIndex = Math.max(0, Math.floor(consecutiveFailures) - 1);
+    const baseDelay = SCHEDULE_FAILURE_BACKOFF_STEPS_MS[Math.min(failureIndex, SCHEDULE_FAILURE_BACKOFF_STEPS_MS.length - 1)];
+    const boundedRandom = Math.min(1, Math.max(0, randomValue));
+    const jitterFactor = 1 + (boundedRandom * 2 - 1) * SCHEDULE_FAILURE_JITTER_RATIO;
+    return Math.round(baseDelay * jitterFactor);
+}
+/**
+ * Whether a failure is the cloud saying "slow down", which pauses the whole
+ * account's schedule and Routine traffic for an hour.
+ *
+ * A status field of 429 (on the error or its HTTP response) or a phrase that
+ * says so. Never a bare "429" in free text: the plugin's own timeout messages
+ * carry request ids and message counts, and request 429 or "429 cloud
+ * message(s) since startup" is no rate limit.
+ */
+const SCHEDULE_THROTTLE_PHRASE = /too many requests|rate[ -]?limit(?:ed|ing)?|request limit|frequency limit|throttl(?:ed|ing)/i;
+function isDefiniteScheduleThrottle(error) {
+    const candidates = [error];
+    const visited = new Set();
+    while (candidates.length > 0) {
+        const candidate = candidates.shift();
+        if (candidate == null || visited.has(candidate))
+            continue;
+        visited.add(candidate);
+        if (typeof candidate === "string") {
+            if (SCHEDULE_THROTTLE_PHRASE.test(candidate)) {
+                return true;
+            }
+            continue;
+        }
+        if (typeof candidate !== "object")
+            continue;
+        const record = candidate;
+        if ([record.status, record.statusCode, record.code].some((field) => String(field) === "429")) {
+            return true;
+        }
+        candidates.push(record.message, record.cause, record.response);
+    }
+    return false;
+}
+class ScheduleWriteQueue {
+    constructor() {
+        this.tail = Promise.resolve();
+        this.generation = 0;
+    }
+    enqueue(operation) {
+        const generation = this.generation;
+        const run = this.tail.then(async () => {
+            if (generation !== this.generation) {
+                return undefined;
+            }
+            return operation();
+        });
+        this.tail = run.then(() => undefined, () => undefined);
+        return run;
+    }
+    cancelPending() {
+        this.generation++;
+    }
+}
+exports.ScheduleWriteQueue = ScheduleWriteQueue;
+class ScheduleAccountCoordinator {
+    get busy() {
+        return this.queuedOperations > 0;
+    }
+    constructor(policy = exports.DEFAULT_SCHEDULE_POLICY) {
+        this.policy = policy;
+        this.queuedOperations = 0;
+        this.tail = Promise.resolve();
+        this.throttleUntil = 0;
+        this.metrics = {
+            scheduleReads: 0,
+            primaryWrites: 0,
+            fallbackWrites: 0,
+            coalescedChanges: 0,
+            cacheAvoidedReads: 0,
+            backoffAvoidedReads: 0,
+            throttleAvoidedOperations: 0,
+        };
+    }
+    enqueue(operation, rejectedDuringCooldown) {
+        this.queuedOperations++;
+        const run = this.tail.then(async () => {
+            const throttle = this.currentThrottleError();
+            if (throttle !== undefined) {
+                this.metrics.throttleAvoidedOperations++;
+                return rejectedDuringCooldown(throttle);
+            }
+            return operation();
+        });
+        this.tail = run.then(() => undefined, () => undefined);
+        return run.finally(() => {
+            this.queuedOperations--;
+        });
+    }
+    recordThrottle(error) {
+        this.throttleUntil = Math.max(this.throttleUntil, Date.now() + this.policy.throttleCooldownMs);
+        this.throttleError = error;
+    }
+    currentThrottleError(now = Date.now()) {
+        var _a;
+        if (this.throttleUntil <= now)
+            return undefined;
+        return ((_a = this.throttleError) !== null && _a !== void 0 ? _a : new Error("Roborock schedule requests are in throttle cooldown"));
+    }
+    cooldownRemainingMs(now = Date.now()) {
+        return Math.max(0, this.throttleUntil - now);
+    }
+    recordRequest(kind) {
+        if (kind === "read")
+            this.metrics.scheduleReads++;
+        if (kind === "primaryWrite")
+            this.metrics.primaryWrites++;
+        if (kind === "fallbackWrite")
+            this.metrics.fallbackWrites++;
+    }
+    recordAvoided(kind) {
+        if (kind === "cache")
+            this.metrics.cacheAvoidedReads++;
+        if (kind === "backoff")
+            this.metrics.backoffAvoidedReads++;
+        if (kind === "coalesced")
+            this.metrics.coalescedChanges++;
+        if (kind === "throttle")
+            this.metrics.throttleAvoidedOperations++;
+    }
+    metricsSnapshot() {
+        return { ...this.metrics };
+    }
+    policyDescription() {
+        return (`Schedule cloud policy: cache=${this.policy.cacheTtlMs / 60000}m; ` +
+            `batchWindow=${this.policy.batchWindowMs}ms; writeSpacing=${this.policy.writeSpacingMs}ms; ` +
+            `throttleCooldown=${this.policy.throttleCooldownMs / 60000}m.`);
+    }
+}
+exports.ScheduleAccountCoordinator = ScheduleAccountCoordinator;
+class ScheduleWriteBatcher {
+    get busy() {
+        return this.pending.size > 0 || this.queuedBatches > 0;
+    }
+    constructor(executeBatch, keyOf, windowMs = SCHEDULE_WRITE_BATCH_WINDOW_MS, onSuperseded = () => undefined) {
+        this.executeBatch = executeBatch;
+        this.keyOf = keyOf;
+        this.windowMs = windowMs;
+        this.onSuperseded = onSuperseded;
+        this.queuedBatches = 0;
+        this.queue = new ScheduleWriteQueue();
+        this.pending = new Map();
+    }
+    enqueue(value) {
+        const key = this.keyOf(value);
+        const superseded = this.pending.get(key);
+        if (superseded) {
+            this.onSuperseded();
+            superseded.resolve(false);
+        }
+        const result = new Promise((resolve, reject) => {
+            this.pending.set(key, { value, resolve, reject });
+        });
+        if (!this.timer) {
+            const timer = (0, timers_1.scheduleTimer)(() => {
+                this.timer = undefined;
+                this.flush();
+            }, this.windowMs);
+            this.timer = timer;
+            (0, timers_1.unrefTimer)(timer);
+        }
+        return result;
+    }
+    cancelPending() {
+        if (this.timer) {
+            (0, timers_1.clearTimer)(this.timer);
+            this.timer = undefined;
+        }
+        for (const pending of this.pending.values()) {
+            pending.resolve(false);
+        }
+        this.pending.clear();
+        this.queue.cancelPending();
+    }
+    flush() {
+        const batch = [...this.pending.values()];
+        this.pending.clear();
+        this.queuedBatches++;
+        void this.queue
+            .enqueue(() => this.executeBatch(batch.map((pending) => pending.value)))
+            .then((failures) => {
+            for (const pending of batch) {
+                if (failures === undefined) {
+                    pending.resolve(false);
+                    continue;
+                }
+                const error = failures.get(this.keyOf(pending.value));
+                if (error !== undefined) {
+                    pending.reject(error);
+                }
+                else {
+                    pending.resolve(true);
+                }
+            }
+        }, (error) => {
+            for (const pending of batch) {
+                pending.reject(error);
+            }
+        })
+            .finally(() => {
+            this.queuedBatches--;
+        });
+    }
+}
+exports.ScheduleWriteBatcher = ScheduleWriteBatcher;
+exports.HAP_ROUTINE_EXTENSION = "routines";
+function isHapRoutineAccessory(accessory) {
+    var _a;
+    const context = ((_a = accessory.context) !== null && _a !== void 0 ? _a : {});
+    return (context.kind === exports.HAP_EXTENSION_KIND &&
+        context.extension === exports.HAP_ROUTINE_EXTENSION &&
+        typeof context.duid === "string" &&
+        context.duid.length > 0);
+}
+/** Timer-driven scenes become schedule switches; the id carries its source. */
+function scheduleFromCloudScene(scene) {
+    const position = (0, hap_schedule_api_1.cloudSceneSwitchPosition)(scene);
+    if (position === null) {
+        return null;
+    }
+    return {
+        id: `${hap_schedule_api_1.CLOUD_SCENE_ID_PREFIX}${scene.id}`,
+        enabled: position,
+        timer: [scene.id, position ? "on" : "off"],
+        source: "cloudScene",
+        name: scene.name,
+    };
+}
+function parseServerTimers(value) {
+    if (!Array.isArray(value))
+        return [];
+    const result = new Map();
+    for (const timer of value) {
+        if (!Array.isArray(timer) || timer.length < 2)
+            continue;
+        const [rawId, rawStatus] = timer;
+        if ((typeof rawId !== "string" && typeof rawId !== "number") ||
+            (rawStatus !== "on" && rawStatus !== "off")) {
+            continue;
+        }
+        const id = String(rawId);
+        if (!id || result.has(id))
+            continue;
+        result.set(id, {
+            id,
+            enabled: rawStatus === "on",
+            timer: [...timer],
+        });
+    }
+    return [...result.values()];
+}
+function isHapScheduleAccessory(accessory) {
+    var _a;
+    const context = ((_a = accessory.context) !== null && _a !== void 0 ? _a : {});
+    return (context.kind === exports.HAP_EXTENSION_KIND &&
+        context.extension === exports.HAP_SCHEDULE_EXTENSION &&
+        typeof context.duid === "string" &&
+        context.duid.length > 0);
+}
+/**
+ * The platform owns one schedule coordinator per vacuum.
+ * Each vacuum has one cached HAP PlatformAccessory, and each Roborock timer
+ * is exposed as a Switch service within that shared accessory.
+ *
+ * Schedule services are intentionally named from the vacuum name so the
+ * Home app presents the schedules together under the vacuum's schedule
+ * grouping:
+ *
+ *   <vacuum> Schedule 1
+ *   <vacuum> Schedule 2
+ *   ...
+ *
+ * A schedule that belongs to a Routine (a cloud scene) is named after the
+ * Routine instead, as the app shows it, and does not use up a number.
+ *
+ * The manager UUID/context is derived from the vacuum duid. Each Switch
+ * service subtype is derived from the schedule ID. Display names are not
+ * identity and must never overwrite the shared manager accessory identity.
+ */
+class RoborockHapScheduleAccessory {
+    constructor(platform, accessory, duid, accountCoordinator = new ScheduleAccountCoordinator()) {
+        this.platform = platform;
+        this.duid = duid;
+        this.accountCoordinator = accountCoordinator;
+        this.scheduleAccessories = new Map();
+        this.vacuumName = "";
+        this.managerRemoved = false;
+        this.disposed = false;
+        this.lastScheduleRefreshAt = 0;
+        this.lastFailedRefreshAt = 0;
+        this.consecutiveRefreshFailures = 0;
+        this.nextRefreshAttemptAt = 0;
+        this.scheduleBackoffRandom = Math.random;
+        this.refreshInProgressStartedAt = 0;
+        this.refreshInProgressHoldsAccountQueue = false;
+        this.refreshGeneration = 0;
+        // Once a robot has refused the device-side timer list it is not asked
+        // again this session; see isServerTimerRefusal.
+        this.serverTimersRefused = false;
+        this.cloudScenesUnavailable = false;
+        this.routineSwitches = new Map();
+        this.exposeRoutines = false;
+        // Schedule switches are the default face of this coordinator; a user who
+        // wants only the Routines still needs the scene reading, so the schedule
+        // half can be switched off without losing the coordinator.
+        this.exposeSchedules = true;
+        this.managerAccessory = accessory;
+        this.writeBatcher = new ScheduleWriteBatcher((requests) => this.executeScheduleWriteBatch(requests), (request) => request.scheduleId, this.accountCoordinator.policy.batchWindowMs, () => this.accountCoordinator.recordAvoided("coalesced"));
+        accessory.context = {
+            ...accessory.context,
+            kind: exports.HAP_EXTENSION_KIND,
+            extension: exports.HAP_SCHEDULE_EXTENSION,
+            duid,
+        };
+    }
+    async initialize(vacuumName) {
+        this.vacuumName = vacuumName;
+        this.disposed = false;
+        const displayName = (0, hap_name_1.hapName)(vacuumName, "Roborock Vacuum", "Schedules");
+        this.managerAccessory.displayName = displayName;
+        this.managerAccessory.context = {
+            ...this.managerAccessory.context,
+            kind: exports.HAP_EXTENSION_KIND,
+            extension: exports.HAP_SCHEDULE_EXTENSION,
+            duid: this.duid,
+        };
+        const info = this.managerAccessory.getService(this.platform.Service.AccessoryInformation) ||
+            this.managerAccessory.addService(this.platform.Service.AccessoryInformation);
+        info.setCharacteristic(this.platform.Characteristic.Manufacturer, "Roborock");
+        info.setCharacteristic(this.platform.Characteristic.Model, "Schedules");
+        info.setCharacteristic(this.platform.Characteristic.SerialNumber, `${this.duid}:schedules`);
+        info.setCharacteristic(this.platform.Characteristic.Name, displayName);
+        // The Routines accessory, when attached, is named after the same robot.
+        this.applyRoutineAccessoryIdentity();
+        // Initial discovery always performs one cloud schedule request.
+        // Subsequent HomeKit reads use the cached snapshot until it expires.
+        return this.refreshDetailed();
+    }
+    /**
+     * Attach (or detach) the "<vacuum> Routines" accessory.
+     *
+     * The platform owns the PlatformAccessory — registration, cache, removal —
+     * and hands it here so the switches inside it can follow the same scene
+     * reading the schedule switches use. Passing `undefined` detaches: the
+     * switches are disposed and the next sync creates none.
+     */
+    attachRoutineAccessory(accessory, onRoutineCount) {
+        var _a;
+        if (this.routineAccessory && this.routineAccessory !== accessory) {
+            for (const child of this.routineSwitches.values()) {
+                child.dispose();
+            }
+            this.routineSwitches.clear();
+        }
+        this.routineAccessory = accessory;
+        this.exposeRoutines = accessory !== undefined;
+        this.onRoutineCount = accessory ? onRoutineCount : undefined;
+        if (!accessory) {
+            return;
+        }
+        this.applyRoutineAccessoryIdentity();
+        // Re-bind handlers to whatever switches Homebridge restored from its
+        // cache, so a press works before the first scene reading has arrived.
+        this.restoreRoutineHandlersFromAccessory();
+        if (this.lastCloudScenes) {
+            this.syncRoutines(this.lastCloudScenes);
+        }
+        else if (this.routineSwitches.size > 0) {
+            // Restored from cache and not yet read: the accessory is already
+            // registered (it came from the cache), so this only keeps the
+            // platform's book in step.
+            (_a = this.onRoutineCount) === null || _a === void 0 ? void 0 : _a.call(this, this.routineSwitches.size);
+        }
+    }
+    /**
+     * The Routines accessory's context and name. Applied when the accessory is
+     * attached and again when the robot's name becomes known in initialize(),
+     * because the platform attaches before it initialises; the accessory the
+     * platform created already carries the right name, so the fallback here
+     * only matters for a cached accessory being renamed.
+     */
+    applyRoutineAccessoryIdentity() {
+        const accessory = this.routineAccessory;
+        if (!accessory) {
+            return;
+        }
+        accessory.context = {
+            kind: exports.HAP_EXTENSION_KIND,
+            extension: exports.HAP_ROUTINE_EXTENSION,
+            duid: this.duid,
+        };
+        const displayName = this.vacuumName
+            ? (0, hap_name_1.hapName)(this.vacuumName, "Roborock Vacuum", "Routines")
+            : (0, hap_name_1.hapName)(accessory.displayName, "Roborock Routines");
+        accessory.displayName = displayName;
+        const info = accessory.getService(this.platform.Service.AccessoryInformation) ||
+            accessory.addService(this.platform.Service.AccessoryInformation);
+        info.setCharacteristic(this.platform.Characteristic.Manufacturer, "Roborock");
+        info.setCharacteristic(this.platform.Characteristic.Model, "Routines");
+        info.setCharacteristic(this.platform.Characteristic.SerialNumber, `${this.duid}:routines`);
+        info.setCharacteristic(this.platform.Characteristic.Name, displayName);
+    }
+    /**
+     * Whether this coordinator creates and reads schedule switches at all.
+     * Off means the device-side list is not read and no schedule switch is
+     * kept; the scene reading continues for the Routines.
+     */
+    setScheduleExposure(on) {
+        this.exposeSchedules = on;
+    }
+    /** How many routine switches the last reading (or the cache) produced. */
+    get routineCount() {
+        return this.routineSwitches.size;
+    }
+    /** How many schedule switches this coordinator currently owns. */
+    get scheduleCount() {
+        return this.scheduleAccessories.size;
+    }
+    /** The robot as a log line names it: its name, never a bare duid. */
+    get robotName() {
+        const api = this.platform.roborockAPI;
+        return (this.vacuumName ||
+            (typeof (api === null || api === void 0 ? void 0 : api.describeDevice) === "function"
+                ? api.describeDevice(this.duid)
+                : "") ||
+            "this robot");
+    }
+    /**
+     * The PlatformAccessory the schedule switches live in.
+     *
+     * The platform owns registration, so it has to be able to ask which object
+     * it is registering. Issue #22: turning schedules off unregistered nothing
+     * that Homebridge had restored from its own cache, and turning them back on
+     * had no way to put the accessory back, because the reuse path never had
+     * the object in hand.
+     */
+    get scheduleAccessory() {
+        return this.managerAccessory;
+    }
+    /**
+     * Rebuild schedule child objects and attach their normal HAP handlers from
+     * Switch services that Homebridge restored from its cached accessory state.
+     *
+     * This is local recovery state only. It is intentionally not written into
+     * cachedSchedules or lastScheduleRefreshAt because the cloud snapshot is
+     * still unknown. A later successful cloud refresh remains authoritative.
+     */
+    restoreScheduleHandlersFromAccessory() {
+        const restored = this.schedulesFromAccessory();
+        const switchServiceCount = this.managerAccessory.services.filter((service) => service.UUID === this.platform.Service.Switch.UUID).length;
+        const scheduleSwitchServiceCount = this.managerAccessory.services.filter((service) => this.scheduleIdOf(service) !== null).length;
+        if (restored.length === 0) {
+            this.platform.log.debug(`Schedule restoration for ${this.vacuumName}: ` +
+                `managerUUID=${this.managerAccessory.UUID}; ` +
+                `services=${this.managerAccessory.services.length}; ` +
+                `switchServices=${switchServiceCount}; ` +
+                `scheduleSwitchServices=${scheduleSwitchServiceCount}; ` +
+                `restored=0; handlersReattached=false`);
+            return false;
+        }
+        this.sync(restored, []);
+        this.platform.log.debug(`Schedule restoration for ${this.vacuumName}: ` +
+            `managerUUID=${this.managerAccessory.UUID}; ` +
+            `services=${this.managerAccessory.services.length}; ` +
+            `switchServices=${switchServiceCount}; ` +
+            `scheduleSwitchServices=${scheduleSwitchServiceCount}; ` +
+            `restored=${restored.length}; ` +
+            `scheduleIds=${restored.map((schedule) => schedule.id).join(",")}; ` +
+            `handlersReattached=true`);
+        return true;
+    }
+    /**
+     * The schedules the accessory's Switch services stand for, as Homebridge
+     * restored them: local knowledge only, never cached as a reading.
+     */
+    schedulesFromAccessory() {
+        var _a;
+        const restored = [];
+        const seen = new Set();
+        for (const service of this.managerAccessory.services) {
+            const scheduleId = this.scheduleIdOf(service);
+            if (!scheduleId || seen.has(scheduleId)) {
+                continue;
+            }
+            seen.add(scheduleId);
+            const saved = (_a = this.managerAccessory.context.scheduleDisplayStates) === null || _a === void 0 ? void 0 : _a[scheduleId];
+            const enabled = typeof (saved === null || saved === void 0 ? void 0 : saved.confirmed) === "boolean"
+                ? saved.confirmed
+                : Boolean(service.getCharacteristic(this.platform.Characteristic.On).value);
+            if ((0, hap_schedule_api_1.isCloudSceneScheduleId)(scheduleId)) {
+                // A cloud scene's switch remembers its Routine's name in the service
+                // name; the scene itself is re-read before any write, so nothing
+                // else needs restoring here.
+                const rawName = service.getCharacteristic(this.platform.Characteristic.Name).value;
+                restored.push({
+                    id: scheduleId,
+                    enabled,
+                    timer: [
+                        (0, hap_schedule_api_1.cloudSceneIdFromScheduleId)(scheduleId),
+                        enabled ? "on" : "off",
+                    ],
+                    source: "cloudScene",
+                    name: (0, hap_name_1.hapName)(rawName, `Routine ${(0, hap_schedule_api_1.cloudSceneIdFromScheduleId)(scheduleId)}`),
+                });
+                continue;
+            }
+            restored.push({
+                id: scheduleId,
+                enabled,
+                timer: [scheduleId, enabled ? "on" : "off"],
+            });
+        }
+        return restored.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+    }
+    /** The restored switches of one source, for a source that failed. */
+    restoredSchedulesOfSource(source) {
+        return this.schedulesFromAccessory().filter((schedule) => { var _a; return ((_a = schedule.source) !== null && _a !== void 0 ? _a : "serverTimer") === source; });
+    }
+    /**
+     * Read again once the back-off is over, until a reading is complete. One
+     * timer at a time, unref'd, and gone with the coordinator's runtime.
+     */
+    scheduleRetryRead() {
+        if (this.disposed || this.retryReadTimer) {
+            return;
+        }
+        const now = Date.now();
+        const delay = Math.max(this.nextRefreshAttemptAt - now, this.accountCoordinator.cooldownRemainingMs(now), 0);
+        const timer = (0, timers_1.scheduleTimer)(() => {
+            this.retryReadTimer = undefined;
+            if (!this.disposed) {
+                void this.refreshDetailed();
+            }
+        }, delay);
+        (0, timers_1.unrefTimer)(timer);
+        this.retryReadTimer = timer;
+    }
+    /**
+     * Called after every reading that was applied, with the number of schedule
+     * switches it left. The platform publishes the schedule accessory from
+     * this — including after a retry that succeeds long after startup.
+     */
+    onScheduleReading(listener) {
+        this.onScheduleCount = listener;
+    }
+    async refreshIfNeeded() {
+        var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+        const now = Date.now();
+        this.platform.log.debug(`Schedule refreshIfNeeded: entered; ` +
+            `cached=${(_b = (_a = this.cachedSchedules) === null || _a === void 0 ? void 0 : _a.length) !== null && _b !== void 0 ? _b : "undefined"}; ` +
+            `lastRefreshAgeMs=${this.lastScheduleRefreshAt > 0 ? now - this.lastScheduleRefreshAt : "never"}; ` +
+            `lastFailureAgeMs=${this.lastFailedRefreshAt > 0 ? now - this.lastFailedRefreshAt : "never"}; ` +
+            `consecutiveFailures=${this.consecutiveRefreshFailures || 0}; ` +
+            `nextAttemptInMs=${Math.max(0, (this.nextRefreshAttemptAt || 0) - now)}`);
+        if (this.cachedSchedules !== undefined &&
+            now - this.lastScheduleRefreshAt <
+                this.accountCoordinator.policy.cacheTtlMs) {
+            this.platform.log.debug(`Schedule refreshIfNeeded: CACHE HIT; ` +
+                `ageMs=${now - this.lastScheduleRefreshAt}; ` +
+                `returning=${this.cachedSchedules.length > 0}`);
+            this.accountCoordinator.recordAvoided("cache");
+            return this.cachedSchedules.length > 0;
+        }
+        if (this.accountCoordinator.currentThrottleError(now) !== undefined) {
+            this.platform.log.debug(`Schedule refreshIfNeeded: THROTTLE COOLDOWN; ` +
+                `retryInMs=${this.accountCoordinator.cooldownRemainingMs(now)}; ` +
+                `returning=${((_d = (_c = this.cachedSchedules) === null || _c === void 0 ? void 0 : _c.length) !== null && _d !== void 0 ? _d : 0) > 0}`);
+            this.accountCoordinator.recordAvoided("throttle");
+            return ((_f = (_e = this.cachedSchedules) === null || _e === void 0 ? void 0 : _e.length) !== null && _f !== void 0 ? _f : 0) > 0;
+        }
+        if ((this.nextRefreshAttemptAt || 0) > now) {
+            this.platform.log.debug(`Schedule refreshIfNeeded: FAILURE BACKOFF; ` +
+                `ageMs=${now - this.lastFailedRefreshAt}; ` +
+                `retryInMs=${this.nextRefreshAttemptAt - now}; ` +
+                `returning=${((_h = (_g = this.cachedSchedules) === null || _g === void 0 ? void 0 : _g.length) !== null && _h !== void 0 ? _h : 0) > 0}`);
+            this.accountCoordinator.recordAvoided("backoff");
+            return ((_k = (_j = this.cachedSchedules) === null || _j === void 0 ? void 0 : _j.length) !== null && _k !== void 0 ? _k : 0) > 0;
+        }
+        this.platform.log.debug(`Schedule refreshIfNeeded: CALLING refresh()`);
+        return this.refresh();
+    }
+    async refresh() {
+        const result = await this.refreshDetailed();
+        return result.hasSchedules;
+    }
+    async refreshAndGetSchedule(scheduleId, minimumRefreshStartedAt = 0) {
+        var _a;
+        await this.refreshDetailed(minimumRefreshStartedAt);
+        const schedule = (_a = this.cachedSchedules) === null || _a === void 0 ? void 0 : _a.find((candidate) => candidate.id === scheduleId);
+        return schedule
+            ? {
+                ...schedule,
+                timer: [...schedule.timer],
+            }
+            : undefined;
+    }
+    async refreshDetailed(minimumRefreshStartedAt = 0, accountCoordinatorHeld = false, forceFresh = false) {
+        if (this.disposed) {
+            return {
+                success: false,
+                hasSchedules: false,
+            };
+        }
+        if (!forceFresh &&
+            this.refreshInProgress &&
+            this.refreshInProgressStartedAt >= minimumRefreshStartedAt &&
+            // A caller that already holds the account queue must never adopt a
+            // refresh that does not hold it. Such a refresh is waiting its turn
+            // *behind* this caller, so waiting for it is a circular wait that no
+            // request timeout can break: the queued read has not been issued, so
+            // there is nothing to expire. It would strand the HomeKit write and
+            // wedge the account queue for every vacuum until Homebridge restarts.
+            (!accountCoordinatorHeld || this.refreshInProgressHoldsAccountQueue)) {
+            return this.refreshInProgress;
+        }
+        const startedAt = Date.now();
+        const generation = ++this.refreshGeneration;
+        const refresh = this.performRefresh(generation, accountCoordinatorHeld, forceFresh);
+        this.refreshInProgress = refresh;
+        this.refreshInProgressStartedAt = startedAt;
+        this.refreshInProgressHoldsAccountQueue = accountCoordinatorHeld;
+        try {
+            return await refresh;
+        }
+        finally {
+            // Only the current refresh is allowed to clear these fields. An older
+            // refresh can finish after a newer verification refresh has started.
+            if (this.refreshInProgress === refresh) {
+                this.refreshInProgress = undefined;
+                this.refreshInProgressStartedAt = 0;
+                this.refreshInProgressHoldsAccountQueue = false;
+            }
+        }
+    }
+    /**
+     * One reading of every source this robot has, applied together.
+     *
+     * Two sources feed the switch surface: the device-side timer list
+     * (`get_server_timer`) and the account's timer-driven Routines
+     * (`user/scene/device/{duid}`). A source that fails keeps its previous
+     * switches while the other source's fresh reading is applied; only when
+     * nothing could be read does the refresh count as failed and back off. A
+     * robot that REFUSES the device-side list (`-10007 "Not FCC robot"`) is
+     * not failing — it is telling us where not to look — so that answer is
+     * remembered for the session and the source is dropped without a warning
+     * on every refresh.
+     */
+    async performRefresh(generation, accountCoordinatorHeld, includeVerifiedSources = false) {
+        var _a, _b, _c;
+        const preserved = () => ({
+            success: false,
+            hasSchedules: this.scheduleAccessories.size > 0,
+        });
+        try {
+            const api = this.platform.roborockAPI;
+            // A refresh can wait a long time in the account queue, and a newer
+            // refresh may replace it while it waits. A superseded refresh is barred
+            // from storing its result by the generation guards below, so issuing its
+            // cloud requests once it reaches the front of the queue is pure waste.
+            let superseded = false;
+            const readAll = async () => {
+                if (generation !== this.refreshGeneration || this.disposed) {
+                    superseded = true;
+                    return undefined;
+                }
+                const timers = await this.readServerTimers(api);
+                const scenes = await this.readCloudScenes(api);
+                return { timers, scenes };
+            };
+            const readings = accountCoordinatorHeld
+                ? await readAll()
+                : await this.accountCoordinator.enqueue(readAll, (error) => {
+                    throw error;
+                });
+            if (superseded || !readings) {
+                return preserved();
+            }
+            // A newer refresh may have started while these requests were in flight.
+            // The older request may finish, but it must never overwrite the newer
+            // snapshot or its refresh timestamps.
+            if (generation !== this.refreshGeneration || this.disposed) {
+                return preserved();
+            }
+            const timerSchedules = this.serverTimerSchedulesFrom(readings.timers);
+            const sceneSchedules = this.cloudSceneSchedulesFrom(readings.scenes);
+            const failures = [
+                { outcome: timerSchedules, reading: readings.timers },
+                { outcome: sceneSchedules, reading: readings.scenes },
+            ].filter(({ outcome }) => !outcome.ok);
+            const somethingRead = [
+                { outcome: timerSchedules, reading: readings.timers },
+                { outcome: sceneSchedules, reading: readings.scenes },
+            ].some(({ outcome, reading }) => outcome.ok && reading.state === "read");
+            if (failures.length > 0) {
+                // Back off, and keep reading after the back-off by itself: a source
+                // that failed at startup used to be read again only when Apple Home
+                // asked a switch for its state, which never happens for a switch
+                // that was never published.
+                const throttled = failures.find(({ reading }) => reading.state === "failed" &&
+                    isDefiniteScheduleThrottle(reading.error));
+                if (throttled && throttled.reading.state === "failed") {
+                    this.recordScheduleThrottle(throttled.reading.error);
+                }
+                else {
+                    this.recordRefreshFailure();
+                }
+                this.scheduleRetryRead();
+            }
+            if (failures.length > 0 && !somethingRead) {
+                // Nothing to apply. Keep every switch, and give the ones Homebridge
+                // restored from its cache their handlers so a press works meanwhile.
+                if (this.scheduleAccessories.size === 0) {
+                    this.restoreScheduleHandlersFromAccessory();
+                }
+                const reasons = failures
+                    .map(({ outcome }) => outcome.reason)
+                    .filter(Boolean)
+                    .join("; ");
+                this.platform.log.warn(`Unable to refresh Roborock schedules for ${this.robotName}: ${reasons}. Preserving existing schedules.`);
+                return preserved();
+            }
+            // Each source on its own. One that failed keeps exactly the switches of
+            // its own kind: its last good reading, or, before there was one, the
+            // switches Homebridge restored for it. The other source's reading is
+            // applied, and the Routines follow the scene reading alone. A timed-out
+            // device-side read used to veto the whole reading at startup, Routines
+            // included.
+            const merged = [
+                ...(timerSchedules.ok
+                    ? timerSchedules.schedules
+                    : (_a = this.lastServerTimerSchedules) !== null && _a !== void 0 ? _a : this.restoredSchedulesOfSource("serverTimer")),
+                ...(sceneSchedules.ok
+                    ? sceneSchedules.schedules
+                    : (_b = this.lastCloudSceneSchedules) !== null && _b !== void 0 ? _b : this.restoredSchedulesOfSource("cloudScene")),
+            ];
+            if (timerSchedules.ok) {
+                this.lastServerTimerSchedules = timerSchedules.schedules;
+            }
+            else if (timerSchedules.reason) {
+                this.platform.log.warn(`Unable to refresh the device-side schedules for ${this.robotName}: ${timerSchedules.reason}. Keeping the previous ones and trying again shortly.`);
+            }
+            if (sceneSchedules.ok) {
+                this.lastCloudSceneSchedules = sceneSchedules.schedules;
+                if (readings.scenes.state === "read") {
+                    this.lastCloudScenes = readings.scenes.value;
+                }
+            }
+            else if (sceneSchedules.reason) {
+                this.platform.log.warn(`Unable to refresh the Routines for ${this.robotName}: ${sceneSchedules.reason}. Keeping the previous ones and trying again shortly.`);
+            }
+            this.cachedSchedules = merged.map((schedule) => ({
+                ...schedule,
+                timer: [...schedule.timer],
+            }));
+            if (failures.length === 0) {
+                // Only a complete reading counts as fresh, so an incomplete one is
+                // read again after its back-off rather than served for five minutes.
+                this.lastScheduleRefreshAt = Date.now();
+                this.clearRefreshFailure();
+            }
+            // Debug: it is written on every reading, up to twelve an hour per
+            // robot while a Home app is open.
+            this.platform.log.debug(`Schedule parser: parsed ${this.robotName}; result count=${merged.length}` +
+                (readings.scenes.state === "read"
+                    ? ` (device timers=${timerSchedules.ok ? timerSchedules.schedules.length : "kept"}, ` +
+                        `cloud routines with a timer=${sceneSchedules.ok ? sceneSchedules.schedules.length : "kept"}` +
+                        `, routines in all=${readings.scenes.value.length})`
+                    : "") +
+                ".");
+            this.sync(merged, [
+                ...(readings.timers.state === "read" && timerSchedules.ok
+                    ? ["serverTimer"]
+                    : []),
+                ...(readings.scenes.state === "read" && sceneSchedules.ok
+                    ? ["cloudScene"]
+                    : []),
+            ]);
+            if (readings.scenes.state === "read") {
+                this.syncRoutines(readings.scenes.value);
+            }
+            (_c = this.onScheduleCount) === null || _c === void 0 ? void 0 : _c.call(this, this.scheduleCount);
+            // A successful empty snapshot is authoritative information. It is
+            // different from a failed/untrusted cloud response.
+            return {
+                success: true,
+                ...(includeVerifiedSources
+                    ? {
+                        verifiedSources: [
+                            ...(readings.timers.state === "read" && timerSchedules.ok
+                                ? ["serverTimer"]
+                                : []),
+                            ...(readings.scenes.state === "read" && sceneSchedules.ok
+                                ? ["cloudScene"]
+                                : []),
+                        ],
+                    }
+                    : {}),
+                hasSchedules: this.exposeSchedules !== false && merged.length > 0,
+            };
+        }
+        catch (error) {
+            if (generation !== this.refreshGeneration || this.disposed) {
+                return preserved();
+            }
+            if (isDefiniteScheduleThrottle(error)) {
+                this.recordScheduleThrottle(error);
+            }
+            else {
+                this.recordRefreshFailure();
+            }
+            this.scheduleRetryRead();
+            const message = error instanceof Error ? error.message : String(error);
+            this.platform.log.warn(`Unable to refresh Roborock schedules for ${this.robotName}: ${message}. Preserving existing schedules.`);
+            return preserved();
+        }
+    }
+    /** Read the device-side timer list, unless this robot has refused it before. */
+    async readServerTimers(api) {
+        if (this.serverTimersRefused || this.exposeSchedules === false) {
+            return { state: "skipped" };
+        }
+        try {
+            this.accountCoordinator.recordRequest("read");
+            const value = await (0, hap_schedule_api_1.getServerTimers)(api, this.duid, {
+                requestTimeoutMs: 10000,
+            });
+            return { state: "read", value };
+        }
+        catch (error) {
+            if (isServerTimerRefusal(error)) {
+                this.serverTimersRefused = true;
+                this.platform.log.info(`${this.robotName} does not offer a device-side schedule list (${error instanceof Error ? error.message : String(error)}). Its schedules are read from the account's Routines instead, and the device-side list is not asked again this session.`);
+                return { state: "skipped" };
+            }
+            return { state: "failed", error };
+        }
+    }
+    /**
+     * Read the account's Routines for this robot.
+     *
+     * A 4xx from the cloud is the account saying this robot has no Routines it
+     * will show us — a robot shared from another account, for instance — and it
+     * will say so on every refresh, so like a device-side refusal it is
+     * remembered for the session and the source is skipped from then on.
+     * Anything else (network, 5xx, throttle) is a failure to retry.
+     */
+    async readCloudScenes(api) {
+        var _a, _b;
+        if (this.cloudScenesUnavailable ||
+            typeof (api === null || api === void 0 ? void 0 : api.getCloudScenes) !== "function") {
+            // No scene API at all is not a failure of the cloud; it is a client
+            // that cannot ask, and asking again would not change that.
+            return { state: "skipped" };
+        }
+        try {
+            this.accountCoordinator.recordRequest("read");
+            const value = await (0, hap_schedule_api_1.getCloudScenes)(api, this.duid);
+            return { state: "read", value };
+        }
+        catch (error) {
+            const status = Number((_b = (_a = error === null || error === void 0 ? void 0 : error.response) === null || _a === void 0 ? void 0 : _a.status) !== null && _b !== void 0 ? _b : error === null || error === void 0 ? void 0 : error.status);
+            if (status >= 400 && status < 500 && status !== 429) {
+                this.cloudScenesUnavailable = true;
+                this.platform.log.info(`The Roborock account does not show Routines for ${this.robotName} (HTTP ${status}); they are not asked for again this session.`);
+                return { state: "skipped" };
+            }
+            return { state: "failed", error };
+        }
+    }
+    /**
+     * Turn a device-side reading into schedules, with the two trust checks the
+     * source has always had: a non-array answer and a non-empty answer that
+     * parses to nothing are both untrusted, and neither may delete switches.
+     */
+    serverTimerSchedulesFrom(reading) {
+        if (reading.state === "skipped") {
+            return { ok: true, schedules: [], reason: undefined };
+        }
+        if (reading.state === "failed") {
+            return {
+                ok: false,
+                schedules: [],
+                reason: reading.error instanceof Error
+                    ? reading.error.message
+                    : String(reading.error),
+            };
+        }
+        const raw = reading.value;
+        this.platform.log.debug(`Schedule discovery for ${this.duid}: ` +
+            `type=${Array.isArray(raw) ? "array" : typeof raw}, ` +
+            `value=${JSON.stringify(raw)}`);
+        if (!Array.isArray(raw)) {
+            return {
+                ok: false,
+                schedules: [],
+                reason: `get_server_timer returned ${typeof raw}`,
+            };
+        }
+        const schedules = parseServerTimers(raw);
+        if (raw.length > 0 && schedules.length === 0) {
+            return {
+                ok: false,
+                schedules: [],
+                reason: "get_server_timer returned a non-empty response that parsed to zero schedules",
+            };
+        }
+        // Keep display numbering stable even if Roborock returns schedules
+        // in a different order between refreshes.
+        schedules.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+        return { ok: true, schedules, reason: undefined };
+    }
+    /** Timer-driven Routines become schedule switches, in the app's own order. */
+    cloudSceneSchedulesFrom(reading) {
+        if (reading.state === "skipped") {
+            return { ok: true, schedules: [], reason: undefined };
+        }
+        if (reading.state === "failed") {
+            return {
+                ok: false,
+                schedules: [],
+                reason: reading.error instanceof Error
+                    ? reading.error.message
+                    : String(reading.error),
+            };
+        }
+        const schedules = [];
+        for (const scene of reading.value) {
+            const schedule = scheduleFromCloudScene(scene);
+            if (schedule) {
+                schedules.push(schedule);
+            }
+        }
+        return { ok: true, schedules, reason: undefined };
+    }
+    hasPendingScheduleWrites() {
+        return this.writeBatcher.busy;
+    }
+    enqueueScheduleWrite(scheduleId, enabled, progress = {}) {
+        return this.writeBatcher.enqueue({ scheduleId, enabled, ...progress });
+    }
+    async executeScheduleWriteBatch(requests) {
+        const result = await this.accountCoordinator.enqueue(() => this.executeAccountCoordinatedScheduleWriteBatch(requests), (error) => new Map(requests.map((request) => [request.scheduleId, error])));
+        this.logScheduleMetrics();
+        return result;
+    }
+    async executeAccountCoordinatedScheduleWriteBatch(requests) {
+        var _a, _b, _c, _d, _e, _f, _g;
+        const failures = new Map();
+        const candidates = [];
+        const ambiguous = new Set();
+        const api = this.platform.roborockAPI;
+        const fallback = [];
+        const finalCandidates = [];
+        let primaryConfirmed = 0;
+        const stopped = () => new Error("Schedule reconciliation stopped during shutdown");
+        const failAll = (items, error) => {
+            for (const request of items)
+                failures.set(request.scheduleId, error);
+            return failures;
+        };
+        try {
+            for (let index = 0; index < requests.length; index++) {
+                const request = requests[index];
+                if (index > 0)
+                    await this.waitForScheduleWriteSpacing();
+                if (this.disposed)
+                    return failAll(requests, stopped());
+                try {
+                    this.platform.log.info(`Schedule command: ${request.enabled ? "enabling" : "disabling"} schedule ${request.scheduleId} of ${this.robotName}.`);
+                    this.accountCoordinator.recordRequest("primaryWrite");
+                    if ((0, hap_schedule_api_1.isCloudSceneScheduleId)(request.scheduleId)) {
+                        await this.writeCloudSceneSchedule(api, request);
+                    }
+                    else {
+                        await (0, hap_schedule_api_1.updateServerTimer)(api, this.duid, request.scheduleId, request.enabled, { requestTimeoutMs: 10000 });
+                    }
+                    candidates.push(request);
+                    (_a = request.onSent) === null || _a === void 0 ? void 0 : _a.call(request);
+                }
+                catch (error) {
+                    failures.set(request.scheduleId, error);
+                    if (!(0, schedule_write_reconciliation_1.isAmbiguousScheduleWrite)(error))
+                        (_b = request.onRefused) === null || _b === void 0 ? void 0 : _b.call(request, error);
+                    if (isDefiniteScheduleThrottle(error)) {
+                        this.recordScheduleThrottle(error);
+                        return failAll(requests, error);
+                    }
+                    if ((0, schedule_write_reconciliation_1.isAmbiguousScheduleWrite)(error)) {
+                        ambiguous.add(request);
+                        candidates.push(request);
+                    }
+                }
+            }
+            if (!candidates.length)
+                return failures;
+            // Join an already-running bounded recovery, if any. Schedule writes must
+            // never enable or trigger account-wide recreation themselves.
+            await ((_d = (_c = api.rr_mqtt_connector) === null || _c === void 0 ? void 0 : _c.recovery) === null || _d === void 0 ? void 0 : _d.inFlight);
+            if (this.disposed)
+                return failAll(candidates, stopped());
+            await this.waitForScheduleVerification();
+            const verification = await this.refreshDetailed(Date.now(), true, true);
+            const throttle = this.accountCoordinator.currentThrottleError();
+            if (this.disposed)
+                return failAll(candidates, stopped());
+            const verified = (result, request) => {
+                var _a;
+                return result.success &&
+                    ((_a = result.verifiedSources) === null || _a === void 0 ? void 0 : _a.includes((0, hap_schedule_api_1.isCloudSceneScheduleId)(request.scheduleId)
+                        ? "cloudScene"
+                        : "serverTimer")) === true;
+            };
+            for (const request of candidates) {
+                // A throttle in the other source cannot undo this source's fresh
+                // confirmation. It still blocks every unconfirmed assignment and retry.
+                if (verified(verification, request) &&
+                    this.cachedScheduleMatches(request)) {
+                    primaryConfirmed++;
+                    failures.delete(request.scheduleId);
+                }
+                else if (throttle !== undefined) {
+                    failures.set(request.scheduleId, verified(verification, request)
+                        ? throttle
+                        : Object.assign(new Error("Schedule verification was throttled; outcome unknown"), {
+                            code: "SCHEDULE_OUTCOME_UNKNOWN",
+                            cause: throttle,
+                        }));
+                }
+                else if (!verified(verification, request)) {
+                    failures.set(request.scheduleId, Object.assign(new Error(`Fresh schedule verification failed for ${request.scheduleId}; outcome unknown; no retry was sent`), { code: "SCHEDULE_OUTCOME_UNKNOWN" }));
+                }
+                else if (!((_e = this.cachedSchedules) === null || _e === void 0 ? void 0 : _e.some((schedule) => schedule.id === request.scheduleId))) {
+                    failures.set(request.scheduleId, new Error(`Schedule ${request.scheduleId} no longer exists; no retry was sent`));
+                }
+                else if (!(0, hap_schedule_api_1.isCloudSceneScheduleId)(request.scheduleId) ||
+                    ambiguous.has(request)) {
+                    fallback.push(request);
+                }
+                else {
+                    failures.set(request.scheduleId, new Error(`Roborock did not confirm routine ${(0, hap_schedule_api_1.cloudSceneIdFromScheduleId)(request.scheduleId)} as ${request.enabled ? "enabled" : "disabled"} when it was read back`));
+                }
+            }
+            // Only absolute on/off assignments are retried, once, after a successful
+            // read demonstrated that the existing schedule still has the other state.
+            for (let index = 0; index < fallback.length; index++) {
+                const request = fallback[index];
+                if (index > 0)
+                    await this.waitForScheduleWriteSpacing();
+                if (this.disposed)
+                    return failAll(fallback, stopped());
+                try {
+                    this.platform.log.warn(`Schedule command: fresh read did not confirm schedule ${request.scheduleId} of ${this.robotName}; sending one fallback assignment.`);
+                    this.accountCoordinator.recordRequest("fallbackWrite");
+                    if ((0, hap_schedule_api_1.isCloudSceneScheduleId)(request.scheduleId)) {
+                        await this.writeCloudSceneSchedule(api, request);
+                    }
+                    else {
+                        await (0, hap_schedule_api_1.updateTimer)(api, this.duid, request.scheduleId, request.enabled, { requestTimeoutMs: 10000 });
+                    }
+                    finalCandidates.push(request);
+                }
+                catch (error) {
+                    failures.set(request.scheduleId, error);
+                    if (isDefiniteScheduleThrottle(error)) {
+                        this.recordScheduleThrottle(error);
+                        return failAll(fallback, error);
+                    }
+                    if ((0, schedule_write_reconciliation_1.isAmbiguousScheduleWrite)(error))
+                        finalCandidates.push(request);
+                }
+            }
+            if (finalCandidates.length) {
+                await ((_g = (_f = api.rr_mqtt_connector) === null || _f === void 0 ? void 0 : _f.recovery) === null || _g === void 0 ? void 0 : _g.inFlight);
+                if (this.disposed)
+                    return failAll(finalCandidates, stopped());
+                await this.waitForScheduleVerification();
+                const finalVerification = await this.refreshDetailed(Date.now(), true, true);
+                for (const request of finalCandidates) {
+                    if (!this.disposed &&
+                        verified(finalVerification, request) &&
+                        this.cachedScheduleMatches(request)) {
+                        failures.delete(request.scheduleId);
+                    }
+                    else {
+                        failures.set(request.scheduleId, Object.assign(new Error(`Roborock did not freshly confirm schedule ${request.scheduleId}; no further retry was sent`), {
+                            code: verified(finalVerification, request)
+                                ? "SCHEDULE_NOT_CONFIRMED"
+                                : "SCHEDULE_OUTCOME_UNKNOWN",
+                        }));
+                    }
+                }
+            }
+            return failures;
+        }
+        finally {
+            // Every toggle ends here; a failure has its own warning above.
+            this.platform.log.debug(`Schedule reconciliation for ${this.robotName}: requested=${requests.length}; ambiguous=${ambiguous.size}; primaryConfirmed=${primaryConfirmed}; retried=${fallback.length}; fallbackSent=${finalCandidates.length}; failed=${failures.size}.`);
+        }
+    }
+    /**
+     * Switch one cloud scene's schedule, against a FRESH reading of the scene.
+     *
+     * The write replaces the scene's whole `param`, so it must be built from
+     * what the cloud holds now and not from a snapshot up to five minutes old:
+     * a room list edited in the app in between would otherwise be reverted by
+     * a HomeKit switch that meant to change one flag. One extra read per write
+     * is the price of never doing that.
+     */
+    async writeCloudSceneSchedule(api, request) {
+        const sceneId = (0, hap_schedule_api_1.cloudSceneIdFromScheduleId)(request.scheduleId);
+        this.accountCoordinator.recordRequest("read");
+        const scenes = await (0, hap_schedule_api_1.getCloudScenes)(api, this.duid);
+        this.lastCloudScenes = scenes;
+        const scene = scenes.find((candidate) => candidate.id === sceneId);
+        if (!scene) {
+            throw new Error(`routine ${sceneId} no longer exists on the Roborock account; its switch will disappear on the next refresh`);
+        }
+        await (0, hap_schedule_api_1.setCloudSceneScheduleEnabled)(api, scene, request.enabled);
+    }
+    getRoutineRobotLabel() {
+        return this.vacuumName || this.duid;
+    }
+    /** Run one Routine; expected cloud failures are logged after acceptance. */
+    async runRoutine(sceneId, displayName) {
+        const api = this.platform.roborockAPI;
+        try {
+            this.platform.log.info(`Running Roborock routine "${displayName}".`);
+            await this.accountCoordinator.enqueue(async () => {
+                this.accountCoordinator.recordRequest("primaryWrite");
+                await (0, hap_schedule_api_1.executeCloudScene)(api, sceneId);
+            }, (error) => {
+                throw error;
+            });
+        }
+        catch (error) {
+            this.platform.log.warn(`Accepted Home routine "${displayName}" for ${this.vacuumName || this.duid} failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+    /**
+     * Bring the routine switches in line with the scenes just read: one
+     * momentary switch per Routine, named as in the app, stale ones removed.
+     */
+    syncRoutines(scenes) {
+        var _a;
+        const accessory = this.routineAccessory;
+        if (!accessory || !this.exposeRoutines) {
+            return;
+        }
+        const ids = new Set(scenes.map((scene) => scene.id));
+        let changed = false;
+        for (const scene of scenes) {
+            const name = (0, hap_name_1.hapName)(scene.name, `Routine ${scene.id}`);
+            const existing = this.routineSwitches.get(scene.id);
+            if (existing) {
+                existing.updateIdentity(name);
+                continue;
+            }
+            const child = new RoborockHapRoutineSwitch(this.platform, this, accessory, scene.id);
+            child.initialize(name);
+            this.routineSwitches.set(scene.id, child);
+            changed = true;
+            this.platform.log.debug(`Routine sync: added HAP switch '${scene.name}' for scene ${scene.id}.`);
+        }
+        for (const [id, child] of this.routineSwitches) {
+            if (ids.has(id))
+                continue;
+            this.platform.log.debug(`Routine sync: removing stale HAP switch for ${id}.`);
+            child.dispose();
+            const service = accessory.getServiceById(this.platform.Service.Switch, `${ROUTINE_SERVICE_PREFIX}${encodeURIComponent(id)}`);
+            if (service) {
+                accessory.removeService(service);
+            }
+            this.routineSwitches.delete(id);
+            changed = true;
+        }
+        if (changed) {
+            this.platform.api.updatePlatformAccessories([accessory]);
+        }
+        (_a = this.onRoutineCount) === null || _a === void 0 ? void 0 : _a.call(this, this.routineSwitches.size);
+    }
+    /**
+     * Re-bind handlers to routine switches Homebridge restored from its cache,
+     * so a press works before the first scene reading has arrived. Like the
+     * schedule restoration, this is local recovery: the next reading is
+     * authoritative and may remove a routine that no longer exists.
+     */
+    restoreRoutineHandlersFromAccessory() {
+        const accessory = this.routineAccessory;
+        if (!accessory) {
+            return;
+        }
+        for (const service of accessory.services) {
+            if (service.UUID !== this.platform.Service.Switch.UUID)
+                continue;
+            const subtype = service.subtype;
+            if (typeof subtype !== "string" ||
+                !subtype.startsWith(ROUTINE_SERVICE_PREFIX)) {
+                continue;
+            }
+            let sceneId;
+            try {
+                sceneId = decodeURIComponent(subtype.slice(ROUTINE_SERVICE_PREFIX.length));
+            }
+            catch (_a) {
+                continue;
+            }
+            if (!sceneId || this.routineSwitches.has(sceneId))
+                continue;
+            const rawName = service.getCharacteristic(this.platform.Characteristic.Name).value;
+            const name = (0, hap_name_1.hapName)(rawName, `Routine ${sceneId}`);
+            const child = new RoborockHapRoutineSwitch(this.platform, this, accessory, sceneId);
+            child.initialize(name);
+            this.routineSwitches.set(sceneId, child);
+        }
+    }
+    cachedScheduleMatches(request) {
+        var _a;
+        return (((_a = this.cachedSchedules) === null || _a === void 0 ? void 0 : _a.some((schedule) => schedule.id === request.scheduleId &&
+            schedule.enabled === request.enabled)) === true);
+    }
+    async waitForScheduleVerification() {
+        await new Promise((resolve) => {
+            const timer = (0, timers_1.scheduleTimer)(resolve, VERIFY_DELAY_MS);
+            (0, timers_1.unrefTimer)(timer);
+        });
+    }
+    async waitForScheduleWriteSpacing() {
+        await new Promise((resolve) => {
+            const timer = (0, timers_1.scheduleTimer)(resolve, this.accountCoordinator.policy.writeSpacingMs);
+            (0, timers_1.unrefTimer)(timer);
+        });
+    }
+    recordRefreshFailure() {
+        const now = Date.now();
+        this.lastFailedRefreshAt = now;
+        this.consecutiveRefreshFailures =
+            (this.consecutiveRefreshFailures || 0) + 1;
+        const delay = scheduleFailureBackoffMs(this.consecutiveRefreshFailures, (this.scheduleBackoffRandom || Math.random)());
+        this.nextRefreshAttemptAt = now + delay;
+    }
+    clearRefreshFailure() {
+        this.lastFailedRefreshAt = 0;
+        this.consecutiveRefreshFailures = 0;
+        this.nextRefreshAttemptAt = 0;
+    }
+    recordScheduleThrottle(error) {
+        this.accountCoordinator.recordThrottle(error);
+        this.platform.log.warn(`Roborock schedule requests for this account appear rate-limited; pausing this vacuum's schedule traffic for ${this.accountCoordinator.policy.throttleCooldownMs / 60000} minutes.`);
+    }
+    logScheduleMetrics() {
+        const metrics = this.accountCoordinator.metricsSnapshot();
+        this.platform.log.debug(`Schedule cloud totals: reads=${metrics.scheduleReads}; ` +
+            `primaryWrites=${metrics.primaryWrites}; fallbackWrites=${metrics.fallbackWrites}; ` +
+            `coalesced=${metrics.coalescedChanges}; cacheAvoidedReads=${metrics.cacheAvoidedReads}; ` +
+            `backoffAvoidedReads=${metrics.backoffAvoidedReads}; ` +
+            `throttleAvoidedOperations=${metrics.throttleAvoidedOperations}.`);
+    }
+    /**
+     * Stop in-memory work without changing the cached HAP service topology.
+     * Normal Homebridge shutdown must preserve the same service instances so
+     * Home custom names, room placement, scenes, and automations survive.
+     */
+    shutdown() {
+        this.stopRuntime();
+    }
+    /**
+     * Intentionally remove every schedule service while preserving the manager.
+     * This is used only when schedule exposure is disabled or the manager is
+     * about to be unregistered. Individual schedules deleted from Roborock are
+     * removed separately by a successful authoritative sync.
+     */
+    removeScheduleServices() {
+        if (this.exposeRoutines && this.routineAccessory) {
+            // The Routines still need this coordinator's readings; only the
+            // schedule half goes.
+            this.removeScheduleSwitchesOnly();
+            return;
+        }
+        this.stopRuntime();
+        for (const service of [...this.managerAccessory.services]) {
+            if (service.UUID === this.platform.Service.Switch.UUID) {
+                this.managerAccessory.removeService(service);
+            }
+        }
+        this.platform.api.updatePlatformAccessories([this.managerAccessory]);
+    }
+    /** Drop every schedule switch and its pending writes, keeping the coordinator alive. */
+    removeScheduleSwitchesOnly() {
+        this.writeBatcher.cancelPending();
+        for (const schedule of this.scheduleAccessories.values()) {
+            schedule.dispose();
+        }
+        this.scheduleAccessories.clear();
+        this.lastServerTimerSchedules = undefined;
+        this.lastCloudSceneSchedules = undefined;
+        for (const service of [...this.managerAccessory.services]) {
+            if (service.UUID === this.platform.Service.Switch.UUID) {
+                this.managerAccessory.removeService(service);
+            }
+        }
+        this.platform.api.updatePlatformAccessories([this.managerAccessory]);
+    }
+    stopRuntime() {
+        this.disposed = true;
+        if (this.retryReadTimer) {
+            (0, timers_1.clearTimer)(this.retryReadTimer);
+            this.retryReadTimer = undefined;
+        }
+        this.refreshGeneration++;
+        this.refreshInProgress = undefined;
+        this.refreshInProgressStartedAt = 0;
+        this.refreshInProgressHoldsAccountQueue = false;
+        this.cachedSchedules = undefined;
+        this.lastScheduleRefreshAt = 0;
+        this.clearRefreshFailure();
+        this.writeBatcher.cancelPending();
+        for (const schedule of this.scheduleAccessories.values()) {
+            schedule.dispose();
+        }
+        this.scheduleAccessories.clear();
+        for (const routine of this.routineSwitches.values()) {
+            routine.dispose();
+        }
+        this.routineSwitches.clear();
+        this.lastServerTimerSchedules = undefined;
+        this.lastCloudSceneSchedules = undefined;
+        this.lastCloudScenes = undefined;
+    }
+    /**
+     * Remove every routine switch while preserving the accessory, when routine
+     * exposure is switched off or the accessory is about to be unregistered.
+     */
+    removeRoutineServices() {
+        const accessory = this.routineAccessory;
+        for (const routine of this.routineSwitches.values()) {
+            routine.dispose();
+        }
+        this.routineSwitches.clear();
+        this.exposeRoutines = false;
+        this.onRoutineCount = undefined;
+        if (!accessory) {
+            return;
+        }
+        for (const service of [...accessory.services]) {
+            if (service.UUID === this.platform.Service.Switch.UUID) {
+                accessory.removeService(service);
+            }
+        }
+        this.platform.api.updatePlatformAccessories([accessory]);
+        this.routineAccessory = undefined;
+    }
+    scheduleRobotLabel() {
+        var _a;
+        return (this.vacuumName ||
+            ((_a = this.platform.roborockAPI) === null || _a === void 0 ? void 0 : _a.getVacuumDeviceInfo(this.duid, "name")) ||
+            this.duid);
+    }
+    sync(schedules, verifiedSources) {
+        var _a;
+        if (this.exposeSchedules === false) {
+            // Routines only: the reading is still applied to the routine
+            // switches by the caller, but no schedule switch may exist.
+            if (this.scheduleAccessories.size > 0) {
+                this.removeScheduleSwitchesOnly();
+            }
+            return;
+        }
+        this.platform.log.debug(`Schedule sync: ${this.duid} received ${schedules.length} parsed schedule(s).`);
+        const ids = new Set(schedules.map((schedule) => schedule.id));
+        // Device-side timers carry no name, so they are numbered as they always
+        // were; a Routine's schedule is named after the Routine, exactly as the
+        // app shows it. Numbering counts only the timers, so adding a Routine
+        // never renames "Schedule 2" to "Schedule 3".
+        let timerOrdinal = 0;
+        for (let i = 0; i < schedules.length; i++) {
+            const schedule = schedules[i];
+            const displayName = schedule.source === "cloudScene"
+                ? (0, hap_name_1.hapName)(schedule.name, (0, hap_name_1.hapName)(this.vacuumName, "Roborock Vacuum", `Routine ${(0, hap_schedule_api_1.cloudSceneIdFromScheduleId)(schedule.id)}`))
+                : (0, hap_name_1.hapName)(this.vacuumName, "Roborock Vacuum", `Schedule ${++timerOrdinal}`);
+            const sourceVerified = verifiedSources === undefined ||
+                verifiedSources.includes((_a = schedule.source) !== null && _a !== void 0 ? _a : "serverTimer");
+            const existing = this.scheduleAccessories.get(schedule.id);
+            if (existing) {
+                existing.updateIdentity(displayName, schedule, sourceVerified);
+                continue;
+            }
+            const child = new RoborockHapScheduleSwitchAccessory(this.platform, this, this.managerAccessory, this.duid, schedule.id);
+            child.initialize(displayName, schedule, sourceVerified);
+            this.scheduleAccessories.set(schedule.id, child);
+            this.platform.log.debug(`Schedule sync: added HAP switch '${displayName}' for ${schedule.id}.`);
+        }
+        for (const [id, child] of this.scheduleAccessories) {
+            if (ids.has(id))
+                continue;
+            this.platform.log.debug(`Schedule sync: removing stale HAP switch for ${id}.`);
+            child.dispose("schedule removal");
+            if (this.managerAccessory.context.scheduleDisplayStates) {
+                delete this.managerAccessory.context.scheduleDisplayStates[id];
+            }
+            const service = this.managerAccessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(id)}`);
+            if (service) {
+                this.managerAccessory.removeService(service);
+            }
+            this.scheduleAccessories.delete(id);
+            this.platform.api.updatePlatformAccessories([this.managerAccessory]);
+        }
+        // A switch Homebridge restored from its cache has no child until
+        // something builds one, so the loop above never saw it: a schedule
+        // deleted in the app while Homebridge was stopped kept its switch, with
+        // no handler, for good. The accessory says which switches exist.
+        let removedRestored = false;
+        for (const service of [...this.managerAccessory.services]) {
+            const id = this.scheduleIdOf(service);
+            if (id === null || ids.has(id))
+                continue;
+            this.platform.log.debug(`Schedule sync: removing the cached switch of ${id}, which the account no longer has.`);
+            this.managerAccessory.removeService(service);
+            removedRestored = true;
+        }
+        if (removedRestored) {
+            this.platform.api.updatePlatformAccessories([this.managerAccessory]);
+        }
+    }
+    /** The schedule id a Switch service carries in its subtype, or null. */
+    scheduleIdOf(service) {
+        const subtype = service.subtype;
+        if (service.UUID !== this.platform.Service.Switch.UUID ||
+            typeof subtype !== "string" ||
+            !subtype.startsWith(SERVICE_PREFIX)) {
+            return null;
+        }
+        try {
+            return decodeURIComponent(subtype.slice(SERVICE_PREFIX.length)) || null;
+        }
+        catch (_a) {
+            return null;
+        }
+    }
+}
+exports.default = RoborockHapScheduleAccessory;
+class RoborockHapScheduleSwitchAccessory {
+    constructor(platform, coordinator, accessory, duid, scheduleId) {
+        this.platform = platform;
+        this.coordinator = coordinator;
+        this.accessory = accessory;
+        this.duid = duid;
+        this.scheduleId = scheduleId;
+        this.suppression = new Map();
+        // If Roborock rejects/doesn't reflect a command, don't allow HomeKit
+        // to immediately hammer the same command over and over.
+        this.failedCommands = new Map();
+        this.disposed = false;
+        this.intentSequence = 0;
+        this.answerWaiters = new Set();
+        this.schedule = {
+            id: scheduleId,
+            enabled: false,
+            timer: [scheduleId, "off"],
+        };
+    }
+    initialize(displayName, schedule, sourceVerified = true) {
+        var _a;
+        this.disposed = false;
+        const saved = (_a = this.accessory.context.scheduleDisplayStates) === null || _a === void 0 ? void 0 : _a[this.scheduleId];
+        if (saved === null || saved === void 0 ? void 0 : saved.pending) {
+            this.uncertain = { ...saved.pending, showRequested: false };
+        }
+        this.updateIdentity(displayName, schedule, sourceVerified);
+        const subtype = `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`;
+        let service = this.accessory.getServiceById(this.platform.Service.Switch, subtype);
+        if (!service) {
+            service = this.accessory.addService(this.platform.Service.Switch, displayName, subtype);
+        }
+        service.displayName = displayName;
+        service.setCharacteristic(this.platform.Characteristic.Name, displayName);
+        service.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
+        const configuredName = service.getCharacteristic(this.platform.Characteristic.ConfiguredName);
+        const currentConfiguredName = configuredName.value;
+        if (currentConfiguredName == null ||
+            String(currentConfiguredName).trim().length === 0 ||
+            String(currentConfiguredName) === displayName) {
+            configuredName.setValue(displayName);
+        }
+        service
+            .getCharacteristic(this.platform.Characteristic.On)
+            .onSet((value) => this.setSchedule(Boolean(value)))
+            .onGet(() => {
+            void this.coordinator.refreshIfNeeded();
+            return this.displayValue();
+        });
+        service.updateCharacteristic(this.platform.Characteristic.On, this.displayValue());
+        if (this.uncertain) {
+            this.platform.log.warn(`Schedule display rollback for ${this.displayLabel()}: interrupted request from before restart; restoring last confirmed ${this.schedule.enabled ? "on" : "off"}. The previous outcome is unknown, not a user change.`);
+            this.scheduleFollowUpRead();
+        }
+        this.saveDisplayState();
+    }
+    updateIdentity(displayName, schedule, sourceVerified = true) {
+        const previous = this.schedule.enabled;
+        this.schedule = { ...schedule, timer: [...schedule.timer] };
+        if (sourceVerified && this.uncertain) {
+            this.platform.log.info(`Schedule outcome resolved by fresh read for ${this.displayLabel()}: confirmed ${schedule.enabled ? "on" : "off"}; previous confirmed ${previous ? "on" : "off"}; ${this.pendingCommand ? "keeping the newer requested display" : "updating the display"}. This is reconciliation, not a user change.`);
+            this.uncertain = undefined;
+            if (this.followUpTimer)
+                (0, timers_1.clearTimer)(this.followUpTimer);
+            this.followUpTimer = undefined;
+        }
+        this.saveDisplayState();
+        const switchService = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
+        if (switchService) {
+            const previousServiceName = switchService.getCharacteristic(this.platform.Characteristic.Name).value;
+            switchService.displayName = displayName;
+            switchService.setCharacteristic(this.platform.Characteristic.Name, displayName);
+            switchService.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
+            const configuredName = switchService.getCharacteristic(this.platform.Characteristic.ConfiguredName);
+            const currentConfiguredName = configuredName.value;
+            if (currentConfiguredName == null ||
+                String(currentConfiguredName).trim().length === 0 ||
+                String(currentConfiguredName) === String(previousServiceName)) {
+                configuredName.setValue(displayName);
+            }
+            switchService.updateCharacteristic(this.platform.Characteristic.On, this.displayValue());
+        }
+    }
+    dispose(reason = "shutdown") {
+        if (this.pendingCommand || this.uncertain) {
+            this.platform.log.warn(`Schedule request interrupted by ${reason} for ${this.displayLabel()}: outcome unknown; last confirmed ${this.schedule.enabled ? "on" : "off"} is saved for restart.`);
+            this.saveDisplayState();
+        }
+        this.disposed = true;
+        for (const stop of this.answerWaiters)
+            stop();
+        this.answerWaiters.clear();
+        if (this.followUpTimer)
+            (0, timers_1.clearTimer)(this.followUpTimer);
+        if (this.correctionTimer)
+            (0, timers_1.clearTimer)(this.correctionTimer);
+        this.followUpTimer = undefined;
+        this.correctionTimer = undefined;
+        this.suppression.clear();
+        this.failedCommands.clear();
+    }
+    setSchedule(enabled) {
+        var _a;
+        if (this.disposed)
+            return Promise.resolve();
+        if (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.enabled) === enabled)
+            return this.pendingCommand.acknowledgement;
+        const recent = this.suppression.get(this.scheduleId);
+        if (!this.pendingCommand &&
+            (recent === null || recent === void 0 ? void 0 : recent.enabled) === enabled &&
+            Date.now() - recent.timestamp < WRITE_SUPPRESSION_MS) {
+            this.restoreConfirmedDisplay();
+            return Promise.resolve();
+        }
+        const failed = this.failedCommands.get(this.scheduleId);
+        if (!this.pendingCommand &&
+            (failed === null || failed === void 0 ? void 0 : failed.enabled) === enabled &&
+            Date.now() - failed.timestamp <
+                RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS) {
+            this.restoreConfirmedDisplay();
+            this.platform.log.warn(`Schedule request suppressed after failure for ${this.displayLabel()}; retaining confirmed ${this.schedule.enabled ? "on" : "off"} state.`);
+            return Promise.reject(this.writeFailed());
+        }
+        let markSent = () => undefined;
+        const sent = new Promise((resolve) => {
+            markSent = () => resolve("sent");
+        });
+        let markRefused = (_error) => undefined;
+        const refused = new Promise((resolve) => {
+            markRefused = (error) => resolve({ error });
+        });
+        const startedAt = Date.now();
+        const intent = ++this.intentSequence;
+        const promise = Promise.resolve().then(async () => {
+            var _a, _b, _c, _d;
+            try {
+                this.platform.log.info(`Schedule command: queueing ${enabled ? "enable" : "disable"} for ${this.displayLabel()}. Display is provisional until confirmed.`);
+                const executed = await this.coordinator.enqueueScheduleWrite(this.scheduleId, enabled, { onSent: markSent, onRefused: markRefused });
+                if (this.disposed)
+                    return;
+                if (executed) {
+                    this.schedule.enabled = enabled;
+                    this.schedule.timer[1] = enabled ? "on" : "off";
+                    this.uncertain = undefined;
+                    if (this.followUpTimer)
+                        (0, timers_1.clearTimer)(this.followUpTimer);
+                    this.followUpTimer = undefined;
+                    this.saveDisplayState();
+                    this.failedCommands.delete(this.scheduleId);
+                    this.suppression.set(this.scheduleId, {
+                        enabled,
+                        timestamp: Date.now(),
+                    });
+                }
+                else if (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.promise) === promise) {
+                    this.platform.log.warn(`Schedule display rollback for ${this.displayLabel()}: request was not executed; restoring confirmed ${this.schedule.enabled ? "on" : "off"} after ${Date.now() - startedAt}ms.`);
+                }
+            }
+            catch (error) {
+                if (this.disposed)
+                    return;
+                const unverified = (error === null || error === void 0 ? void 0 : error.code) === "SCHEDULE_OUTCOME_UNKNOWN";
+                const unknown = unverified || Boolean(this.uncertain);
+                if (!unknown)
+                    markRefused(error);
+                if (unknown && intent === this.intentSequence) {
+                    if (unverified)
+                        this.uncertain = { enabled, startedAt, showRequested: true };
+                    this.failedCommands.delete(this.scheduleId);
+                    this.suppression.delete(this.scheduleId);
+                    this.platform.log.warn(`Schedule outcome unknown for ${this.displayLabel()}: unverified request ${((_b = this.uncertain) === null || _b === void 0 ? void 0 : _b.enabled) ? "on" : "off"} after ${Date.now() - startedAt}ms; the earlier write may have applied. One follow-up read is scheduled; no failed-command cooldown is applied.`);
+                    this.scheduleFollowUpRead();
+                }
+                else if (!unknown)
+                    this.failedCommands.set(this.scheduleId, {
+                        enabled,
+                        timestamp: Date.now(),
+                    });
+                const detail = error instanceof Error ? error.message : String(error);
+                if (unknown) {
+                    if (intent !== this.intentSequence)
+                        this.platform.log.warn(`Earlier schedule outcome unknown for ${this.displayLabel()}; keeping the newer intent and its confirmation.`);
+                }
+                else if (((_c = this.pendingCommand) === null || _c === void 0 ? void 0 : _c.promise) === promise) {
+                    this.platform.log.warn(`Schedule display rollback for ${this.displayLabel()}: requested ${enabled ? "on" : "off"}, restoring confirmed ${this.schedule.enabled ? "on" : "off"} after ${Date.now() - startedAt}ms; ${detail}. This is failure recovery, not a user change.`);
+                }
+                else {
+                    this.platform.log.warn(`Earlier schedule request failed for ${this.displayLabel()}: ${detail}. Keeping the newer requested display.`);
+                }
+            }
+            finally {
+                if (((_d = this.pendingCommand) === null || _d === void 0 ? void 0 : _d.promise) === promise) {
+                    this.pendingCommand = undefined;
+                    if (!this.disposed) {
+                        this.saveDisplayState();
+                        this.restoreConfirmedDisplay();
+                    }
+                }
+            }
+        });
+        const acknowledgement = this.answerScheduleWrite(promise, sent, refused);
+        this.pendingCommand = {
+            enabled,
+            startedAt,
+            promise,
+            acknowledgement,
+            showRequested: false,
+        };
+        // Persist confirmation and intent before Homebridge can cache either value.
+        this.saveDisplayState();
+        return acknowledgement;
+    }
+    async answerScheduleWrite(operation, sent, refused) {
+        var _a;
+        let timer;
+        let stop = () => undefined;
+        const stopped = new Promise((resolve) => {
+            stop = () => resolve("stopped");
+            this.answerWaiters.add(stop);
+        });
+        const budget = new Promise((resolve) => {
+            timer = (0, timers_1.scheduleTimer)(() => resolve("budget"), SCHEDULE_WRITE_ANSWER_BUDGET_MS);
+            (0, timers_1.unrefTimer)(timer);
+        });
+        try {
+            const first = await Promise.race([
+                refused,
+                sent,
+                budget,
+                stopped,
+                operation.then(() => "complete"),
+            ]);
+            if (this.disposed)
+                throw this.writeFailed();
+            // A known refusal inside the answer window must reach HAP as an error.
+            // Verification/unknown outcomes continue through the persisted state path.
+            if (typeof first === "object")
+                throw this.writeFailed();
+            if (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.promise) === operation) {
+                this.pendingCommand.showRequested = true;
+                this.updateService(this.displayValue());
+            }
+        }
+        finally {
+            if (timer)
+                (0, timers_1.clearTimer)(timer);
+            this.answerWaiters.delete(stop);
+        }
+    }
+    writeFailed() {
+        var _a;
+        const hap = (_a = this.platform.api) === null || _a === void 0 ? void 0 : _a.hap;
+        return typeof (hap === null || hap === void 0 ? void 0 : hap.HapStatusError) === "function"
+            ? new hap.HapStatusError(-70402 /* hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE */)
+            : new Error("The Roborock schedule write failed.");
+    }
+    restoreConfirmedDisplay() {
+        this.updateService(this.displayValue());
+        if (this.correctionTimer)
+            (0, timers_1.clearTimer)(this.correctionTimer);
+        // HAP applies the requested value after onSet returns. Reassert the
+        // correction on the next turn so a suppressed tap cannot leave it on.
+        const timer = (0, timers_1.scheduleTimer)(() => {
+            this.correctionTimer = undefined;
+            if (!this.disposed)
+                this.updateService(this.displayValue());
+        }, 0);
+        this.correctionTimer = timer;
+        (0, timers_1.unrefTimer)(timer);
+    }
+    displayValue() {
+        var _a, _b, _c;
+        return ((_b = (((_a = this.pendingCommand) === null || _a === void 0 ? void 0 : _a.showRequested)
+            ? this.pendingCommand.enabled
+            : undefined)) !== null && _b !== void 0 ? _b : (((_c = this.uncertain) === null || _c === void 0 ? void 0 : _c.showRequested)
+            ? this.uncertain.enabled
+            : this.schedule.enabled));
+    }
+    displayLabel() {
+        const service = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
+        const name = (service === null || service === void 0 ? void 0 : service.getCharacteristic(this.platform.Characteristic.ConfiguredName).value) ||
+            (service === null || service === void 0 ? void 0 : service.displayName) ||
+            this.schedule.name ||
+            this.scheduleId;
+        return `${this.coordinator.scheduleRobotLabel()} / "${name}" (${this.duid}/${this.scheduleId})`;
+    }
+    saveDisplayState() {
+        var _a, _b;
+        const intent = (_a = this.pendingCommand) !== null && _a !== void 0 ? _a : this.uncertain;
+        const state = {
+            confirmed: this.schedule.enabled,
+            ...(intent
+                ? {
+                    pending: {
+                        enabled: intent.enabled,
+                        startedAt: intent.startedAt,
+                        ...(this.uncertain && !this.pendingCommand
+                            ? { outcomeUnknown: true }
+                            : {}),
+                    },
+                }
+                : {}),
+        };
+        const states = (_b = this.accessory.context.scheduleDisplayStates) !== null && _b !== void 0 ? _b : {};
+        if (JSON.stringify(states[this.scheduleId]) === JSON.stringify(state))
+            return;
+        this.accessory.context.scheduleDisplayStates = {
+            ...states,
+            [this.scheduleId]: state,
+        };
+        this.platform.api.updatePlatformAccessories([this.accessory]);
+    }
+    scheduleFollowUpRead() {
+        if (this.followUpTimer || this.disposed)
+            return;
+        this.followUpTimer = (0, timers_1.scheduleTimer)(() => {
+            this.followUpTimer = undefined;
+            if (this.disposed || !this.uncertain)
+                return;
+            void this.coordinator
+                .refreshDetailed(Date.now(), false, true)
+                .then(() => {
+                if (!this.disposed && this.uncertain) {
+                    this.platform.log.warn(`Schedule outcome still unknown for ${this.displayLabel()}: the follow-up could not confirm this source. The next successful refresh will report the resolved state.`);
+                }
+            });
+        }, VERIFY_DELAY_MS);
+        (0, timers_1.unrefTimer)(this.followUpTimer);
+    }
+    updateService(enabled) {
+        const service = this.accessory.getServiceById(this.platform.Service.Switch, `${SERVICE_PREFIX}${encodeURIComponent(this.scheduleId)}`);
+        service === null || service === void 0 ? void 0 : service.updateCharacteristic(this.platform.Characteristic.On, enabled);
+    }
+}
+RoborockHapScheduleSwitchAccessory.FAILED_COMMAND_COOLDOWN_MS = 30000;
+/**
+ * One Routine, as a momentary switch: on runs it, and 1.5 s later the switch
+ * falls back to off by itself. Siri can therefore start "Saugen+" by name,
+ * and a Home automation can run a Routine the way it runs a scene.
+ */
+class RoborockHapRoutineSwitch {
+    constructor(platform, coordinator, accessory, sceneId) {
+        this.platform = platform;
+        this.coordinator = coordinator;
+        this.accessory = accessory;
+        this.sceneId = sceneId;
+        this.runPending = false;
+        this.disposed = false;
+        this.displayName = "";
+    }
+    get subtype() {
+        return `${ROUTINE_SERVICE_PREFIX}${encodeURIComponent(this.sceneId)}`;
+    }
+    initialize(displayName) {
+        this.disposed = false;
+        this.displayName = displayName;
+        let service = this.accessory.getServiceById(this.platform.Service.Switch, this.subtype);
+        if (!service) {
+            service = this.accessory.addService(this.platform.Service.Switch, displayName, this.subtype);
+        }
+        this.applyName(service, displayName);
+        const on = service.getCharacteristic(this.platform.Characteristic.On);
+        // Cached services are configured again on every launch, and a second set
+        // of handlers on the same characteristic would run the Routine twice.
+        on.removeAllListeners("get");
+        on.removeAllListeners("set");
+        on.onGet(() => {
+            // A momentary switch reads off; the read is still a good moment to
+            // let the coordinator refresh its scene list (5-minute cache), so a
+            // Routine added in the app reaches Apple Home without a restart even
+            // when there is no schedule switch to prompt a refresh.
+            void this.coordinator.refreshIfNeeded();
+            return false;
+        }).onSet((value) => this.acceptPress(Boolean(value)));
+        // Whatever the cache remembered, a momentary switch starts off.
+        service.updateCharacteristic(this.platform.Characteristic.On, false);
+    }
+    /** Follow a rename in the Roborock app through to Apple Home. */
+    updateIdentity(displayName) {
+        if (displayName === this.displayName) {
+            return;
+        }
+        const previous = this.displayName;
+        this.displayName = displayName;
+        const service = this.accessory.getServiceById(this.platform.Service.Switch, this.subtype);
+        if (service) {
+            this.applyName(service, displayName);
+        }
+        // SAY IT, because the one thing the plugin cannot do is the thing the
+        // user expects. Issue #22: a Routine renamed in the Roborock app kept its
+        // old name in the Home app. The new name IS sent — `Name` and, unless the
+        // user has renamed the switch themselves, `ConfiguredName` are both
+        // rewritten a line above. Apple Home keeps showing the name it stored
+        // when the switch first appeared, and a rename there takes a second and
+        // sticks. Without this line the user sees a stale name and no reason for
+        // it; with it, they know it reached Homebridge and where to change it.
+        if (previous) {
+            this.platform.log.info(`Roborock routine "${previous}" is now called "${displayName}" in the Roborock app, and the switch has been updated. If Apple Home still shows the old name, rename it there once — the Home app keeps the name it stored when the switch first appeared, whatever the accessory reports afterwards.`);
+        }
+    }
+    applyName(service, displayName) {
+        const previous = service.getCharacteristic(this.platform.Characteristic.Name).value;
+        service.displayName = displayName;
+        service.setCharacteristic(this.platform.Characteristic.Name, displayName);
+        service.addOptionalCharacteristic(this.platform.Characteristic.ConfiguredName);
+        const configuredName = service.getCharacteristic(this.platform.Characteristic.ConfiguredName);
+        const current = configuredName.value;
+        // A name the user chose in the Home app is theirs; only a name that still
+        // mirrors the previous app name follows the app.
+        if (current == null ||
+            String(current).trim().length === 0 ||
+            String(current) === String(previous)) {
+            configuredName.setValue(displayName);
+        }
+    }
+    dispose() {
+        this.disposed = true;
+        if (this.resetTimer) {
+            (0, timers_1.clearTimer)(this.resetTimer);
+            this.resetTimer = undefined;
+        }
+    }
+    /** A Routine switch acknowledges the momentary press immediately. */
+    acceptPress(value) {
+        void this.handlePress(value).catch((error) => {
+            // runRoutine owns expected cloud errors. Keep an unexpected background
+            // failure from becoming an unhandled rejection after HAP was answered.
+            this.platform.log.warn(`Accepted Home routine "${this.displayName}" for ${this.coordinator.getRoutineRobotLabel()} failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+    }
+    async handlePress(value) {
+        if (!value || this.disposed) {
+            // The switch turning itself off again. Not a command.
+            return;
+        }
+        this.scheduleReset();
+        if (this.runPending) {
+            this.platform.log.info(`Ignoring repeated Home routine "${this.displayName}" for ${this.coordinator.getRoutineRobotLabel()}: its previous run is still queued or awaiting a cloud response.`);
+            return;
+        }
+        this.runPending = true;
+        try {
+            await this.coordinator.runRoutine(this.sceneId, this.displayName);
+        }
+        finally {
+            this.runPending = false;
+        }
+    }
+    scheduleReset() {
+        if (this.resetTimer) {
+            (0, timers_1.clearTimer)(this.resetTimer);
+        }
+        const timer = (0, timers_1.scheduleTimer)(() => {
+            var _a;
+            this.resetTimer = undefined;
+            if (this.disposed)
+                return;
+            (_a = this.accessory
+                .getServiceById(this.platform.Service.Switch, this.subtype)) === null || _a === void 0 ? void 0 : _a.updateCharacteristic(this.platform.Characteristic.On, false);
+        }, ROUTINE_SWITCH_AUTO_RESET_MS);
+        (0, timers_1.unrefTimer)(timer);
+        this.resetTimer = timer;
+    }
+}
+//# sourceMappingURL=hap_schedule_accessory.js.map
