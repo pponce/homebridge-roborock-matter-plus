@@ -90,7 +90,8 @@ function setup({ refuse, ambiguous = false, refusalDelay = 0 }) {
     }),
     updateCloudSceneParam: jest.fn(async (sceneId, param) => {
       if (refuse) {
-        if (refusalDelay) await new Promise(resolve => setTimeout(resolve, refusalDelay));
+        if (refusalDelay)
+          await new Promise((resolve) => setTimeout(resolve, refusalDelay));
         throw new Error("The Roborock cloud refused the change (HTTP 500).");
       }
       scenes[0].param = JSON.stringify(param);
@@ -139,24 +140,39 @@ function onOf(manager) {
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
 
-test.each([0, 500, 3000])("a refusal after %sms preserves the HAP refusal window and later rollback", async refusalDelay => {
-  const { coordinator, manager, platform } = setup({ refuse: true, refusalDelay });
-  await coordinator.initialize("Rocky");
-  const on = onOf(manager);
-  expect(on.value).toBe(true);
-  const changes = [];
-  on.on("change", change => changes.push(change.newValue));
-  const request = on.handleSetRequest(false).then(() => "resolved", status => status);
-  await jest.advanceTimersByTimeAsync(2500);
-  const early = refusalDelay < 2500;
-  expect(await request).toBe(early ? hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE : "resolved");
-  expect(on.value).toBe(early);
-  if (early) expect(changes).not.toContain(false);
-  await jest.advanceTimersByTimeAsync(5000);
-  expect(on.value).toBe(true);
-  expect(platform.log.warn).toHaveBeenCalledWith(expect.stringMatching(/Schedule display rollback.*Rocky.*Mornings.*not a user change/));
-  coordinator.stopRuntime();
-});
+test.each([0, 500, 3000])(
+  "a refusal after %sms preserves the HAP refusal window and later rollback",
+  async (refusalDelay) => {
+    const { coordinator, manager, platform } = setup({
+      refuse: true,
+      refusalDelay,
+    });
+    await coordinator.initialize("Rocky");
+    const on = onOf(manager);
+    expect(on.value).toBe(true);
+    const changes = [];
+    on.on("change", (change) => changes.push(change.newValue));
+    const request = on.handleSetRequest(false).then(
+      () => "resolved",
+      (status) => status
+    );
+    await jest.advanceTimersByTimeAsync(2500);
+    const early = refusalDelay < 2500;
+    expect(await request).toBe(
+      early ? hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE : "resolved"
+    );
+    expect(on.value).toBe(early);
+    if (early) expect(changes).not.toContain(false);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(on.value).toBe(true);
+    expect(platform.log.warn).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Schedule display rollback.*Rocky.*Mornings.*not a user change/
+      )
+    );
+    coordinator.stopRuntime();
+  }
+);
 
 async function acceptedPress(on, enabled) {
   const request = on.handleSetRequest(enabled);
@@ -327,14 +343,18 @@ test("shutdown cancels pending feedback timers and late completions cannot chang
   expect(manager.context.scheduleDisplayStates["scene:1"].confirmed).toBe(true);
 });
 
-
 test("shutdown during the answer window rejects HAP and cancels its deadline", async () => {
   const { coordinator, manager } = setup({ refuse: false });
   await coordinator.initialize("Rocky");
   let reject;
-  coordinator.enqueueScheduleWrite = jest.fn(() => new Promise((_resolve, fail) => { reject = fail; }));
+  coordinator.enqueueScheduleWrite = jest.fn(
+    () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      })
+  );
   const on = onOf(manager);
-  const request = on.handleSetRequest(false).catch(status => status);
+  const request = on.handleSetRequest(false).catch((status) => status);
   await jest.advanceTimersByTimeAsync(0);
   expect(on.value).toBe(true);
   coordinator.stopRuntime();
