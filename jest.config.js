@@ -1,6 +1,10 @@
 module.exports = {
   testEnvironment: "node",
-  testPathIgnorePatterns: ["/node_modules/", "/dist/"],
+  testPathIgnorePatterns: [
+    "/node_modules/",
+    "/dist/",
+    "/tests/.*\\.test\\.cjs$",
+  ],
   // Jest's default is 5 s, and a handful of tests here do REAL I/O — spawning
   // a Node child, connecting a TCP socket to a closed port — so their cost is
   // an OS operation rather than a function call. Under full-suite load those

@@ -29,6 +29,10 @@
 
 Sign in with the account you already use in the Roborock app. That is the whole setup. Every robot on your account then appears in Apple Home as a real robot vacuum: start and stop it, send it to the kitchen, choose vacuum or mop, check the battery, and ask Siri to do it for you. No tokens to dig out, no network tricks, no command line.
 
+## Schedule pause and delay controls
+
+Pause schedules until the daily reset or indefinitely, delay today's eligible runs by a configurable interval, and restore original times from Delay Active switches. Controls are available per vacuum and for all vacuums. [Setup and behavior](docs/schedule-controls.md).
+
 ## Why people choose it
 
 - 🥇 **Every Roborock works.** From the classic S-series through the Q and Saros families to the 2025 Q7 series, which no other Homebridge plugin supports. New models are picked up automatically.
