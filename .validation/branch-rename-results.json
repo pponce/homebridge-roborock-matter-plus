@@ -159,5 +159,26 @@
     "expected_sha": "010ad35789e9895807c520e5c21313e8065b40a3",
     "status": "renamed",
     "sha": "010ad35789e9895807c520e5c21313e8065b40a3"
+  },
+  {
+    "name": "review-delay/local-server-fast-refresh-combined",
+    "new_name": "delete/review-delay/local-server-fast-refresh-combined",
+    "expected_sha": "0b64604dc677ca66b4b31533eadfce0da7c90c71",
+    "status": "renamed",
+    "sha": "0b64604dc677ca66b4b31533eadfce0da7c90c71"
+  },
+  {
+    "name": "review-delay/local-server-fast-refresh-minimal",
+    "new_name": "delete/review-delay/local-server-fast-refresh-minimal",
+    "expected_sha": "0b7fd726266d7ad801c1331f3330ae1acd02c519",
+    "status": "renamed",
+    "sha": "0b7fd726266d7ad801c1331f3330ae1acd02c519"
+  },
+  {
+    "name": "review-delay/local-server-fast-refresh-pr",
+    "new_name": "delete/review-delay/local-server-fast-refresh-pr",
+    "expected_sha": "36123cf6ff69fdb7eda34828ae460259a83e17ab",
+    "status": "renamed",
+    "sha": "36123cf6ff69fdb7eda34828ae460259a83e17ab"
   }
 ]
