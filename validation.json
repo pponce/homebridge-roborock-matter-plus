@@ -1,0 +1,15 @@
+{
+  "jobStatus": "success",
+  "success": true,
+  "passed": 2707,
+  "failed": 0,
+  "skipped": 0,
+  "suites": 249,
+  "regression": {
+    "status": "passed",
+    "assertions": 30
+  },
+  "failures": [],
+  "python": ".........\n----------------------------------------------------------------------\nRan 9 tests in 0.004s\n\nOK\n",
+  "jestTail": null
+}
