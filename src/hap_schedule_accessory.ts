@@ -2126,13 +2126,7 @@ class RoborockHapScheduleSwitchAccessory {
   private followUpTimer: ReturnType<typeof scheduleTimer> | undefined;
   private correctionTimer: ReturnType<typeof scheduleTimer> | undefined;
   private pendingCommand:
-    | {
-        enabled: boolean;
-        startedAt: number;
-        promise: Promise<void>;
-        acknowledgement: Promise<void>;
-        showRequested: boolean;
-      }
+    | { enabled: boolean; startedAt: number; promise: Promise<void>; acknowledgement: Promise<void>; showRequested: boolean }
     | undefined;
   private readonly answerWaiters = new Set<() => void>();
 
@@ -2199,9 +2193,7 @@ class RoborockHapScheduleSwitchAccessory {
 
     service
       .getCharacteristic(this.platform.Characteristic.On)
-      .onSet((value) => {
-        void this.setSchedule(Boolean(value));
-      })
+      .onSet((value) => this.setSchedule(Boolean(value)))
       .onGet(() => {
         void this.coordinator.refreshIfNeeded();
         return this.displayValue();
@@ -2317,9 +2309,7 @@ class RoborockHapScheduleSwitchAccessory {
       return Promise.reject(this.writeFailed());
     }
     let markSent = (): void => undefined;
-    const sent = new Promise<"sent">((resolve) => {
-      markSent = () => resolve("sent");
-    });
+    const sent = new Promise<"sent">((resolve) => { markSent = () => resolve("sent"); });
     let markRefused = (_error: unknown): void => undefined;
     const refused = new Promise<{ error: unknown }>((resolve) => {
       markRefused = (error) => resolve({ error });
@@ -2400,13 +2390,7 @@ class RoborockHapScheduleSwitchAccessory {
       }
     });
     const acknowledgement = this.answerScheduleWrite(promise, sent, refused);
-    this.pendingCommand = {
-      enabled,
-      startedAt,
-      promise,
-      acknowledgement,
-      showRequested: false,
-    };
+    this.pendingCommand = { enabled, startedAt, promise, acknowledgement, showRequested: false };
     // Persist confirmation and intent before Homebridge can cache either value.
     this.saveDisplayState();
     return acknowledgement;
@@ -2424,19 +2408,12 @@ class RoborockHapScheduleSwitchAccessory {
       this.answerWaiters.add(stop);
     });
     const budget = new Promise<"budget">((resolve) => {
-      timer = scheduleTimer(
-        () => resolve("budget"),
-        SCHEDULE_WRITE_ANSWER_BUDGET_MS
-      );
+      timer = scheduleTimer(() => resolve("budget"), SCHEDULE_WRITE_ANSWER_BUDGET_MS);
       unrefTimer(timer);
     });
     try {
       const first = await Promise.race([
-        refused,
-        sent,
-        budget,
-        stopped,
-        operation.then(() => "complete" as const),
+        refused, sent, budget, stopped, operation.then(() => "complete" as const),
       ]);
       if (this.disposed) throw this.writeFailed();
       // A known refusal inside the answer window must reach HAP as an error.
@@ -2474,9 +2451,7 @@ class RoborockHapScheduleSwitchAccessory {
 
   private displayValue(): boolean {
     return (
-      (this.pendingCommand?.showRequested
-        ? this.pendingCommand.enabled
-        : undefined) ??
+      (this.pendingCommand?.showRequested ? this.pendingCommand.enabled : undefined) ??
       (this.uncertain?.showRequested
         ? this.uncertain.enabled
         : this.schedule.enabled)
