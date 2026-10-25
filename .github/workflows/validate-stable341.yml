@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [pr37, pr38, pr39, pr31, upstream, full]
+        target: [pr31, pr38, full]
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -134,7 +134,7 @@ jobs:
               j = json.loads(p.read_text())
               result['jest'] = {k: j.get(k) for k in ['numPassedTests', 'numFailedTests', 'numPendingTests', 'numPassedTestSuites', 'numFailedTestSuites', 'success']}
               result['failures'] = [{'file': t['name'].split('/homebridge-roborock-matter-plus/')[-1], 'message': t.get('message', '')[:12000], 'assertions': [{'name': a['fullName'], 'messages': a.get('failureMessages', [])} for a in t.get('assertionResults', []) if a['status'] == 'failed']} for t in j.get('testResults', []) if t['status'] == 'failed']
-          result['logs'] = {k: Path('/tmp/' + k + '.log').read_text()[-35000:] for k in ['install', 'regression', 'lint', 'types', 'build', 'native', 'python', 'pack']}
+          result['logs'] = {k: Path('/tmp/' + k + '.log').read_text()[-35000:] for k in ['install', 'regression', 'lint', 'types', 'build', 'jest', 'native', 'python', 'pack']}
           Path('stable341-validation-result.json').write_text(json.dumps(result, indent=2) + '\n')
           print(json.dumps({k:v for k,v in result.items() if k not in ['logs', 'failures']}))
           PY
