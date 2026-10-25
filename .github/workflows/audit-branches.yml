@@ -1,0 +1,31 @@
+name: Audit branches for deletion labels
+
+on:
+  push:
+    branches: [review-delay/branch-cleanup-20261025]
+    paths:
+      - .github/workflows/audit-branches.yml
+      - .github/scripts/audit-branches.py
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Read histories and open pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/audit-branches.py
+      - name: Save audit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .validation/branch-audit.json
+          git diff --cached --quiet || git commit -m 'Record branch retention audit'
+          git push origin HEAD:"$GITHUB_REF_NAME"
