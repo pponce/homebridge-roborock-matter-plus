@@ -1159,8 +1159,9 @@ class RoborockMatterVacuumAccessory {
      * because 68 is the one code measured rendering on a real tile and because
      * `dock_error_status` describes the dock while `error_code` describes the
      * robot — a docked robot can carry both at once and the tank is the one the
-     * user can act on. Below that comes the robot's own fault. Only when both
-     * are known and neither is a fault does this return NoError.
+     * user can act on. Automatic refill docks use the two-supply rule above;
+     * the sensor's maintenance warning alone does not block a Matter start.
+     * Below that comes the robot's own fault.
      *
      * Returning null rather than NoError for an unknown robot is the 3.12.1
      * lesson applied to a second field: publishing NoError on the robot's behalf
@@ -1268,10 +1269,9 @@ class RoborockMatterVacuumAccessory {
             return null;
         }
         if (tankKnown || errorCode === 0) {
-            // At least one source affirmatively says it is fine and neither says
-            // otherwise. Requiring both to be known would mean a robot that never
-            // reports `error_code` could never clear a tank warning after a refill,
-            // which is worse than no warning at all.
+            // No applicable tank or robot fault remains. For refill docks, missing
+            // tank readings do not establish that both supplies are empty. A robot
+            // need not report error_code to clear a known tank warning after a refill.
             //
             // `tankEmpty === true` reaches here only when the run was ruled to use
             // no water above, and then NoError is the affirmative answer rather
