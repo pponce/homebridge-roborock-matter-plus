@@ -208,5 +208,12 @@
     "expected_sha": "87fe730978161178c3ae62fb53baf5e564549457",
     "status": "renamed",
     "sha": "87fe730978161178c3ae62fb53baf5e564549457"
+  },
+  {
+    "name": "review-delay/water-tanks-pr",
+    "new_name": "delete/review-delay/water-tanks-pr",
+    "expected_sha": "4558ef2ad9d8257511900bd58bb560b03da911af",
+    "status": "renamed",
+    "sha": "4558ef2ad9d8257511900bd58bb560b03da911af"
   }
 ]
