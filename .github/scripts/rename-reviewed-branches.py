@@ -60,7 +60,7 @@ for item in manifest:
         if item['reason'] == 'completed validation workspace; feature source retained':
             def source_tree(ref):
                 rows = subprocess.check_output(['git', 'ls-tree', '-r', ref], text=True).splitlines()
-                excluded = {'.github/workflows/validate-local-refresh.yml', '.github/scripts/validate-local-refresh.py'}
+                excluded = {'.github/workflows/validate-local-refresh.yml', '.github/scripts/validate-local-refresh.py', '.github/workflows/validate-water-tanks.yml', '.github/scripts/validate-water-tanks.py'}
                 return {line.split('\t', 1)[1]: line.split('\t', 1)[0] for line in rows
                         if not line.split('\t', 1)[1].startswith(('dist/', '.validation/'))
                         and line.split('\t', 1)[1] not in excluded}
