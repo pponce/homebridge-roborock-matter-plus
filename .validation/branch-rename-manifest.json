@@ -1,24 +1,12 @@
 [
   {
-    "name": "review-delay/water-tanks-combined",
-    "new_name": "delete/review-delay/water-tanks-combined",
-    "sha": "d902a99110141ed3485b5c5b6f19ed34deab9e39",
+    "name": "review-delay/water-tanks-pr",
+    "new_name": "delete/review-delay/water-tanks-pr",
+    "sha": "4558ef2ad9d8257511900bd58bb560b03da911af",
+    "reason": "completed validation workspace; feature source retained",
     "retained_by": {
       "repo": "pponce/homebridge-roborock-matter-plus",
-      "name": "SCHEDULE_PAUSE_DELAY",
-      "sha": "ca145a47bb498e28b4664c49d5f62285492e62dd"
-    },
-    "reason": "completed validation workspace; feature source retained"
-  },
-  {
-    "name": "review-delay/water-tanks-minimal",
-    "new_name": "delete/review-delay/water-tanks-minimal",
-    "sha": "87fe730978161178c3ae62fb53baf5e564549457",
-    "retained_by": {
-      "repo": "pponce/homebridge-roborock-matter-plus",
-      "name": "upstream_plus_SCHEDULE_PAUSE_DELAY",
-      "sha": "30f38c69fb8716594129ff821798b363be6e2112"
-    },
-    "reason": "completed validation workspace; feature source retained"
+      "name": "refill-dock-water-warning"
+    }
   }
 ]
