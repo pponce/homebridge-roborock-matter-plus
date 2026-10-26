@@ -180,4 +180,3 @@ describe("a full dirty-water tank reaches the Home app", () => {
     expect(robot.store.events).toHaveLength(0);
   });
 });
-

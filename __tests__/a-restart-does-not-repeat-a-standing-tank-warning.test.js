@@ -206,4 +206,3 @@ describe("a restart does not repeat a standing tank warning", () => {
     expect(store.events).toHaveLength(1);
   });
 });
-

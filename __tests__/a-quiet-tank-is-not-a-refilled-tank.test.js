@@ -136,10 +136,12 @@ test("battery pushes while docked do not withdraw, then re-raise, the tank fault
   // The original capture has shortage 0. Assert an onboard shortage in this
   // lifecycle test so both supplies are empty under the Matter blocking rule.
   const docked = () =>
-    rocky.push(DOCKED_TANK_EMPTY_1843.map((frame) => ({
-      ...JSON.parse(JSON.stringify(frame)),
-      water_shortage_status: 1,
-    })));
+    rocky.push(
+      DOCKED_TANK_EMPTY_1843.map((frame) => ({
+        ...JSON.parse(JSON.stringify(frame)),
+        water_shortage_status: 1,
+      }))
+    );
   expect(DOCKED_TANK_EMPTY_1843[0]).toMatchObject({
     state: 8,
     dock_error_status: 38,
@@ -178,4 +180,3 @@ test("battery pushes while docked do not withdraw, then re-raise, the tank fault
   );
   expect(raises).toHaveLength(1);
 });
-

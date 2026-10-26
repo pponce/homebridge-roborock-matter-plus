@@ -165,4 +165,3 @@ A Matter-only fork of [`homebridge-roborock-vacuum2`](https://github.com/applema
 <p align="center">
   <sub>Not affiliated with or endorsed by Roborock, Apple, or the Connectivity Standards Alliance. Roborock is a trademark of Beijing Roborock Technology Co., Ltd.</sub>
 </p>
-

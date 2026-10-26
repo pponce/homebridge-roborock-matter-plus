@@ -125,4 +125,3 @@ describe("housekeeping at an idle dock does not repeat a tank warning", () => {
     expect(robot.store.events).toHaveLength(2);
   });
 });
-

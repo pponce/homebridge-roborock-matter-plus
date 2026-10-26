@@ -100,4 +100,3 @@ describe("a standing tank fault survives a spell without live status", () => {
     expect(robot.vacuum.getNumberStatus("in_cleaning")).toBe(0);
   });
 });
-
