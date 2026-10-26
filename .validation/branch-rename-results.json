@@ -194,5 +194,19 @@
     "expected_sha": "81560529180d75f3a4f3af512633d05e0da05ef5",
     "status": "renamed",
     "sha": "81560529180d75f3a4f3af512633d05e0da05ef5"
+  },
+  {
+    "name": "review-delay/water-tanks-combined",
+    "new_name": "delete/review-delay/water-tanks-combined",
+    "expected_sha": "d902a99110141ed3485b5c5b6f19ed34deab9e39",
+    "status": "renamed",
+    "sha": "d902a99110141ed3485b5c5b6f19ed34deab9e39"
+  },
+  {
+    "name": "review-delay/water-tanks-minimal",
+    "new_name": "delete/review-delay/water-tanks-minimal",
+    "expected_sha": "87fe730978161178c3ae62fb53baf5e564549457",
+    "status": "renamed",
+    "sha": "87fe730978161178c3ae62fb53baf5e564549457"
   }
 ]
