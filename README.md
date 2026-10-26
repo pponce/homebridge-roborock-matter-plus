@@ -132,7 +132,7 @@ Everything can be set on the plugin's settings page. The most useful options:
 
 ## Why the robot needs attention
 
-A robot that has stopped because of a problem shows as **Error** in Apple Home instead of Ready, and the plugin tells Apple Home why: stuck, a jammed wheel or brush, a missing or full bin, a dock it cannot reach, a flat battery. An empty clean-water tank shows on the tile as a refill icon on the play button. A robot that can still vacuum is not forced into the Error state just because a tank is empty, and while it charges the tile keeps saying Charging. An error code the plugin does not know is written to the log so it can be [reported](https://github.com/mathiashornbek/homebridge-roborock-matter/issues), and nothing is made up from it.
+A robot that has stopped because of a problem shows as **Error** in Apple Home instead of Ready, and the plugin tells Apple Home why: stuck, a jammed wheel or brush, a missing or full bin, a dock it cannot reach, a flat battery. For a recognised automatic refill dock, the blocking refill warning requires both an onboard water shortage and an empty or missing dock reservoir; either supply reporting water clears that warning. The separate tank sensor still reports the maintenance condition, and vacuum-only use stays available. See [water-tank warnings](docs/water-tank-warnings.md) for the reporting limits and behavior of single-tank robots. An error code the plugin does not know is written to the log so it can be [reported](https://github.com/mathiashornbek/homebridge-roborock-matter/issues), and nothing is made up from it.
 
 ## Battery percentage in Apple Home
 
@@ -165,3 +165,4 @@ A Matter-only fork of [`homebridge-roborock-vacuum2`](https://github.com/applema
 <p align="center">
   <sub>Not affiliated with or endorsed by Roborock, Apple, or the Connectivity Standards Alliance. Roborock is a trademark of Beijing Roborock Technology Co., Ltd.</sub>
 </p>
+
