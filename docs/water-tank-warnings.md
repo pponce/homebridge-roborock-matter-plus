@@ -5,12 +5,12 @@ For a robot with a recognised automatic wash-and-refill dock, the Matter
 empty or missing dock clean-water reservoir. This allows a robot to start its
 normal refill cycle when the dock has water.
 
-| Dock reservoir | Onboard shortage | Blocking clean-water warning |
-| --- | --- | --- |
-| Clear | No | No |
-| Clear | Yes | No |
-| Empty/missing | No | No |
-| Empty/missing | Yes | Yes, for a mode that uses water |
+| Dock reservoir | Onboard shortage | Blocking clean-water warning    |
+| -------------- | ---------------- | ------------------------------- |
+| Clear          | No               | No                              |
+| Clear          | Yes              | No                              |
+| Empty/missing  | No               | No                              |
+| Empty/missing  | Yes              | Yes, for a mode that uses water |
 
 The onboard reading is `water_shortage_status`. The dock reading is
 `dock_error_status: 38` or the clean-water field in `dss`. Missing readings do

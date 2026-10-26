@@ -423,9 +423,9 @@ const DOCK_TYPES_WITHOUT_TANKS: ReadonlySet<number> = new Set([0, 1, 5]);
  * This is a water-supply classification, not a grant of dock commands.
  */
 const DOCK_TYPES_WITH_AUTOMATIC_REFILL: ReadonlySet<number> = new Set([
-  2, 3, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
-  26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44,
-  45, 46, 49,
+  2, 3, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26,
+  27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
+  49,
 ]);
 
 /**
@@ -1383,10 +1383,7 @@ export default class RoborockMatterVacuumAccessory {
    */
   private isMatterWaterSupplyEmpty(): boolean | null {
     const dockType = this.getNumberStatus("dock_type");
-    if (
-      dockType === null ||
-      !DOCK_TYPES_WITH_AUTOMATIC_REFILL.has(dockType)
-    ) {
+    if (dockType === null || !DOCK_TYPES_WITH_AUTOMATIC_REFILL.has(dockType)) {
       return this.isWaterTankEmpty();
     }
 
@@ -1394,8 +1391,7 @@ export default class RoborockMatterVacuumAccessory {
     const dockEmpty =
       this.getNumberStatus("dock_error_status") ===
         DOCK_ERROR_CLEAN_WATER_TANK_EMPTY ||
-      this.getDockTankField(DSS_CLEAN_WATER_SHIFT) ===
-        DSS_TANK_NEEDS_ATTENTION;
+      this.getDockTankField(DSS_CLEAN_WATER_SHIFT) === DSS_TANK_NEEDS_ATTENTION;
 
     return shortage !== null && shortage !== 0 && dockEmpty;
   }
