@@ -131,6 +131,7 @@ class RoborockPlatform {
             debug: debugMode,
             baseURL: baseURL,
             serverURL: this.platformConfig.serverURL,
+            enableLocalServerFastRefresh: this.platformConfig.enableLocalServerFastRefresh === true,
             skipDevices: this.platformConfig.skipDevices,
             enableMatterServiceArea: this.platformConfig.enableMatterServiceArea !== false,
             enableLiveRoomTracking: this.platformConfig.enableLiveRoomTracking !== false,
