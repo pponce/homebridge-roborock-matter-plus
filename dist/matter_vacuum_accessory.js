@@ -227,6 +227,16 @@ const DSS_TANK_NEEDS_ATTENTION = 1;
  */
 const DOCK_TYPES_WITHOUT_TANKS = new Set([0, 1, 5]);
 /**
+ * Known v1 wash-and-fill docks, from python-roborock's RoborockDockTypeCode
+ * and is_wash_n_fill_dock. Unknown codes must not grant refill capability.
+ * This is a water-supply classification, not a grant of dock commands.
+ */
+const DOCK_TYPES_WITH_AUTOMATIC_REFILL = new Set([
+    2, 3, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26,
+    27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
+    49,
+]);
+/**
  * The Matter cluster whose writes have to be ordered by hand. See
  * writeOperationalStateCluster().
  */
@@ -1062,6 +1072,29 @@ class RoborockMatterVacuumAccessory {
         return shortage !== null && shortage !== 0;
     }
     /**
+     * An onboard shortage alone does not block a Matter start when a recognised
+     * refill dock reports no empty/missing clean-water tank. An explicit dock
+     * tank fault still blocks regardless of the onboard shortage flag. Without
+     * a dock reading, keep the existing tank check, including its unknown state.
+     *
+     * The HAP water sensor keeps isWaterTankEmpty() so a dock needing attention
+     * remains visible even when the Matter tile permits a start.
+     */
+    isMatterWaterSupplyEmpty() {
+        const dockType = this.getNumberStatus("dock_type");
+        if (dockType === null || !DOCK_TYPES_WITH_AUTOMATIC_REFILL.has(dockType)) {
+            return this.isWaterTankEmpty();
+        }
+        const dockError = this.getNumberStatus("dock_error_status");
+        const cleanTank = this.getDockTankField(DSS_CLEAN_WATER_SHIFT);
+        if ((dockError !== null || cleanTank !== null) &&
+            dockError !== DOCK_ERROR_CLEAN_WATER_TANK_EMPTY &&
+            cleanTank !== DSS_TANK_NEEDS_ATTENTION) {
+            return false;
+        }
+        return this.isWaterTankEmpty();
+    }
+    /**
      * One 2-bit tank field out of the dock's `dss` word (python-roborock
      * `v1_containers.py`: clean water at bit 2, dirty water at 4, cleaning fluid
      * at 10). 1 means the tank needs attention — empty, full or not fitted,
@@ -1137,7 +1170,7 @@ class RoborockMatterVacuumAccessory {
      */
     getMatterFault() {
         var _a, _b, _c, _d, _e;
-        const tankEmpty = this.isWaterTankEmpty();
+        const tankEmpty = this.isMatterWaterSupplyEmpty();
         if (tankEmpty === true && !this.isVacuumOnlyModeChosen()) {
             return {
                 id: RVC_OPERATIONAL_ERROR.WATER_TANK_EMPTY,
@@ -4153,6 +4186,13 @@ class RoborockMatterVacuumAccessory {
     getBatteryChargeState(battery, chargeStatus, state) {
         if (battery === null) {
             return BATTERY_CHARGE_STATE.UNKNOWN;
+        }
+        // Some robots retain a nonzero charge_status while away from the dock.
+        // Prefer known off-dock states, even at 100%, as the docked sensor does.
+        if (isRoborockOnTheFloorAtRest(state) ||
+            this.isRoborockActivelyCleaningAwayFromDock(state) ||
+            isRoborockHeadingForTheDock(state)) {
+            return BATTERY_CHARGE_STATE.IS_NOT_CHARGING;
         }
         if (state === 100 || (battery >= 100 && chargeStatus !== 0)) {
             return BATTERY_CHARGE_STATE.IS_AT_FULL_CHARGE;
