@@ -70,6 +70,8 @@ jobs:
       - run: npm test -- --coverage --runInBand
         env:
           CI: true
+      - name: Run native schedule tests
+        run: node --test tests/*.test.cjs
       - name: Upload coverage to Codecov
         run: |
           if [ -z "$CODECOV_TOKEN" ]; then
