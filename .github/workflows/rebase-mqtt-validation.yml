@@ -1,0 +1,125 @@
+name: "Validate rebased MQTT tests"
+on:
+  push:
+    branches: ["validation/rebase-3.40.2-mqtt"]
+    paths: [".github/workflows/rebase-mqtt-validation.yml"]
+permissions:
+  contents: write
+jobs:
+  tests:
+    name: "PR ${{ matrix.pr }} / ${{ matrix.label }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: 31
+            ref: "5f78ce2b538b20af31197227b091f987e36e0152"
+            label: "previous-lts"
+            node: "lts/-1"
+          - pr: 31
+            ref: "5f78ce2b538b20af31197227b091f987e36e0152"
+            label: "lts"
+            node: "lts/*"
+          - pr: 31
+            ref: "5f78ce2b538b20af31197227b091f987e36e0152"
+            label: "current"
+            node: "current"
+          - pr: 37
+            ref: "56d67b16946e27ee04a13cf7b197e4e0b6918830"
+            label: "previous-lts"
+            node: "lts/-1"
+          - pr: 37
+            ref: "56d67b16946e27ee04a13cf7b197e4e0b6918830"
+            label: "lts"
+            node: "lts/*"
+          - pr: 37
+            ref: "56d67b16946e27ee04a13cf7b197e4e0b6918830"
+            label: "current"
+            node: "current"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: "npm"
+      - run: npm ci
+      - name: Run tests with coverage
+        id: tests
+        continue-on-error: true
+        run: npm test -- --coverage --runInBand --json --outputFile=rebase-test-results.json
+        env:
+          CI: true
+      - name: Save test summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_REF: ${{ matrix.ref }}
+          TEST_PR: ${{ matrix.pr }}
+          TEST_NODE: ${{ matrix.label }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          const branch = process.env.GITHUB_REF_NAME;
+          if (branch !== "validation/rebase-3.40.2-mqtt") {
+            throw new Error("Unexpected validation branch");
+          }
+          const file = "rebase-test-results.json";
+          const data = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+          const summary = {
+            ref: process.env.TEST_REF,
+            node: process.env.TEST_NODE,
+            nodeVersion: process.version,
+            success: data.success ?? false,
+            reportMissing: !fs.existsSync(file),
+            totalTests: data.numTotalTests,
+            passedTests: data.numPassedTests,
+            failedTests: data.numFailedTests,
+            failedSuites: data.numFailedTestSuites,
+            failures: (data.testResults ?? []).filter(r => r.status === "failed").map(r => ({
+              file: r.name.replace(process.env.GITHUB_WORKSPACE + "/", ""),
+              message: (r.message ?? "").replace(/\u001b\[[0-9;]*m/g, "").slice(0, 20000),
+              assertions: (r.assertionResults ?? []).filter(a => a.status === "failed").map(a => ({
+                name: a.fullName,
+                messages: (a.failureMessages ?? []).map(m => m.replace(/\u001b\[[0-9;]*m/g, "").slice(0, 12000))
+              }))
+            }))
+          };
+          const path = "work/rebase-3.40.2/ci/pr" + process.env.TEST_PR + "-" + process.env.TEST_NODE + ".json";
+          const url = process.env.GITHUB_API_URL + "/repos/" + process.env.GITHUB_REPOSITORY + "/contents/" + path;
+          const headers = {
+            Authorization: "Bearer " + process.env.GH_TOKEN,
+            Accept: "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json"
+          };
+          let saved = false;
+          for (let attempt = 0; attempt < 5; attempt++) {
+            const existing = await fetch(url + "?ref=" + encodeURIComponent(branch), { headers });
+            if (!existing.ok && existing.status !== 404) {
+              throw new Error("Read summary failed: HTTP " + existing.status);
+            }
+            const old = existing.ok ? await existing.json() : {};
+            const response = await fetch(url, {
+              method: "PUT", headers,
+              body: JSON.stringify({
+                message: "Record PR " + process.env.TEST_PR + " validation on " + process.env.TEST_NODE,
+                branch,
+                sha: old.sha,
+                content: Buffer.from(JSON.stringify(summary, null, 2) + "\n").toString("base64")
+              })
+            });
+            if (response.ok) { saved = true; break; }
+            if (response.status !== 409 && response.status !== 422) {
+              throw new Error("Save summary failed: HTTP " + response.status);
+            }
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
+          if (!saved) throw new Error("Could not save summary after concurrent updates");
+          console.log("Saved test summary for PR " + process.env.TEST_PR);
+          NODE
+      - name: Preserve failed test result
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
