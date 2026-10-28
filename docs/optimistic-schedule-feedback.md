@@ -1,11 +1,13 @@
 # Immediate schedule feedback and rollback
 
-A HomeKit schedule write acknowledges acceptance immediately and displays the
-requested value while the existing write/reconciliation operation runs. The
-display is provisional; the cached schedule value remains the latest confirmed
-state. Repeated identical pending taps share one operation. This keeps 3.40's
-HomeKit acknowledgement within its time limit, and adds immediate provisional
-feedback plus persisted confirmation/intent state.
+A HomeKit schedule write keeps upstream's answer window: it acknowledges when
+Roborock accepts the write, or after 2.5 seconds, whichever comes first. A definite
+refusal received before that answer throws `HapStatusError`, so Apple Home keeps
+the confirmed value and receives the failure immediately. After acceptance, the
+requested display is provisional while reconciliation runs; later failures are
+rolled back with an explicit warning. The cached schedule remains the latest
+confirmed state. Repeated identical pending taps share one write and its answer.
+Confirmation and intent are persisted separately from the characteristic.
 
 When confirmation succeeds the requested value becomes confirmed. When it fails
 or the operation reports that it did not execute, the characteristic returns to
@@ -20,7 +22,7 @@ the robot name and switch ConfiguredName/Name available to Homebridge (plus thei
 identifiers), requested and restored values, elapsed milliseconds, and
 the failure reason. It explicitly labels the correction as failure recovery,
 not a user change. A repeat of the failed state during the existing 30-second
-failure cooldown retains the confirmed display and logs suppression.
+failure cooldown retains the confirmed display, returns the HAP error and logs suppression.
 
 A newer opposite-state tap creates a new intent. An older failure cannot replace
 the newer pending display; its warning says that the newer intent was retained.
@@ -34,7 +36,7 @@ the characteristic and log outputs. Apple Home should visibly move back when it
 receives the correction, but actual rendering/latency still needs a live check
 before merge; no screenshot or precise Home UI timing is claimed by these tests.
 
-This follow-up stacks on PR #32 and adds no routine or momentary-action changes.
+This follow-up is based on 3.40.1, which includes PR #32, and adds no routine or momentary-action changes.
 
 ## Restart during a pending change
 

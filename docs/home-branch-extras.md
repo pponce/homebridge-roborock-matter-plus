@@ -1,14 +1,14 @@
-# Home branch additions on 3.40.0
+# Home branch additions on 3.40.1
 
 This inventory describes the current `SCHEDULE_PAUSE_DELAY` build, based on
-upstream **3.40.0 stable**. Earlier inventories mixed active features with
+upstream **3.40.1 stable**. Earlier inventories mixed active features with
 historical proposals and unused helper APIs. The previous inventory remains in
 [Git history](https://github.com/pponce/homebridge-roborock-matter-plus/blob/d42eb597dd79960e3cd4f78319e985ad68c40708/docs/home-branch-extras.md).
 Personal working-plan documents remain in the repository for historical context.
 
 ## Branch roles
 
-- `SCHEDULE_PAUSE_DELAY`: stable upstream, the seven open PRs, native pause/delay,
+- `SCHEDULE_PAUSE_DELAY`: stable upstream, the four remaining open PRs, native pause/delay,
   and the limited home additions described here.
 - `upstream_plus_SCHEDULE_PAUSE_DELAY`: stable upstream plus native pause/delay
   only. It retains upstream's transport and shutdown policies.
@@ -34,7 +34,7 @@ whose readiness deadline expires is not sent or replayed later.
 
 The extra correlated-silence trigger and preventive age refresh remain experimental
 and **off by default**. Keeping them available does not establish a reliability
-benefit over 3.40.0. The upstream PR #31 proposal remains parked pending evidence.
+benefit over 3.40.1. The upstream PR #31 proposal remains parked pending evidence.
 
 Preventive refresh retains its indented minutes field, default 240. It requires
 both recovery options. It uses upstream's fresh-client factory and reconnect
@@ -60,19 +60,17 @@ V1-only silence counting, LAN keep-alives/cloud fallback, transport summaries,
 shutdown/persistence fixes, basic optimistic schedule feedback, #30's correlated
 silence breaker exemption and #42's probe-test correction.
 
-The combined build also includes:
+3.40.1 includes #32 (schedule reconciliation), #36 (retained presence logging)
+and #46 (historical eligible-read evidence). The remaining PR additions are:
 
 | PR  | Remaining scope                                                                  |
 | --- | -------------------------------------------------------------------------------- |
 | #31 | Optional recovery triggers and diagnostics, adapted here to upstream's lifecycle |
-| #32 | Reconcile uncertain schedule writes and share duplicate pending requests         |
-| #36 | Distinguish retained presence snapshots from live changes                        |
 | #37 | Wait for reply readiness without blocking a working LAN route                    |
-| #38 | Persist confirmed schedule state and handle unknown write outcomes               |
+| #38 | Preserve early HAP refusals, persist confirmed state and handle unknown outcomes |
 | #39 | Acknowledge Find/Routine presses promptly and suppress duplicate runs            |
-| #46 | Preserve historical eligible-read evidence across sessions                       |
 
-The extras cleanup changes only this integration branch, not those PRs.
+The remaining PRs are rebased onto 3.40.1. This integration includes #37's caller-budget/LAN-error fixes and #38's early HAP refusal handling.
 
 ## Removed supporting code
 
