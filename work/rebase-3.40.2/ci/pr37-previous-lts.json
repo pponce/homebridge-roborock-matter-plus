@@ -1,0 +1,25 @@
+{
+  "ref": "56d67b16946e27ee04a13cf7b197e4e0b6918830",
+  "node": "previous-lts",
+  "nodeVersion": "v22.23.4",
+  "success": false,
+  "reportMissing": false,
+  "totalTests": 2653,
+  "passedTests": 2652,
+  "failedTests": 1,
+  "failedSuites": 1,
+  "failures": [
+    {
+      "file": "__tests__/messageQueueHandler.test.js",
+      "message": "  ● messageQueueHandler transport selection › uses per-request timeout overrides when sending a request\n\n    expect(jest.fn()).toHaveBeenCalledWith(...expected)\n\n    Expected: Any<Function>, 2000\n    Received: [Function onTimeout], 1999\n\n    Number of calls: 1\n\n      136 |     ).resolves.toEqual([\"ok\"]);\n      137 |\n    > 138 |     expect(adapter.setTimeout).toHaveBeenCalledWith(expect.any(Function), 2000);\n          |                                ^\n      139 |   });\n      140 |\n      141 |   test(\"attempts a local reconnect for preferred-local commands\", async () => {\n\n      at Object.toHaveBeenCalledWith (__tests__/messageQueueHandler.test.js:138:32)\n",
+      "assertions": [
+        {
+          "name": "messageQueueHandler transport selection uses per-request timeout overrides when sending a request",
+          "messages": [
+            "Error: expect(jest.fn()).toHaveBeenCalledWith(...expected)\n\nExpected: Any<Function>, 2000\nReceived: [Function onTimeout], 1999\n\nNumber of calls: 1\n    at Object.toHaveBeenCalledWith (/home/runner/work/homebridge-roborock-matter-plus/homebridge-roborock-matter-plus/__tests__/messageQueueHandler.test.js:138:32)"
+          ]
+        }
+      ]
+    }
+  ]
+}
