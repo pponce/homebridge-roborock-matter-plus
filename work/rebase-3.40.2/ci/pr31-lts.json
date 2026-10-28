@@ -1,0 +1,12 @@
+{
+  "ref": "5f78ce2b538b20af31197227b091f987e36e0152",
+  "node": "lts",
+  "nodeVersion": "v24.22.1",
+  "success": true,
+  "reportMissing": false,
+  "totalTests": 2686,
+  "passedTests": 2686,
+  "failedTests": 0,
+  "failedSuites": 0,
+  "failures": []
+}
