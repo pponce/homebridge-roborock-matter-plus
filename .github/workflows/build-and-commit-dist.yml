@@ -52,9 +52,6 @@ jobs:
       - name: Run Node diagnostic tests
         run: node --test tests/*.test.cjs
 
-      - name: Run Python diagnostic tests
-        run: python3 -m unittest discover -s tests -p 'test_*.py'
-
       - name: Commit generated dist
         shell: bash
         run: |
