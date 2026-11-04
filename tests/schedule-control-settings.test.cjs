@@ -218,14 +218,14 @@ test("schema and markup agree on all-vacuum defaults", () => {
   );
 });
 
-test("preventive refresh defaults to 240 minutes for old or invalid configs", async () => {
+test("preventive refresh defaults to 180 minutes for old or invalid configs", async () => {
   for (const value of [undefined, 0, -1, 1.5, "30", null, true]) {
     const h = harness({ mqttPreventiveRefreshMinutes: value });
     await h.load();
     const input = h.elements.get("mqtt-preventive-refresh-minutes");
-    assert.equal(input.value, "240");
+    assert.equal(input.value, "180");
     assert.equal(input.disabled, true);
-    assert.equal(h.form().mqttPreventiveRefreshMinutes, 240);
+    assert.equal(h.form().mqttPreventiveRefreshMinutes, 180);
   }
 });
 
@@ -286,7 +286,7 @@ test("the interval saves as a number and reloads without saving pending pause/de
   for (const invalid of ["", "0", "-1", "1.5", "not-a-number"]) {
     input.value = invalid;
     await h.save();
-    assert.equal(input.value, "240");
-    assert.equal(h.saved().mqttPreventiveRefreshMinutes, 240);
+    assert.equal(input.value, "180");
+    assert.equal(h.saved().mqttPreventiveRefreshMinutes, 180);
   }
 });

@@ -30,13 +30,12 @@ for LAN-to-cloud retries remain bounded as before. Native HomeKit handlers alrea
 acknowledge presses immediately; the work happens in the background. A request
 whose readiness deadline expires is not sent or replayed later.
 
-## Optional recovery retained for comparison
+## Optional MQTT recovery
 
-The extra correlated-silence trigger and preventive age refresh remain experimental
-and **off by default**. Keeping them available does not establish a reliability
-benefit over 3.40.1. The upstream PR #31 proposal remains parked pending evidence.
+The correlated-silence trigger and preventive age refresh are experimental
+and **off by default**.
 
-Preventive refresh retains its indented minutes field, default 240. It requires
+Preventive refresh retains its indented minutes field, default 180. It requires
 both recovery options. It uses upstream's fresh-client factory and reconnect
 backoff, resets age after successful subscription, and defers while cloud requests,
 map reads, queued schedule writes or complete native schedule operations are busy.

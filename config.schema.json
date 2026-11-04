@@ -324,10 +324,10 @@
       },
       "mqttPreventiveRefreshMinutes": {
         "title": "Preventive refresh interval (minutes)",
-        "description": "Session age before a preventive refresh. Enter whole minutes, at least 1. Default: 240 minutes (4 hours). Requires preventive MQTT refresh and experimental session recovery. Restart the child bridge after changing this setting.",
+        "description": "Session age before a preventive refresh. Enter whole minutes, at least 1. Default: 180 minutes (3 hours). Requires preventive MQTT refresh and experimental session recovery. Restart the child bridge after changing this setting.",
         "type": "integer",
         "minimum": 1,
-        "default": 240
+        "default": 180
       }
     },
     "required": ["email"]

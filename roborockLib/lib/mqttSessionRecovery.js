@@ -1,6 +1,6 @@
 "use strict";
 
-const DEFAULT_PREVENTIVE_REFRESH_MINUTES = 240;
+const DEFAULT_PREVENTIVE_REFRESH_MINUTES = 180;
 const COOLDOWN_MS = 60_000;
 const SILENCE_COOLDOWN_MS = 30 * 60_000;
 const READY_TIMEOUT_MS = 30_000; // 10 s upstream backoff + 20 s for connect/SUBACK.

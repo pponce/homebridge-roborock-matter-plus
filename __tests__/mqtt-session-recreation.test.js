@@ -320,15 +320,15 @@ test.each([
 });
 
 test.each([undefined, 0, -1, 1.5, "60"])(
-  "invalid interval %s keeps the four-hour default",
+  "invalid interval %s keeps the three-hour default",
   async (value) => {
     await restartWith({
       enableMqttSessionRecovery: true,
       enableMqttPreventiveRefresh: true,
       mqttPreventiveRefreshMinutes: value,
     });
-    expect(connector.recovery.preventiveRefreshMinutes).toBe(240);
-    await jest.advanceTimersByTimeAsync(240 * 60000 - 1);
+    expect(connector.recovery.preventiveRefreshMinutes).toBe(180);
+    await jest.advanceTimersByTimeAsync(180 * 60000 - 1);
     expect(mockClients[0].end).not.toHaveBeenCalled();
     await jest.advanceTimersByTimeAsync(1);
     expect(mockClients[0].end).toHaveBeenCalledWith(true);

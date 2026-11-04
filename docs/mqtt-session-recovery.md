@@ -1,9 +1,8 @@
 # Optional MQTT recovery in the home build
 
-This home build is based on **3.40.1 stable**. Upstream already creates a fresh
-client with a random ID on reconnection. The optional recovery layer supplies
-additional triggers and request draining; the connector owns client creation,
-teardown and retry backoff. It does not run a second replacement loop.
+The optional recovery layer supplies additional triggers and request draining.
+The connector owns client creation, teardown and retry backoff, using a fresh
+client with a random ID on reconnection.
 
 `enableMqttSessionRecovery` defaults to false. When enabled, correlated silent
 reads across multiple robots can request a replacement. Upstream's existing
@@ -24,8 +23,8 @@ requests bypass the cloud readiness gate.
 `enableMqttPreventiveRefresh` is separate and defaults to false. It requires
 experimental session recovery to be enabled. The indented **Refresh interval
 (minutes)** field below its checkbox sets `mqttPreventiveRefreshMinutes`.
-The default is **240 minutes (4 hours)**; accepted values are positive whole
-minutes. Invalid saved values fall back to 240. Restart the child bridge after
+The default is **180 minutes (3 hours)**; accepted values are positive whole
+minutes. Invalid saved values fall back to 180. Restart the child bridge after
 changing these settings.
 
 A once-per-minute check compares the age of the ready session with that interval.
