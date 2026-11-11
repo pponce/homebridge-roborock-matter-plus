@@ -1,23 +1,20 @@
-name: "Build and commit dist"
+name: "Validate and publish v3.41.0 home update"
 
 on:
   push:
-    branches-ignore:
-      - main
-      - "review-delay/**"
-    paths-ignore:
-      - "dist/**"
+    branches:
+      - "validation/v3410-minimal-e6d304"
 
 permissions:
   contents: write
 
 concurrency:
   group: "build-dist-${{ github.ref }}"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-and-commit:
-    name: "Test, build, and commit dist"
+    name: "Test, build, and publish home update"
     runs-on: ubuntu-latest
 
     steps:
@@ -52,18 +49,33 @@ jobs:
       - name: Run Node diagnostic tests
         run: node --test tests/*.test.cjs
 
-      - name: Commit generated dist
+      - name: Publish the validated home update
         shell: bash
+        env:
+          TARGET_BRANCH: "upstream_plus_SCHEDULE_PAUSE_DELAY"
+          EXPECTED_HEAD: "d6fae1a6f8d4dca8d62062d2859a1cf260a275a6"
+          RELEASE_HEAD: "36c35800cb46335bdaedc5bc868317b0542942b9"
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          git diff --exit-code -- . ":!dist" ":!.github/workflows/build-and-commit-dist.yml"
           git add -f dist
+          git rm .github/workflows/build-and-commit-dist.yml
 
-          if git diff --cached --quiet -- dist; then
-            echo "dist is already up to date."
-            exit 0
+          current_head="$(git ls-remote --exit-code origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
+          if [ "$current_head" != "$EXPECTED_HEAD" ]; then
+            echo "Target branch changed after validation was prepared; refusing to publish." >&2
+            exit 1
           fi
 
-          git commit -m "Build dist from source"
-          git push
+          tree="$(git write-tree)"
+          commit="$(git commit-tree "$tree" -p "$EXPECTED_HEAD" -p "$RELEASE_HEAD" -m "Integrate v3.41.0 and rebuild native schedule controls")"
+          git merge-base --is-ancestor "$EXPECTED_HEAD" "$commit"
+          git merge-base --is-ancestor "$RELEASE_HEAD" "$commit"
+          git push origin "${commit}:refs/heads/${TARGET_BRANCH}"
+
+          {
+            echo "Published ${TARGET_BRANCH} at ${commit} after all validation steps passed."
+            echo "https://github.com/${GITHUB_REPOSITORY}/commit/${commit}"
+          } >> "$GITHUB_STEP_SUMMARY"
