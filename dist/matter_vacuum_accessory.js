@@ -135,6 +135,23 @@ const ROBOROCK_FAN_POWER_OFF = 105;
 const ROBOROCK_FAN_POWER_BALANCED = 102;
 const ROBOROCK_WATER_BOX_OFF = 200;
 const ROBOROCK_WATER_BOX_MILD = 201;
+const ROBOROCK_SMART_PLAN = {
+    fanPower: 110,
+    waterBoxMode: 209,
+    mopRoute: 306,
+};
+const ROBOROCK_CUSTOM = {
+    fanPower: 106,
+    waterBoxMode: 204,
+    mopRoute: 302,
+};
+const ROBOROCK_ROBOT_CHOSEN_MODES = [ROBOROCK_SMART_PLAN, ROBOROCK_CUSTOM];
+/** The mop route python-roborock sends for every manual clean mode. */
+const ROBOROCK_MOP_ROUTE_STANDARD = 300;
+/** A "Matter publish for …" line with its battery value blanked (#51). */
+function withoutBattery(publishLine) {
+    return publishLine.replace(/battery=[^,]*,/, "battery=,");
+}
 /**
  * Floor on how many DISTINCT live-room observations a room needs before the
  * plugin will call it visited. This is only a floor: the dwell below is what
@@ -1751,6 +1768,14 @@ class RoborockMatterVacuumAccessory {
             this.platform.log.debug(`${line} Unchanged since the last logged line, so it was written but not repeated at info (${reason}).`);
             return;
         }
+        // A change that is only the battery is not a transition (#51): a charging
+        // robot otherwise writes an info line per percent. It goes to debug, and
+        // the next real change carries the current battery to info anyway.
+        if (this.lastLoggedMatterPublishLine !== null &&
+            withoutBattery(line) === withoutBattery(this.lastLoggedMatterPublishLine)) {
+            this.platform.log.debug(`${line} Only the battery changed since the last logged line, so it was not repeated at info (${reason}).`);
+            return;
+        }
         this.lastLoggedMatterPublishLine = line;
         this.platform.log.info(line);
     }
@@ -3039,6 +3064,7 @@ class RoborockMatterVacuumAccessory {
         }
     }
     getRoborockCleanModeSettings(cleanMode) {
+        var _a, _b;
         const capabilities = this.getMatterCleanModeCapabilities();
         // Fan-power variants are vacuum-family modes with a pinned suction
         // level: protocol layers only understand the three base clean types, so
@@ -3049,22 +3075,30 @@ class RoborockMatterVacuumAccessory {
         // a native clean-type concept (B01/Q7) apply it directly and ignore the
         // v1-style fan/water workarounds below.
         const settings = { cleanMode: baseCleanMode };
+        // The robot's current levels are the user's, unless the robot chose them.
+        this.rememberCurrentRoborockCleanModeSettings();
         if (capabilities.canControlFanPower) {
             settings.fanPower = fanPowerMode
                 ? fanPowerMode.fanPower
                 : baseCleanMode === CLEAN_MODE_MOP
                     ? ROBOROCK_FAN_POWER_OFF
-                    : this.getPreferredVacuumFanPower();
+                    : (_a = this.lastVacuumFanPower) !== null && _a !== void 0 ? _a : ROBOROCK_FAN_POWER_BALANCED;
         }
         if (capabilities.canControlWater) {
             settings.waterBoxMode =
                 baseCleanMode === CLEAN_MODE_VACUUM
                     ? ROBOROCK_WATER_BOX_OFF
-                    : this.getPreferredWaterBoxMode();
+                    : (_b = this.lastWaterBoxMode) !== null && _b !== void 0 ? _b : ROBOROCK_WATER_BOX_MILD;
+        }
+        if (this.isOnRobotChosenMopRoute()) {
+            settings.mopRoute = ROBOROCK_MOP_ROUTE_STANDARD;
         }
         return Object.keys(settings).length > 0 ? settings : null;
     }
     rememberCurrentRoborockCleanModeSettings() {
+        if (this.isRobotChoosingItsOwnLevels()) {
+            return;
+        }
         const fanPower = this.getNumberStatus("fan_power");
         if (fanPower !== null && fanPower !== ROBOROCK_FAN_POWER_OFF) {
             this.lastVacuumFanPower = fanPower;
@@ -3074,15 +3108,25 @@ class RoborockMatterVacuumAccessory {
             this.lastWaterBoxMode = waterBoxMode;
         }
     }
-    getPreferredVacuumFanPower() {
-        var _a;
-        const currentFanPower = this.getNumberStatus("fan_power");
-        if (currentFanPower !== null &&
-            currentFanPower !== ROBOROCK_FAN_POWER_OFF) {
-            this.lastVacuumFanPower = currentFanPower;
-            return currentFanPower;
-        }
-        return (_a = this.lastVacuumFanPower) !== null && _a !== void 0 ? _a : ROBOROCK_FAN_POWER_BALANCED;
+    /** In SmartPlan or Custom; see ROBOROCK_ROBOT_CHOSEN_MODES. */
+    isRobotChoosingItsOwnLevels() {
+        return ROBOROCK_ROBOT_CHOSEN_MODES.some((mode) => this.isRobotIn(mode));
+    }
+    /** Any one of the mode's three values means the robot is in it. */
+    isRobotIn(mode) {
+        return (this.getNumberStatus("fan_power") === mode.fanPower ||
+            this.getWaterBoxModeStatus() === mode.waterBoxMode ||
+            this.getNumberStatus("mop_mode") === mode.mopRoute);
+    }
+    /**
+     * Leaving SmartPlan or Custom also means leaving its mop route: the plugin
+     * otherwise never touches `mop_mode`, so a Vacuum + Mop from SmartPlan kept
+     * route 306. Sent only when the robot reports one of those routes, which is
+     * also how a robot without route control is never sent the command.
+     */
+    isOnRobotChosenMopRoute() {
+        const mopRoute = this.getNumberStatus("mop_mode");
+        return ROBOROCK_ROBOT_CHOSEN_MODES.some((mode) => mode.mopRoute === mopRoute);
     }
     /**
      * The water level, from the robot's own `get_status` (`water_box_mode`, also
@@ -3093,16 +3137,6 @@ class RoborockMatterVacuumAccessory {
     getWaterBoxModeStatus() {
         var _a;
         return ((_a = this.getNumberStatus("water_box_mode")) !== null && _a !== void 0 ? _a : this.getNumberStatus("water_box_custom_mode"));
-    }
-    getPreferredWaterBoxMode() {
-        var _a;
-        const currentWaterBoxMode = this.getWaterBoxModeStatus();
-        if (currentWaterBoxMode !== null &&
-            currentWaterBoxMode !== ROBOROCK_WATER_BOX_OFF) {
-            this.lastWaterBoxMode = currentWaterBoxMode;
-            return currentWaterBoxMode;
-        }
-        return (_a = this.lastWaterBoxMode) !== null && _a !== void 0 ? _a : ROBOROCK_WATER_BOX_MILD;
     }
     getCleanModeLabel(cleanMode) {
         const fanPowerMode = this.getFanPowerCleanMode(cleanMode);
