@@ -12,7 +12,7 @@
   <a href="https://www.npmjs.com/package/homebridge-roborock-matter"><img src="https://img.shields.io/npm/v/homebridge-roborock-matter?label=npm&color=cb3837" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/homebridge-roborock-matter"><img src="https://img.shields.io/npm/dt/homebridge-roborock-matter?label=downloads&color=8a5cf5" alt="npm downloads"></a>
   <a href="https://github.com/mathiashornbek/homebridge-roborock-matter/actions"><img src="https://img.shields.io/github/actions/workflow/status/mathiashornbek/homebridge-roborock-matter/nodejs.yml?label=CI" alt="CI status"></a>
-  <img src="https://img.shields.io/badge/node-22%20%7C%2024-brightgreen" alt="Node 22/24">
+  <img src="https://img.shields.io/badge/node-22%20%7C%2024%20%7C%2026-brightgreen" alt="Node 22/24/26">
   <img src="https://img.shields.io/badge/homebridge-1.11%20%7C%202.x-purple" alt="Homebridge 1.11/2.x">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
 </p>
@@ -39,7 +39,7 @@ Pause schedules until the daily reset or indefinitely, delay today's eligible ru
 - 📍 **See where it is cleaning, live.** The Home app says _"Cleaning — Kitchen"_ and follows the robot from room to room, even for cleans started in the Roborock app or on the robot itself.
 - 🧭 **One tidy tile per robot.** No fake fans or helper accessories. Your rooms keep the names you gave them in the Roborock app.
 - ⚡ **Fast and dependable.** Commands go straight to the robot on your own network when they can, with the Roborock cloud as automatic backup.
-- 🛡️ **Verified by Homebridge.** Reviewed by the Homebridge team, 2698 automated tests, no analytics, and it keeps running when the Wi-Fi or the Roborock cloud has a bad day.
+- 🛡️ **Verified by Homebridge.** Reviewed by the Homebridge team, 2784 automated tests, no analytics, and it keeps running when the Wi-Fi or the Roborock cloud has a bad day.
 
 ## What you can do
 
@@ -107,26 +107,27 @@ It is **not the main Homebridge QR code** on the status page, and **not the robo
 
 Everything can be set on the plugin's settings page. The most useful options:
 
-| Option                                  | Default      | What it does                                                                                                                                         |
-| --------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enableMatterServiceArea`               | `true`       | Pick rooms in Apple Home                                                                                                                             |
-| `enableLiveRoomTracking`                | `true`       | Show the room the robot is in right now                                                                                                              |
-| `enableMatterCleanMode`                 | `true`       | Vacuum / Mop / Vacuum + Mop                                                                                                                          |
-| `enableFanPowerCleanModes`              | `true`       | Suction levels in the mode list                                                                                                                      |
-| `enableMatterExtendedOperationalStates` | `true`       | Show returning, emptying the bin and washing the mop                                                                                                 |
-| `enableMatterChargingDockedStates`      | `true`       | Say Charging or Docked instead of Ready on the dock                                                                                                  |
-| `enableMatterFaultReporting`            | `true`       | Show a robot that has stopped with a problem as Error ([details](#why-the-robot-needs-attention))                                                    |
-| `enableMatterTankFaultReporting`        | `true`       | Say what the problem is, such as an empty water tank                                                                                                 |
-| `enableHomeKitActionSwitches`           | `false`      | Add the switches                                                                                                                                     |
-| `homeKitActionSwitches`                 | `["dock"]`   | Which switches: `clean`, `dock`, `empty`, `pause`, `locate`                                                                                          |
-| `enableHomeKitStateSensors`             | `false`      | Add the sensors                                                                                                                                      |
-| `homeKitStateSensors`                   | `["docked"]` | Which sensors: `docked`, `cleaning`, `waterTankEmpty`, `dirtyWaterTankFull`, `cleaningFluidEmpty`                                                    |
-| `enableHomeKitScheduleSwitches`         | `false`      | Add the schedule switches                                                                                                                            |
-| `enableHomeKitRoutineSwitches`          | `false`      | Add the Routine switches                                                                                                                             |
-| `cloudOnlyMode`                         | `false`      | Use only the Roborock cloud, never your local network                                                                                                |
-| `enableLocalServerFastRefresh`          | `false`      | Experimental faster status, live maps and device settings for a self-hosted server ([intervals and test guide](./docs/local-server-fast-refresh.md)) |
-| `skipDevices`                           |              | Robots the plugin should leave alone                                                                                                                 |
-| `transientWarningThrottleHours`         | `1`          | How often a recurring connection warning may repeat (0 = debug log only)                                                                             |
+| Option                                  | Default      | What it does                                                                                          |
+| --------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------- |
+| `enableMatterServiceArea`               | `true`       | Pick rooms in Apple Home                                                                              |
+| `enableLiveRoomTracking`                | `true`       | Show the room the robot is in right now                                                               |
+| `enableMatterCleanMode`                 | `true`       | Vacuum / Mop / Vacuum + Mop                                                                           |
+| `enableFanPowerCleanModes`              | `true`       | Suction levels in the mode list                                                                       |
+| `matterHiddenCleanModes`                | `[]`         | Modes Siri and Apple Home are not offered: `mop`, `vacuumAndMop` (re-add the robot after)             |
+| `enableMatterExtendedOperationalStates` | `true`       | Show returning, emptying the bin and washing the mop                                                  |
+| `enableMatterChargingDockedStates`      | `true`       | Say Charging or Docked instead of Ready on the dock                                                   |
+| `enableMatterFaultReporting`            | `true`       | Show a robot that has stopped with a problem as Error ([details](#why-the-robot-needs-attention))     |
+| `enableMatterTankFaultReporting`        | `true`       | Say what the problem is, such as an empty water tank                                                  |
+| `enableHomeKitActionSwitches`           | `false`      | Add the switches                                                                                      |
+| `homeKitActionSwitches`                 | `["dock"]`   | Which switches: `clean`, `dock`, `empty`, `pause`, `locate`                                           |
+| `enableHomeKitStateSensors`             | `false`      | Add the sensors                                                                                       |
+| `homeKitStateSensors`                   | `["docked"]` | Which sensors: `docked`, `cleaning`, `waterTankEmpty`, `dirtyWaterTankFull`, `cleaningFluidEmpty`     |
+| `enableHomeKitScheduleSwitches`         | `false`      | Add the schedule switches                                                                             |
+| `enableHomeKitRoutineSwitches`          | `false`      | Add the Routine switches                                                                              |
+| `cloudOnlyMode`                         | `false`      | Use only the Roborock cloud, never your local network                                                 |
+| `enableLocalServerFastRefresh`          | `false`      | Faster status and live maps for a self-hosted server ([details](./docs/local-server-fast-refresh.md)) |
+| `skipDevices`                           |              | Robots the plugin should leave alone                                                                  |
+| `transientWarningThrottleHours`         | `1`          | How often a recurring connection warning may repeat (0 = debug log only)                              |
 
 > ⚠️ Options that change what a robot can do in Apple Home (modes, rooms, states) need the robot removed from Apple Home and added again. **Before you turn suction levels off, select Vacuum, Mop or Vacuum + Mop on the tile**, or Matter refuses to bring the robot back. [The details](./docs/matter-clean-mode-shrink-issue-draft.md).
 
@@ -154,7 +155,7 @@ If the plugin makes your home a little smarter, a small donation via [PayPal](ht
 
 ## Contributing
 
-Model reports, diagnostics reports and pull requests are welcome. The code has 2698 tests, strict TypeScript and CI on Node 22 and 24 with Homebridge 1.11 and 2.x; run `npm test` before you push. Every change is described in the [changelog](./CHANGELOG.md).
+Model reports, diagnostics reports and pull requests are welcome. The code has 2784 tests, strict TypeScript and CI on Node 22, 24 and 26 with Homebridge 1.11 and 2.x; run `npm test` before you push. Every change is described in the [changelog](./CHANGELOG.md).
 
 ## Attribution
 
