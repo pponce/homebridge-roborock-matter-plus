@@ -386,3 +386,12 @@ test("slow status reads coalesce per robot, including forced reads, and release 
   await robot.getParameter("one", "get_status", "force");
   expect(api.messageQueueHandler.sendRequest).toHaveBeenCalledTimes(3);
 });
+
+test("a failed status request releases the per-robot guard", async () => {
+  const api = makeApi();
+  const robot = statusRobot(api);
+  api.messageQueueHandler.sendRequest.mockRejectedValueOnce(new Error("offline"));
+  await robot.getParameter("one", "get_status", "state");
+  await robot.getParameter("one", "get_status", "force");
+  expect(api.messageQueueHandler.sendRequest).toHaveBeenCalledTimes(2);
+});

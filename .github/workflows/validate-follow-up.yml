@@ -22,8 +22,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          npx prettier --write __tests__/local-server-fast-refresh.test.js __tests__/mqtt-session-observations.test.js homebridge-ui/public/index.js roborockLib/lib/vacuum.js
-          git add __tests__/local-server-fast-refresh.test.js __tests__/mqtt-session-observations.test.js homebridge-ui/public/index.js roborockLib/lib/vacuum.js
+          npx prettier --write __tests__/a-custom-server-is-used-for-login.test.js __tests__/command-refresh-stays-out-of-the-callers-budget.test.js __tests__/local-server-fast-refresh.test.js __tests__/mqtt-session-observations.test.js homebridge-ui/public/index.js roborockLib/lib/vacuum.js
+          git add __tests__/a-custom-server-is-used-for-login.test.js __tests__/command-refresh-stays-out-of-the-callers-budget.test.js __tests__/local-server-fast-refresh.test.js __tests__/mqtt-session-observations.test.js homebridge-ui/public/index.js roborockLib/lib/vacuum.js
           git rm .github/workflows/validate-follow-up.yml
           tree=$(git write-tree)
           if (npm run lint && npm run typecheck && npm run build && npm test -- --runInBand) > validation-result.txt 2>&1; then
