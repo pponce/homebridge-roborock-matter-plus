@@ -1,0 +1,39 @@
+name: Validate follow-up
+on:
+  push:
+    branches: ["validation/mqtt-readiness-follow-up-nov14"]
+    paths-ignore: ["validation-result.txt"]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Format, test, and publish
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npx prettier --write __tests__/matter-vacuum.test.js __tests__/ordinary-mqtt-readiness.test.js __tests__/refused-sends-are-not-plugin-errors.test.js roborockLib/lib/messageQueueHandler.js src/matter_vacuum_accessory.ts
+          git add __tests__/matter-vacuum.test.js __tests__/ordinary-mqtt-readiness.test.js __tests__/refused-sends-are-not-plugin-errors.test.js roborockLib/lib/messageQueueHandler.js src/matter_vacuum_accessory.ts
+          git rm .github/workflows/validate-follow-up.yml
+          tree=$(git write-tree)
+          if (npm run lint && npm run typecheck && npm run build && npm test -- --runInBand) > validation-result.txt 2>&1; then
+            commit=$(git commit-tree "$tree" -p "ecf90fae65b7a4a95b8c3a8bff58f1603f7d065a" -m "Preserve Locate fallback and require useful cloud response time")
+            git push origin "$commit:refs/heads/mqtt-readiness-follow-up"
+          else
+            git reset --hard HEAD
+            git add -f validation-result.txt
+            git commit -m "Record validation failure"
+            git push origin HEAD
+            cat validation-result.txt
+            exit 1
+          fi

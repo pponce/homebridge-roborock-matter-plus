@@ -373,7 +373,7 @@ class messageQueueHandler {
       Object.assign(
         refusal(
           "cloud unavailable",
-          "The command budget expired before publication; this request was not sent."
+          "The command budget has less than one second left for a reply; this request was not sent."
         ),
         { requestNotSent: true, unansweredRequest: false }
       );
@@ -618,7 +618,7 @@ class messageQueueHandler {
 
     if (useCloudConnection && deadline !== undefined) {
       const remaining = deadline - Date.now();
-      if (remaining <= 0) {
+      if (remaining < 1000) {
         this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
         throw budgetExpired();
       }
@@ -852,7 +852,7 @@ class messageQueueHandler {
         const responseTimeout = explicitBudget
           ? retryTimeout - (Date.now() - readinessStartedAt)
           : retryTimeout;
-        if (!frame || responseTimeout <= 0) {
+        if (!frame || (explicitBudget && responseTimeout < 1000)) {
           throw localError;
         }
         return await this.exchangeOverCloud(
