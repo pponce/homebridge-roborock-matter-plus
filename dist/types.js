@@ -1,8 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.HOMEKIT_STATE_SENSOR_KEYS = exports.HOMEKIT_ACTION_KEYS = void 0;
+exports.MATTER_HIDEABLE_CLEAN_MODE_KEYS = exports.HOMEKIT_STATE_SENSOR_KEYS = exports.HOMEKIT_ACTION_KEYS = void 0;
 exports.isHomeKitActionKey = isHomeKitActionKey;
 exports.isHomeKitStateSensorKey = isHomeKitStateSensorKey;
+exports.isMatterHideableCleanModeKey = isMatterHideableCleanModeKey;
 /**
  * The actions the optional HAP switches can perform.
  *
@@ -52,5 +53,20 @@ exports.HOMEKIT_STATE_SENSOR_KEYS = [
 function isHomeKitStateSensorKey(value) {
     return (typeof value === "string" &&
         exports.HOMEKIT_STATE_SENSOR_KEYS.includes(value));
+}
+/**
+ * The clean modes a user may leave out of the list Apple Home is offered
+ * (`matterHiddenCleanModes`).
+ *
+ * Asked for in #50: Siri picks a clean mode by itself — the plugin's log shows
+ * the mode request arriving just before the start — and on one German Q Revo it
+ * picked Vacuum + Mop whatever was said. A mode that is not offered cannot be
+ * picked. Vacuum is not on the list: it is the mode everything falls back to,
+ * and Matter needs at least one.
+ */
+exports.MATTER_HIDEABLE_CLEAN_MODE_KEYS = ["mop", "vacuumAndMop"];
+function isMatterHideableCleanModeKey(value) {
+    return (typeof value === "string" &&
+        exports.MATTER_HIDEABLE_CLEAN_MODE_KEYS.includes(value));
 }
 //# sourceMappingURL=types.js.map

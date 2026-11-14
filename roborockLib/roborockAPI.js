@@ -6698,10 +6698,9 @@ class Roborock {
     }
     if (
       Date.now() - liveState.lastAttemptAt <
-      liveRoomFetchGapMs(
-        liveState.consecutiveFailures,
-        this.getRequestPolicy().liveMapGapMs
-      )
+      // Not the local-server preset's shorter gap (#48): a Q7's fallback
+      // request uploads its saved map, which carries no live position.
+      liveRoomFetchGapMs(liveState.consecutiveFailures)
     ) {
       return liveState.current;
     }
