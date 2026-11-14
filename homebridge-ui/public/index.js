@@ -60,6 +60,10 @@ const elements = {
   matterChargedBatteryThreshold: document.getElementById(
     "matter-charged-battery-threshold"
   ),
+  matterHideCleanModeMop: document.getElementById("matter-hide-clean-mode-mop"),
+  matterHideCleanModeVacuumAndMop: document.getElementById(
+    "matter-hide-clean-mode-vacuum-and-mop"
+  ),
   advancedSettings: document.getElementById("advanced-settings"),
   preferCloudForMatterCommands: document.getElementById(
     "prefer-cloud-for-matter-commands"
@@ -134,6 +138,14 @@ const STATE_SENSOR_ELEMENTS = {
   waterTankEmpty: () => elements.homeKitStateWaterTankEmpty,
   dirtyWaterTankFull: () => elements.homeKitStateDirtyWaterTankFull,
   cleaningFluidEmpty: () => elements.homeKitStateCleaningFluidEmpty,
+};
+
+// Kept in the same order as MATTER_HIDEABLE_CLEAN_MODE_KEYS in src/types.ts,
+// for the same reason as above. Vacuum is not here: it cannot be hidden.
+const HIDDEN_CLEAN_MODE_KEYS = ["mop", "vacuumAndMop"];
+const HIDDEN_CLEAN_MODE_ELEMENTS = {
+  mop: () => elements.matterHideCleanModeMop,
+  vacuumAndMop: () => elements.matterHideCleanModeVacuumAndMop,
 };
 
 function showToast(type, message) {
@@ -239,6 +251,7 @@ async function loadConfig() {
     }
     applyActionSwitchSelection(readActionSwitchSelection(config));
     applyStateSensorSelection(readStateSensorSelection(config));
+    applyHiddenCleanModeSelection(readHiddenCleanModeSelection(config));
     if (elements.homeKitActionSchedules) {
       elements.homeKitActionSchedules.checked = Boolean(
         config.enableHomeKitScheduleSwitches
@@ -501,6 +514,12 @@ async function describeEnabledMatterFeatures() {
     ["cleanMode", config.enableMatterCleanMode !== false],
     ["powerSource", config.enableMatterPowerSource !== false],
     ["fanPowerCleanModes", config.enableFanPowerCleanModes !== false],
+    // Named only while it hides something from a mode list that exists.
+    [
+      `hiddenCleanModes(${readHiddenCleanModeSelection(config).join("+")})`,
+      config.enableMatterCleanMode !== false &&
+        readHiddenCleanModeSelection(config).length > 0,
+    ],
     [
       "extendedOperationalStates",
       config.enableMatterExtendedOperationalStates !== false,
@@ -572,6 +591,13 @@ function hasUnsavedMatterFeatureEdits(config) {
   if (
     getStateSensorSelection().join(",") !==
     readStateSensorSelection(config).join(",")
+  ) {
+    return true;
+  }
+
+  if (
+    getHiddenCleanModeSelection().join(",") !==
+    readHiddenCleanModeSelection(config).join(",")
   ) {
     return true;
   }
@@ -677,6 +703,38 @@ function getStateSensorSelection() {
 function applyStateSensorSelection(selection) {
   STATE_SENSOR_KEYS.forEach((key) => {
     const element = STATE_SENSOR_ELEMENTS[key]();
+    if (element) {
+      element.checked = selection.includes(key);
+    }
+  });
+}
+
+/**
+ * The clean modes the SAVED config hides from Apple Home.
+ *
+ * Reads the config only, for the same reason readActionSwitchSelection does.
+ * Absent and `[]` mean the same here — nothing hidden — so, unlike the two
+ * lists above, an empty selection is a fine thing to save.
+ */
+function readHiddenCleanModeSelection(config) {
+  const saved = config?.matterHiddenCleanModes;
+  if (!Array.isArray(saved)) {
+    return [];
+  }
+
+  return HIDDEN_CLEAN_MODE_KEYS.filter((key) => saved.includes(key));
+}
+
+/** The clean modes the form currently hides. */
+function getHiddenCleanModeSelection() {
+  return HIDDEN_CLEAN_MODE_KEYS.filter((key) =>
+    Boolean(HIDDEN_CLEAN_MODE_ELEMENTS[key]()?.checked)
+  );
+}
+
+function applyHiddenCleanModeSelection(selection) {
+  HIDDEN_CLEAN_MODE_KEYS.forEach((key) => {
+    const element = HIDDEN_CLEAN_MODE_ELEMENTS[key]();
     if (element) {
       element.checked = selection.includes(key);
     }
@@ -882,6 +940,7 @@ function getFormValues() {
       elements.enableHomeKitStateSensors?.checked
     ),
     homeKitStateSensors: getSavedStateSensorSelection(),
+    matterHiddenCleanModes: getHiddenCleanModeSelection(),
     enableHomeKitScheduleSwitches: Boolean(
       elements.homeKitActionSchedules?.checked
     ),

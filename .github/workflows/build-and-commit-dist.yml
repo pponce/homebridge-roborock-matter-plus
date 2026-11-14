@@ -1,0 +1,81 @@
+name: "Validate and publish v3.41.1 home update"
+
+on:
+  push:
+    branches:
+      - "validation/v3411-minimal-e6d304"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "build-dist-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  build-and-commit:
+    name: "Test, build, and publish home update"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test -- --runInBand
+        env:
+          CI: true
+
+      - name: Run Node diagnostic tests
+        run: node --test tests/*.test.cjs
+
+      - name: Publish the validated home update
+        shell: bash
+        env:
+          TARGET_BRANCH: "upstream_plus_SCHEDULE_PAUSE_DELAY"
+          EXPECTED_HEAD: "8732dffbfd0d09e882989ef963a3ba4d869461c2"
+          RELEASE_HEAD: "4c405d6fd4b06ba319d1377f30b0c0d630a31dd3"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git diff --exit-code -- . ":!dist" ":!.github/workflows/build-and-commit-dist.yml"
+          git add -f dist
+          git rm .github/workflows/build-and-commit-dist.yml
+
+          current_head="$(git ls-remote --exit-code origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
+          if [ "$current_head" != "$EXPECTED_HEAD" ]; then
+            echo "Target branch changed after validation was prepared; refusing to publish." >&2
+            exit 1
+          fi
+
+          tree="$(git write-tree)"
+          commit="$(git commit-tree "$tree" -p "$EXPECTED_HEAD" -p "$RELEASE_HEAD" -m "Integrate v3.41.1 and rebuild native schedule controls")"
+          git merge-base --is-ancestor "$EXPECTED_HEAD" "$commit"
+          git merge-base --is-ancestor "$RELEASE_HEAD" "$commit"
+          git push origin "${commit}:refs/heads/${TARGET_BRANCH}"
+
+          {
+            echo "Published ${TARGET_BRANCH} at ${commit} after all validation steps passed."
+            echo "https://github.com/${GITHUB_REPOSITORY}/commit/${commit}"
+          } >> "$GITHUB_STEP_SUMMARY"
