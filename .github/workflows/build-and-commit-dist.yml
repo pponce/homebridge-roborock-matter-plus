@@ -1,23 +1,20 @@
-name: "Build and commit dist"
+name: "Validate and publish v3.41.1 follow-ups home update"
 
 on:
   push:
-    branches-ignore:
-      - main
-      - "review-delay/**"
-    paths-ignore:
-      - "dist/**"
+    branches:
+      - "validation/follow-up-full-nov14"
 
 permissions:
   contents: write
 
 concurrency:
   group: "build-dist-${{ github.ref }}"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build-and-commit:
-    name: "Test, build, and commit dist"
+    name: "Test, build, and publish home update"
     runs-on: ubuntu-latest
 
     steps:
@@ -34,6 +31,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Format changed files
+        run: npx prettier --write __tests__/a-custom-server-is-used-for-login.test.js __tests__/command-refresh-stays-out-of-the-callers-budget.test.js __tests__/local-server-fast-refresh.test.js __tests__/matter-vacuum.test.js __tests__/mqtt-session-observations.test.js __tests__/ordinary-mqtt-readiness.test.js __tests__/refused-sends-are-not-plugin-errors.test.js homebridge-ui/public/index.js roborockLib/lib/messageQueueHandler.js roborockLib/lib/vacuum.js src/matter_vacuum_accessory.ts
 
       - name: Check formatting
         run: npm run lint
@@ -55,18 +55,34 @@ jobs:
       - name: Run Python diagnostic tests
         run: python3 -m unittest discover -s tests -p 'test_*.py'
 
-      - name: Commit generated dist
+      - name: Publish the validated home update
         shell: bash
+        env:
+          TARGET_BRANCH: "SCHEDULE_PAUSE_DELAY"
+          EXPECTED_HEAD: "743de6671e82e0896ca643cd38fb8cc4dda04f05"
+          RELEASE_HEAD: "4c405d6fd4b06ba319d1377f30b0c0d630a31dd3"
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+          git add __tests__/a-custom-server-is-used-for-login.test.js __tests__/command-refresh-stays-out-of-the-callers-budget.test.js __tests__/local-server-fast-refresh.test.js __tests__/matter-vacuum.test.js __tests__/mqtt-session-observations.test.js __tests__/ordinary-mqtt-readiness.test.js __tests__/refused-sends-are-not-plugin-errors.test.js homebridge-ui/public/index.js roborockLib/lib/messageQueueHandler.js roborockLib/lib/vacuum.js src/matter_vacuum_accessory.ts
           git add -f dist
+          git show "${EXPECTED_HEAD}:.github/workflows/build-and-commit-dist.yml" > .github/workflows/build-and-commit-dist.yml
+          git add .github/workflows/build-and-commit-dist.yml
 
-          if git diff --cached --quiet -- dist; then
-            echo "dist is already up to date."
-            exit 0
+          current_head="$(git ls-remote --exit-code origin "refs/heads/${TARGET_BRANCH}" | cut -f1)"
+          if [ "$current_head" != "$EXPECTED_HEAD" ]; then
+            echo "Target branch changed after validation was prepared; refusing to publish." >&2
+            exit 1
           fi
 
-          git commit -m "Build dist from source"
-          git push
+          tree="$(git write-tree)"
+          commit="$(git commit-tree "$tree" -p "$EXPECTED_HEAD" -p "$RELEASE_HEAD" -m "Integrate v3.41.1 follow-ups and rebuild native schedule controls")"
+          git merge-base --is-ancestor "$EXPECTED_HEAD" "$commit"
+          git merge-base --is-ancestor "$RELEASE_HEAD" "$commit"
+          git push origin "${commit}:refs/heads/${TARGET_BRANCH}"
+
+          {
+            echo "Published ${TARGET_BRANCH} at ${commit} after all validation steps passed."
+            echo "https://github.com/${GITHUB_REPOSITORY}/commit/${commit}"
+          } >> "$GITHUB_STEP_SUMMARY"
