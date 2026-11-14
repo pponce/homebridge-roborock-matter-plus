@@ -369,6 +369,7 @@ class messageQueueHandler {
       Number.isFinite(explicitTimeout) && explicitTimeout > 0
         ? Date.now() + getRequestTimeout(method, explicitTimeout)
         : undefined;
+    let waitedForReadiness = false;
     const budgetExpired = () =>
       Object.assign(
         refusal(
@@ -586,6 +587,7 @@ class messageQueueHandler {
         const remaining =
           deadline === undefined ? 10000 : deadline - Date.now();
         if (remaining <= 0) throw budgetExpired();
+        waitedForReadiness = this.adapter.rr_mqtt_connector.isReady?.() === false;
         await this.adapter.rr_mqtt_connector.waitUntilReady?.({
           timeoutMs: Math.min(10000, remaining),
         });
@@ -618,7 +620,7 @@ class messageQueueHandler {
 
     if (useCloudConnection && deadline !== undefined) {
       const remaining = deadline - Date.now();
-      if (remaining < 1000) {
+      if (remaining <= 0 || (waitedForReadiness && remaining < 1000)) {
         this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
         throw budgetExpired();
       }
@@ -820,6 +822,7 @@ class messageQueueHandler {
         );
         this.adapter.noteTransportOutcome?.(duid, "local", "retried");
         const readinessStartedAt = Date.now();
+        const waitedForReadiness = this.adapter.rr_mqtt_connector.isReady?.() === false;
         const explicitBudget =
           Number.isFinite(Number(options.requestTimeoutMs)) &&
           Number(options.requestTimeoutMs) > 0;
@@ -852,7 +855,7 @@ class messageQueueHandler {
         const responseTimeout = explicitBudget
           ? retryTimeout - (Date.now() - readinessStartedAt)
           : retryTimeout;
-        if (!frame || (explicitBudget && responseTimeout < 1000)) {
+        if (!frame || responseTimeout <= 0 || (explicitBudget && waitedForReadiness && responseTimeout < 1000)) {
           throw localError;
         }
         return await this.exchangeOverCloud(

@@ -57,12 +57,12 @@ function renderTemplate(template) {
  */
 function collectRefusals() {
   const source = fs.readFileSync(MESSAGE_QUEUE_HANDLER_SOURCE, "utf8");
-  const tagged = /refusal\(\s*"([^"]+)",\s*[`"]([^`"]*)[`"]/g;
+  const tagged = /refusal\(\s*"([^"]+)",\s*(?:`([^`]*)`|"([^"]*)")/g;
   const refusals = [];
   let match;
 
   while ((match = tagged.exec(source)) !== null) {
-    refusals.push({ kind: match[1], message: renderTemplate(match[2]) });
+    refusals.push({ kind: match[1], message: renderTemplate(match[2] ?? match[3]) });
   }
 
   return refusals;
@@ -349,7 +349,7 @@ test("readiness and budget refusals are all included in calm logging coverage", 
   expect(errors).toHaveLength(4);
   for (const error of errors) {
     expect(error.unansweredRequest).toBe(false);
-    expect(api.getTransientErrorKind(error)).toBe("cloud unavailable");
+    expect(error.transientKind).toBe("cloud unavailable");
     await api.catchError(error, "get_status", "device-1");
   }
   expect(api.log.error).not.toHaveBeenCalled();

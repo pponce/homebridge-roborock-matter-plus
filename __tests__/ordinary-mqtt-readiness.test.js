@@ -590,6 +590,6 @@ test("Locate can use healthy cloud after a four-second LAN negotiation failure",
   const { result, id } = await startRequest("robot-a", "find_me", { preferLocal: true, requestTimeoutMs: 6500 });
   await jest.advanceTimersByTimeAsync(4000);
   expect(mockClients[0].publish).toHaveBeenCalledTimes(1);
-  receive(reply(id));
+  receive(reply(requestId));
   expect(await result).toEqual(["ok"]);
 });
