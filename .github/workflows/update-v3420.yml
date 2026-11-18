@@ -1,0 +1,73 @@
+name: Update and validate v3.42.0
+on:
+  push:
+    branches: ["validation/v3420-nov18"]
+permissions:
+  contents: write
+jobs:
+  update:
+    strategy:
+      fail-fast: false
+      matrix:
+        include: [{"branch":"local-refresh-follow-up","expected":"21c4b3315e3b8bae8e5e54fab483a85f34134c2d","mode":"pr","label":"pr54"},{"branch":"mqtt-readiness-follow-up","expected":"e6fca56f8bc3e4e03403dac33d632710573ddfc9","mode":"pr","label":"pr53"},{"branch":"mqtt-session-recreation","expected":"e2032b3b7294a08edcb10890d2074c83d7999ec8","mode":"pr","label":"pr31"},{"branch":"momentary-action-acknowledgement","expected":"761ca175a7a0a87aba5469162e53293c2172c7f9","mode":"pr","label":"pr39"},{"branch":"schedule-optimistic-feedback","expected":"dce5a4639f48157de564e5a384749fa72365e0c6","mode":"pr","label":"pr38"},{"branch":"upstream_plus_SCHEDULE_PAUSE_DELAY","expected":"3136aa5cd8038020f70bb5f535b36b32cbdf661b","mode":"home","label":"minimal"},{"branch":"SCHEDULE_PAUSE_DELAY","expected":"eefcec1fa61d79cdc2a94330226404997a4f44fa","mode":"home","label":"full"}]
+    runs-on: ubuntu-latest
+    name: ${{ matrix.label }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.expected }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Integrate, validate, and publish
+        env:
+          TARGET: ${{ matrix.branch }}
+          EXPECTED: ${{ matrix.expected }}
+          MODE: ${{ matrix.mode }}
+        shell: bash
+        run: |
+          exec > >(tee "$RUNNER_TEMP/validation.txt") 2>&1
+          git config user.name pponce
+          git config user.email pponce@users.noreply.github.com
+          git fetch https://github.com/mathiashornbek/homebridge-roborock-matter.git refs/tags/v3.42.0
+          release=$(git rev-parse FETCH_HEAD^{commit})
+          test "$release" = "9b7dafae4416dcb0ffa921b90d30641567ddb1bf"
+          if [ "$MODE" = pr ]; then
+            git rebase --onto "$release" "$(git merge-base HEAD "$release")"
+          else
+            git merge --no-edit "$release"
+          fi
+          git merge-base --is-ancestor "$release" HEAD
+          npm ci
+          npm run lint
+          npm run typecheck
+          npm run build
+          npm test -- --runInBand
+          if [ "$MODE" = home ]; then
+            node --test tests/*.test.cjs
+            if [ "$TARGET" = SCHEDULE_PAUSE_DELAY ]; then
+              python3 -m unittest discover -s tests -p 'test_*.py'
+            fi
+            git add -f dist
+            if ! git diff --cached --quiet; then git commit -m "Rebuild compiled files for v3.42.0"; fi
+            test "$(git ls-remote origin "refs/heads/$TARGET" | cut -f1)" = "$EXPECTED"
+            git push origin "HEAD:refs/heads/$TARGET"
+          else
+            git push --force-with-lease="refs/heads/$TARGET:$EXPECTED" origin "HEAD:refs/heads/$TARGET"
+          fi
+          echo "PUBLISHED $(git rev-parse HEAD)"
+      - name: Publish validation report
+        if: always()
+        env:
+          LABEL: ${{ matrix.label }}
+        shell: bash
+        run: |
+          git config user.name pponce
+          git config user.email pponce@users.noreply.github.com
+          git diff --cc >> "$RUNNER_TEMP/validation.txt"
+          blob=$(git hash-object -w "$RUNNER_TEMP/validation.txt")
+          tree=$(printf "100644 blob %s\tvalidation.txt\n" "$blob" | git mktree)
+          commit=$(git commit-tree "$tree" -m "Validation report for $LABEL")
+          git push origin "$commit:refs/heads/validation/v3420-report-$LABEL"
