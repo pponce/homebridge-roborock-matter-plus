@@ -1923,7 +1923,12 @@ class RoborockMatterVacuumAccessory {
             return;
         }
         try {
-            await findMe.call(this.api, this.getDuid(), this.getMatterCommandOptions());
+            await findMe.call(this.api, this.getDuid(), {
+                ...this.getMatterCommandOptions(),
+                // Locate/Identify await this operation. Keep readiness plus reply
+                // within HomeKit's response window, like clean-mode selections.
+                requestTimeoutMs: 2500,
+            });
         }
         catch (error) {
             this.platform.log.warn(`Unable to locate ${this.getVacuumName()} from ${surfacePhrase(surface)} identify: ${this.getErrorMessage(error)}`);
