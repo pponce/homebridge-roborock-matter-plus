@@ -1,0 +1,641 @@
+From https://github.com/mathiashornbek/homebridge-roborock-matter
+ * tag               v3.42.0    -> FETCH_HEAD
+Auto-merging README.md
+Auto-merging __tests__/matter-vacuum.test.js
+CONFLICT (content): Merge conflict in __tests__/matter-vacuum.test.js
+Auto-merging __tests__/mqtt-session-observations.test.js
+Auto-merging __tests__/ordinary-mqtt-readiness.test.js
+CONFLICT (add/add): Merge conflict in __tests__/ordinary-mqtt-readiness.test.js
+Auto-merging docs/mqtt-send-readiness.md
+CONFLICT (add/add): Merge conflict in docs/mqtt-send-readiness.md
+Auto-merging roborockLib/lib/messageQueueHandler.js
+CONFLICT (content): Merge conflict in roborockLib/lib/messageQueueHandler.js
+Auto-merging roborockLib/lib/roborock_mqtt_connector.js
+CONFLICT (content): Merge conflict in roborockLib/lib/roborock_mqtt_connector.js
+Auto-merging roborockLib/roborockAPI.js
+CONFLICT (content): Merge conflict in roborockLib/roborockAPI.js
+Auto-merging src/matter_vacuum_accessory.ts
+CONFLICT (content): Merge conflict in src/matter_vacuum_accessory.ts
+Automatic merge failed; fix conflicts and then commit the result.
+diff --cc __tests__/matter-vacuum.test.js
+index f9ca759,71d87d8..0000000
+--- a/__tests__/matter-vacuum.test.js
++++ b/__tests__/matter-vacuum.test.js
+@@@ -541,7 -541,7 +541,11 @@@ describe("Matter identify", () => 
+        throwOnError: true,
+        preferLocal: true,
+        allowOfflineCloudSend: true,
+++<<<<<<< HEAD
+ +      requestTimeoutMs: 6500,
+++=======
++       requestTimeoutMs: 2500,
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+      });
+      expect(
+        matterUpdates.filter((update) => update.cluster === "rvcOperationalState")
+@@@ -567,7 -567,7 +571,11 @@@
+        const platform = createPlatform({ findMe });
+        const { accessory } = createAccessory(platform, true);
+        const result = accessory.handlers.identify.identify();
+++<<<<<<< HEAD
+ +      await jest.advanceTimersByTimeAsync(6500);
+++=======
++       await jest.advanceTimersByTimeAsync(2500);
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+        await expect(result).resolves.toBeUndefined();
+        expect(platform.log.warn).toHaveBeenCalledWith(
+          expect.stringContaining("Unable to locate")
+diff --cc __tests__/ordinary-mqtt-readiness.test.js
+index b55267a,4f4aa95..0000000
+--- a/__tests__/ordinary-mqtt-readiness.test.js
++++ b/__tests__/ordinary-mqtt-readiness.test.js
+@@@ -444,11 -444,11 +444,19 @@@ test("initial cloud readiness spends th
+    const { result, id } = await startRequest("robot-a", "get_status", {
+      requestTimeoutMs: 2000,
+    });
+++<<<<<<< HEAD
+ +  await jest.advanceTimersByTimeAsync(1000);
+ +  acknowledge();
+ +  await jest.advanceTimersByTimeAsync(0);
+ +  expect(mockClients[0].publish).toHaveBeenCalledTimes(1);
+ +  await jest.advanceTimersByTimeAsync(999);
+++=======
++   await jest.advanceTimersByTimeAsync(1500);
++   acknowledge();
++   await jest.advanceTimersByTimeAsync(0);
++   expect(mockClients[0].publish).toHaveBeenCalledTimes(1);
++   await jest.advanceTimersByTimeAsync(499);
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+    expect(adapter.pendingRequests.has(id)).toBe(true);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(adapter.pendingRequests.size).toBe(0);
+@@@ -562,128 -562,3 +570,131 @@@ test("waits from the old connection can
+    expect(connector.unsubscribedExpiries).toBe(0);
+    expect(restart).not.toHaveBeenCalled();
+  });
+++<<<<<<< HEAD
+ +
+ +test("repeated initialization does not add duplicate listeners to the current client", async () => {
+ +  const client = mockClients[0];
+ +  const count = client.on.mock.calls.length;
+ +  await connector.initMQTT_Subscribe();
+ +  await connector.initMQTT_Message();
+ +  expect(client.on).toHaveBeenCalledTimes(count);
+ +  const request = await startRequest();
+ +  receive(reply(request.id));
+ +  await expect(request.result).resolves.toEqual(["ok"]);
+ +  expect(adapter.noteRequestAnswered).toHaveBeenCalledTimes(1);
+ +});
+ +
+ +function nativeApi() {
+ +  const {
+ +    createNativeScheduleApi,
+ +  } = require("../roborockLib/lib/nativeScheduleApi");
+ +  adapter.messageQueueHandler = queue;
+ +  adapter.vacuums = {
+ +    "robot-a": {
+ +      command: (duid, method, params, options) =>
+ +        queue.sendRequest(duid, method, params, false, false, options),
+ +    },
+ +  };
+ +  return createNativeScheduleApi(adapter, {
+ +    recordRequest: jest.fn(),
+ +    currentThrottleError: () => undefined,
+ +  });
+ +}
+ +
+ +test.each(["read", "write"])(
+ +  "native schedule %s waits through the upstream reconnect and retains its response budget",
+ +  async (kind) => {
+ +    const api = nativeApi();
+ +    const old = mockClients[0];
+ +    old.handlers.get("close")();
+ +    const operation = (
+ +      kind === "read" ? api.isCleaning("robot-a") : api.dock("robot-a")
+ +    ).catch((error) => error);
+ +    await jest.advanceTimersByTimeAsync(9999);
+ +    expect(mockClients).toHaveLength(1);
+ +    expect(connector.readiness.waiters.size).toBe(1);
+ +    expect(adapter.pendingRequests.size).toBe(0);
+ +    await jest.advanceTimersByTimeAsync(1);
+ +    expect(mockClients).toHaveLength(2);
+ +    const fresh = mockClients[1];
+ +    fresh.handlers.get("connect")({});
+ +    await jest.advanceTimersByTimeAsync(2500);
+ +    expect(fresh.publish).not.toHaveBeenCalled();
+ +    acknowledge();
+ +    await jest.advanceTimersByTimeAsync(0);
+ +    expect(fresh.publish).toHaveBeenCalledTimes(1);
+ +    expect(old.publish).not.toHaveBeenCalled();
+ +    const id = requestId;
+ +    await jest.advanceTimersByTimeAsync(9999);
+ +    expect(adapter.pendingRequests.has(id)).toBe(true);
+ +    receive(reply(id, kind === "read" ? [{ state: 5 }] : ["ok"]));
+ +    expect(await operation).toBe(kind === "read" ? true : undefined);
+ +    expect(adapter.pendingRequests.size).toBe(0);
+ +  }
+ +);
+ +
+ +test("native schedule readiness expires after thirty seconds and a late SUBACK cannot send it", async () => {
+ +  const api = nativeApi();
+ +  mockClients[0].handlers.get("close")();
+ +  const operation = api.isCleaning("robot-a").catch((error) => error);
+ +  await jest.advanceTimersByTimeAsync(29999);
+ +  expect(connector.readiness.waiters.size).toBe(1);
+ +  await jest.advanceTimersByTimeAsync(1);
+ +  expect(await operation).toMatchObject({
+ +    code: "MQTT_READINESS_TIMEOUT",
+ +    requestNotSent: true,
+ +    unansweredRequest: false,
+ +  });
+ +  expect(adapter.pendingRequests.size).toBe(0);
+ +  const fresh = mockClients.at(-1);
+ +  fresh.handlers.get("connect")({});
+ +  acknowledge();
+ +  await jest.advanceTimersByTimeAsync(0);
+ +  expect(fresh.publish).not.toHaveBeenCalled();
+ +  expect(connector.readiness.waiters.size).toBe(0);
+ +  expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
+ +});
+ +
+ +test.each([1001, 1990])(
+ +  "SUBACK at %i ms does not publish with less than a second left",
+ +  async (delay) => {
+ +    mockClients[0].handlers.get("connect")({});
+ +    const { result } = await startRequest("robot-a", "get_status", {
+ +      requestTimeoutMs: 2000,
+ +    });
+ +    await jest.advanceTimersByTimeAsync(delay);
+ +    acknowledge();
+ +    await jest.advanceTimersByTimeAsync(0);
+ +    expect(await result).toMatchObject({
+ +      requestNotSent: true,
+ +      unansweredRequest: false,
+ +    });
+ +    expect(mockClients[0].publish).not.toHaveBeenCalled();
+ +    expect(adapter.pendingRequests.size).toBe(0);
+ +    expect(adapter.noteRequestUnanswered).not.toHaveBeenCalled();
+ +  }
+ +);
+ +
+ +test("Locate can use healthy cloud after a four-second LAN negotiation failure", async () => {
+ +  adapter.config.cloudOnlyMode = false;
+ +  adapter.localConnector.isConnected.mockReturnValue(true);
+ +  adapter.localConnector.awaitLocalNegotiation = jest.fn(
+ +    () =>
+ +      new Promise((resolve) => {
+ +        setTimeout(() => {
+ +          adapter.localConnector.isConnected.mockReturnValue(false);
+ +          resolve();
+ +        }, 4000);
+ +      })
+ +  );
+ +  const { result, id } = await startRequest("robot-a", "find_me", {
+ +    preferLocal: true,
+ +    requestTimeoutMs: 6500,
+ +  });
+ +  await jest.advanceTimersByTimeAsync(4000);
+ +  expect(mockClients[0].publish).toHaveBeenCalledTimes(1);
+ +  receive(reply(requestId));
+ +  expect(await result).toEqual(["ok"]);
+ +});
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+diff --cc docs/mqtt-send-readiness.md
+index 07347ab,d71f1e8..0000000
+--- a/docs/mqtt-send-readiness.md
++++ b/docs/mqtt-send-readiness.md
+@@@ -41,10 -41,7 +41,14 @@@ a command waits up to 10 seconds befor
+  ## What the user sees
+  
+  Existing acknowledgement and display policies are retained. Locate/Identify,
+++<<<<<<< HEAD
+ +which await their command, use a 6.5-second command budget. This allows a four-second LAN reconnect
+ +and leaves time for a cloud reply, while remaining below HomeKit's nine-second
+ +response window. When both transports are unavailable, Locate can take up to
+ +6.5 seconds to finish. There is no new
+++=======
++ which await their command, use a 2.5-second command budget. There is no new
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+  "waiting for MQTT" tile or progress indicator.
+  
+  - Native Matter commands already dispatch work in the background. A readiness
+diff --cc roborockLib/lib/messageQueueHandler.js
+index 68fb3cb,b55b32d..0000000
+--- a/roborockLib/lib/messageQueueHandler.js
++++ b/roborockLib/lib/messageQueueHandler.js
+@@@ -200,10 -198,8 +200,13 @@@ function describeCloudSilence(adapter, 
+  /**
+   * @typedef {Object} MqttConnector
+   * @property {import("./mqttSessionDiagnostics").MqttSessionDiagnostics} [sessionDiagnostics]
+ + * @property {{sendPaused: boolean, observeTimeout: (observation: any) => void} | null} [recovery]
+   * @property {number} [linkId] which connection is current
+   * @property {(options?: {timeoutMs?: number}) => Promise<number>} [waitUntilReady]
+++<<<<<<< HEAD
+ + * @property {() => number} [getSessionGeneration]
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+   * @property {() => boolean} [isReady]
+   * @property {() => boolean} isConnected
+   * @property {(duid: string, message: Buffer, onNotSent?: (error: Error) => void) => void} sendMessage
+@@@ -369,19 -363,17 +372,29 @@@ class messageQueueHandler 
+      _unused = false,
+      options = {}
+    ) {
+++<<<<<<< HEAD
+ +    const cloudGateTimeout = options.cloudGateTimeoutMs || 10000;
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+      // An explicit timeout is the caller's total budget, including readiness.
+      const explicitTimeout = Number(options.requestTimeoutMs);
+      const deadline =
+        Number.isFinite(explicitTimeout) && explicitTimeout > 0
+          ? Date.now() + getRequestTimeout(method, explicitTimeout)
+          : undefined;
+++<<<<<<< HEAD
+ +    let waitedForReadiness = false;
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+      const budgetExpired = () =>
+        Object.assign(
+          refusal(
+            "cloud unavailable",
+++<<<<<<< HEAD
+ +          "The command budget has less than one second left for a reply; this request was not sent."
+++=======
++           "The command budget expired before publication; this request was not sent."
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+          ),
+          { requestNotSent: true, unansweredRequest: false }
+        );
+@@@ -592,12 -584,10 +605,19 @@@
+        // No frame or pending RPC exists while the reply subscription is pending.
+        try {
+          const remaining =
+++<<<<<<< HEAD
+ +          deadline === undefined ? cloudGateTimeout : deadline - Date.now();
+ +        if (remaining <= 0) throw budgetExpired();
+ +        waitedForReadiness =
+ +          this.adapter.rr_mqtt_connector.isReady?.() === false;
+ +        await this.adapter.rr_mqtt_connector.waitUntilReady?.({
+ +          timeoutMs: Math.min(cloudGateTimeout, remaining),
+++=======
++           deadline === undefined ? 10000 : deadline - Date.now();
++         if (remaining <= 0) throw budgetExpired();
++         await this.adapter.rr_mqtt_connector.waitUntilReady?.({
++           timeoutMs: Math.min(10000, remaining),
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+          });
+        } catch (error) {
+          this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
+@@@ -626,30 -616,9 +646,36 @@@
+        payload
+      );
+  
+++<<<<<<< HEAD
+ +    if (
+ +      roborockMessage &&
+ +      useCloudConnection &&
+ +      this.adapter.rr_mqtt_connector.recovery &&
+ +      !this.adapter.rr_mqtt_connector.isReady?.()
+ +    ) {
+ +      const remaining =
+ +        deadline === undefined ? cloudGateTimeout : deadline - Date.now();
+ +      if (remaining <= 0) throw budgetExpired();
+ +      await this.adapter.rr_mqtt_connector.waitUntilReady?.({
+ +        timeoutMs: Math.min(cloudGateTimeout, remaining),
+ +      });
+ +      mqttConnectionState = this.adapter.rr_mqtt_connector.isConnected();
+ +      roborockMessage = await this.adapter.message.buildRoborockMessage(
+ +        duid,
+ +        protocol,
+ +        Math.floor(Date.now() / 1000),
+ +        payload
+ +      );
+ +    }
+ +
+ +    if (useCloudConnection && deadline !== undefined) {
+ +      const remaining = deadline - Date.now();
+ +      if (remaining <= 0 || (waitedForReadiness && remaining < 1000)) {
+++=======
++     if (useCloudConnection && deadline !== undefined) {
++       const remaining = deadline - Date.now();
++       if (remaining <= 0) {
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+          this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
+          throw budgetExpired();
+        }
+@@@ -851,16 -820,12 +877,23 @@@
+          );
+          this.adapter.noteTransportOutcome?.(duid, "local", "retried");
+          const readinessStartedAt = Date.now();
+++<<<<<<< HEAD
+ +        const waitedForReadiness =
+ +          this.adapter.rr_mqtt_connector.isReady?.() === false;
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+          const explicitBudget =
+            Number.isFinite(Number(options.requestTimeoutMs)) &&
+            Number(options.requestTimeoutMs) > 0;
+          try {
+            await this.adapter.rr_mqtt_connector.waitUntilReady?.({
+++<<<<<<< HEAD
+ +            timeoutMs: explicitBudget
+ +              ? Math.min(options.cloudGateTimeoutMs || 10000, retryTimeout)
+ +              : options.cloudGateTimeoutMs || 10000,
+++=======
++             timeoutMs: explicitBudget ? Math.min(10000, retryTimeout) : 10000,
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+            });
+          } catch (error) {
+            this.adapter.noteTransportOutcome?.(duid, "cloud", "notSent");
+@@@ -887,11 -852,7 +920,15 @@@
+          const responseTimeout = explicitBudget
+            ? retryTimeout - (Date.now() - readinessStartedAt)
+            : retryTimeout;
+++<<<<<<< HEAD
+ +        if (
+ +          !frame ||
+ +          responseTimeout <= 0 ||
+ +          (explicitBudget && waitedForReadiness && responseTimeout < 1000)
+ +        ) {
+++=======
++         if (!frame || responseTimeout <= 0) {
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+            throw localError;
+          }
+          return await this.exchangeOverCloud(
+@@@ -1020,7 -992,6 +1068,10 @@@
+          }
+          this.adapter.noteTransportOutcome?.(duid, "cloud", "timeout");
+          reject(error);
+++<<<<<<< HEAD
+ +        this.adapter.rr_mqtt_connector.recovery?.observeTimeout(sessionHealth);
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+        };
+  
+        // `secure` travels with the entry so the MQTT receiver can tell a
+@@@ -1071,15 -1042,6 +1122,18 @@@
+          secure,
+          method,
+          transport: "cloud",
+++<<<<<<< HEAD
+ +        operationClass:
+ +          context.options.operationClass ||
+ +          (secure
+ +            ? "secure-map"
+ +            : /^(get_|prop\.get)/.test(method)
+ +              ? "read"
+ +              : "write"),
+ +        sessionGeneration:
+ +          this.adapter.rr_mqtt_connector.getSessionGeneration?.(),
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+        };
+        this.adapter.pendingRequests.set(messageID, pendingRequest);
+  
+diff --cc roborockLib/lib/roborock_mqtt_connector.js
+index f885423,466d1d2..0000000
+--- a/roborockLib/lib/roborock_mqtt_connector.js
++++ b/roborockLib/lib/roborock_mqtt_connector.js
+@@@ -13,7 -14,6 +14,10 @@@ const 
+  } = require("./describeReplyRefusal");
+  
+  const { MqttReadiness } = require("./mqttReadiness");
+++<<<<<<< HEAD
+ +const { MqttSessionRecovery } = require("./mqttSessionRecovery");
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+  
+  const { MqttSessionDiagnostics } = require("./mqttSessionDiagnostics");
+  
+@@@ -211,15 -217,12 +215,20 @@@ function parseProtocol301Header(payload
+  class roborock_mqtt_connector {
+    constructor(adapter) {
+      this.adapter = adapter;
+ +    this.recovery =
+ +      adapter.config?.enableMqttSessionRecovery === true
+ +        ? new MqttSessionRecovery(this)
+ +        : null;
+      // Last live presence value per robot; log suppression only.
+      this.robotPresenceByDuid = new Map();
++     /** @type {Map<string, number>} when each robot last reported itself offline */
++     this.presenceOfflineSince = new Map();
+  
+      this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
+++<<<<<<< HEAD
+ +      this.recovery?.onSessionChanged();
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+        if (!snapshot.connected || snapshot.subscriptionAcknowledged) {
+          this.unsubscribedExpiries = 0;
+        }
+@@@ -236,8 -236,6 +245,11 @@@
+      });
+      this.readiness = new MqttReadiness(
+        () =>
+++<<<<<<< HEAD
+ +        !this.recovery?.sendPaused &&
+ +        !this.recovery?.stopped &&
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+          this.sessionDiagnostics.connected &&
+          this.sessionDiagnostics.subscriptionAcknowledged,
+        () => this.sessionDiagnostics.generation
+@@@ -274,19 -272,14 +286,23 @@@
+      // old one still delivered every frame and was never ended at shutdown.
+      this.disconnect();
+      this.readiness.start();
+++<<<<<<< HEAD
+ +    if (this.recovery) this.recovery = new MqttSessionRecovery(this);
+ +    this.rriot = userdata.rriot;
+++=======
++     rriot = userdata.rriot;
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+  
+ -    endpoint = roborockCrypto
+ -      .md5bin(rriot.k)
+ +    this.endpoint = roborockCrypto
+ +      .md5bin(this.rriot.k)
+        .subarray(8, 14)
+        .toString("base64"); // Could be a random but rather static string. The app generates it on first run.
+ -    mqttUser = roborockCrypto.md5hex(rriot.u + ":" + rriot.k).substring(2, 10);
+ -    mqttPassword = roborockCrypto.md5hex(rriot.s + ":" + rriot.k).substring(16);
+ +    this.mqttUser = roborockCrypto
+ +      .md5hex(this.rriot.u + ":" + this.rriot.k)
+ +      .substring(2, 10);
+ +    this.mqttPassword = roborockCrypto
+ +      .md5hex(this.rriot.s + ":" + this.rriot.k)
+ +      .substring(16);
+      // A new session from scratch: initMQTT_Subscribe and initMQTT_Message say
+      // again which listeners it wants.
+      this.connectionEventsWanted = false;
+@@@ -943,9 -893,90 +923,90 @@@
+    }
+  
+    getEndpoint() {
+ -    return endpoint;
+ +    return this.endpoint;
+    }
+  
++   /**
++    * A presence report for one robot (protocol 500 `online`).
++    *
++    * A retained snapshot is not a transition, and a repeat of the last value
++    * says nothing new. A robot that goes offline while it is already known to
++    * have dropped off the network (its LAN socket stopped answering first, see
++    * lib/unreachableEpisodes.js) is told at info as part of that story, not as
++    * a second warning, and the way back says how long it was gone.
++    *
++    * @param {string} duid
++    * @param {boolean} online
++    * @param {{retain?: boolean, dup?: boolean}} [packet]
++    * @returns {void}
++    */
++   notePresence(duid, online, packet = {}) {
++     const retained = packet?.retain === true;
++     const duplicate = packet?.dup === true;
++     const label = describeDevice(this.adapter, duid);
++ 
++     this.adapter.log.debug(
++       `MQTT presence for ${label}: online=${online}; retain=${retained}; dup=${duplicate}.`
++     );
++     if (retained) {
++       // A subscription snapshot is not evidence of a new transition.
++       return;
++     }
++ 
++     // DUP does not prove we received the earlier delivery. Process it
++     // normally and suppress logs by the observed value, not the flag.
++     const previous = this.robotPresenceByDuid.get(duid);
++     this.robotPresenceByDuid.set(duid, online);
++     if (previous === online) {
++       return;
++     }
++     const now =
++       typeof this.adapter.now === "function" ? this.adapter.now() : Date.now();
++     const episodes = this.adapter.unreachableEpisodes;
++ 
++     if (!online) {
++       this.presenceOfflineSince.set(duid, now);
++       const alreadyUnreachable = episodes?.isOpen(duid) === true;
++       episodes?.open(duid, "presence");
++       if (alreadyUnreachable) {
++         this.adapter.log.info(
++           `${label} also reports itself offline to the Roborock cloud, so it has dropped off the network (Wi-Fi, power or a restart). The plugin says so when it is back.`
++         );
++         return;
++       }
++       const lanAvailable =
++         this.adapter.isB01Device?.(duid) === false &&
++         this.adapter.isCloudOnlyModeEnabled?.() !== true;
++       const offlineDetail =
++         " Cloud commands may fail." +
++         (lanAvailable ? " LAN commands may still work." : "");
++       this.adapter.log.warn(
++         previous === undefined
++           ? `${label}: first live MQTT presence report is offline.${offlineDetail}`
++           : `${label} reports itself offline via MQTT.${offlineDetail}`
++       );
++       return;
++     }
++ 
++     const episodeLasted = episodes?.close(duid) ?? null;
++     const offlineSince = this.presenceOfflineSince.get(duid);
++     this.presenceOfflineSince.delete(duid);
++     if (previous === undefined) {
++       this.adapter.log.info(
++         `${label}: first live MQTT presence report is online.`
++       );
++       return;
++     }
++     // previous === false
++     const lasted =
++       episodeLasted ?? (offlineSince === undefined ? null : now - offlineSince);
++     this.adapter.log.info(
++       lasted === null
++         ? `${label} is back online.`
++         : `${label} is back online after ${describeOutage(lasted)}.`
++     );
++   }
++ 
+    /**
+     * QoS 0, as python-roborock publishes every V1 and B01 request
+     * (`MqttQos.AT_MOST_ONCE`; only A01 appliances need QoS 1, and this plugin
+@@@ -993,12 -1024,8 +1054,15 @@@
+      });
+    }
+  
+++<<<<<<< HEAD
+ +  getSessionGeneration() {
+ +    return this.sessionDiagnostics.generation;
+ +  }
+ +
+++=======
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+    sendMessage(duid, roborockMessage, onNotSent) {
+ -    if (!client) {
+ +    if (!this.client) {
+        // Shut down between the caller's connection check and this publish.
+        onNotSent?.(new Error("The MQTT client is closed"));
+        return;
+@@@ -1010,8 -1037,8 +1074,13 @@@
+        onNotSent(error);
+        return;
+      }
+++<<<<<<< HEAD
+ +    this.client.publish(
+ +      `rr/m/i/${this.rriot.u}/${this.mqttUser}/${duid}`,
+++=======
++     client.publish(
++       `rr/m/i/${rriot.u}/${mqttUser}/${duid}`,
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+        roborockMessage,
+        { qos: 0 },
+        (error) => {
+diff --cc roborockLib/roborockAPI.js
+index d6d4310,5473ec3..0000000
+--- a/roborockLib/roborockAPI.js
++++ b/roborockLib/roborockAPI.js
+@@@ -6586,16 -6626,7 +6631,20 @@@ class Roborock 
+  
+      let entry;
+      const promise = new Promise((resolve, reject) => {
+++<<<<<<< HEAD
+ +      entry = {
+ +        resolve,
+ +        reject,
+ +        timeout: undefined,
+ +        liveFrames: 0,
+ +        transport: "cloud",
+ +        operationClass: "secure-map",
+ +        sessionGeneration: this.rr_mqtt_connector.getSessionGeneration?.(),
+ +        method: b01Q7Adapter.B01_MAP_UPLOAD_METHOD,
+ +      };
+++=======
++       entry = { resolve, reject, timeout: undefined, liveFrames: 0 };
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+      });
+      entry.promise = promise;
+      this.pendingB01MapRequests.set(duid, entry);
+diff --cc src/matter_vacuum_accessory.ts
+index 655ca15,0c79183..0000000
+--- a/src/matter_vacuum_accessory.ts
++++ b/src/matter_vacuum_accessory.ts
+@@@ -2364,9 -2364,9 +2364,15 @@@ export default class RoborockMatterVacu
+      try {
+        await findMe.call(this.api, this.getDuid(), {
+          ...this.getMatterCommandOptions(),
+++<<<<<<< HEAD
+ +        // Allow the four-second LAN reconnect plus a cloud reply while
+ +        // remaining below HomeKit's nine-second response window.
+ +        requestTimeoutMs: 6500,
+++=======
++         // Locate/Identify await this operation. Keep readiness plus reply
++         // within HomeKit's response window, like clean-mode selections.
++         requestTimeoutMs: 2500,
+++>>>>>>> 9b7dafae4416dcb0ffa921b90d30641567ddb1bf
+        });
+      } catch (error) {
+        this.platform.log.warn(
