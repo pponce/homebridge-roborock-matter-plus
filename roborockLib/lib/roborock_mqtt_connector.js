@@ -7,10 +7,13 @@ const zlib = require("zlib");
 const roborockCrypto = require("./roborockCrypto");
 const { describeDevice } = require("./describeDevice");
 const { noteLateReply } = require("./lateReplies");
+const { describeOutage } = require("./unreachableEpisodes");
 const {
   describeReplyRefusal,
   createRefusalError,
 } = require("./describeReplyRefusal");
+
+const { MqttReadiness } = require("./mqttReadiness");
 
 const { MqttSessionDiagnostics } = require("./mqttSessionDiagnostics");
 
@@ -216,8 +219,14 @@ class roborock_mqtt_connector {
     this.adapter = adapter;
     // Last live presence value per robot; log suppression only.
     this.robotPresenceByDuid = new Map();
+    /** @type {Map<string, number>} when each robot last reported itself offline */
+    this.presenceOfflineSince = new Map();
 
     this.sessionDiagnostics = new MqttSessionDiagnostics((snapshot) => {
+      if (!snapshot.connected || snapshot.subscriptionAcknowledged) {
+        this.unsubscribedExpiries = 0;
+      }
+      this.readiness?.changed();
       Promise.resolve(
         this.adapter.setStateAsync?.("MqttSessionDiagnostics", {
           val: JSON.stringify(snapshot),
@@ -225,6 +234,13 @@ class roborock_mqtt_connector {
         })
       ).catch(() => {});
     });
+    this.readiness = new MqttReadiness(
+      () =>
+        this.sessionDiagnostics.connected &&
+        this.sessionDiagnostics.subscriptionAcknowledged,
+      () => this.sessionDiagnostics.generation
+    );
+    this.unsubscribedExpiries = 0;
     this.connected = false;
     // Which MQTT connection is current: a new number on every connect, so a
     // request can tell "the link I went out on is still up" from "a link is
@@ -255,6 +271,7 @@ class roborock_mqtt_connector {
     // kept disconnecting one for the other, both kept reconnecting, and the
     // old one still delivered every frame and was never ended at shutdown.
     this.disconnect();
+    this.readiness.start();
     rriot = userdata.rriot;
 
     endpoint = roborockCrypto
@@ -397,6 +414,7 @@ class roborock_mqtt_connector {
     this.listen("connect", (result) => {
       if (typeof result != "undefined") {
         this.linkId += 1;
+        this.unsubscribedExpiries = 0;
         // python-roborock: the back-off starts over after every connect.
         this.reconnectDelayMs = this.reconnectDelays.initialMs;
         const generation = this.sessionDiagnostics.onConnect();
@@ -832,43 +850,7 @@ class roborock_mqtt_connector {
             parsedData.online === 0 ||
             parsedData.online === 1
           ) {
-            const online = Boolean(parsedData.online);
-            const retained = packet?.retain === true;
-            const duplicate = packet?.dup === true;
-            const label = describeDevice(this.adapter, duid);
-
-            this.adapter.log.debug(
-              `MQTT presence for ${label}: online=${online}; retain=${retained}; dup=${duplicate}.`
-            );
-            if (retained) {
-              // A subscription snapshot is not evidence of a new transition.
-              return;
-            }
-
-            // DUP does not prove we received the earlier delivery. Process it
-            // normally and suppress logs by the observed value, not the flag.
-            const previous = this.robotPresenceByDuid.get(duid);
-            this.robotPresenceByDuid.set(duid, online);
-            if (previous === online) {
-              return;
-            }
-            const lanAvailable =
-              this.adapter.isB01Device?.(duid) === false &&
-              this.adapter.isCloudOnlyModeEnabled?.() !== true;
-            const offlineDetail =
-              " Cloud commands may fail." +
-              (lanAvailable ? " LAN commands may still work." : "");
-            if (previous === undefined) {
-              const message = `${label}: first live MQTT presence report is ${online ? "online" : "offline"}.${online ? "" : offlineDetail}`;
-              if (online) this.adapter.log.info(message);
-              else this.adapter.log.warn(message);
-            } else if (!online) {
-              this.adapter.log.warn(
-                `${label} reports itself offline via MQTT.${offlineDetail}`
-              );
-            } else if (previous === false) {
-              this.adapter.log.info(`${label} is back online.`);
-            }
+            this.notePresence(duid, Boolean(parsedData.online), packet);
           } else if (
             // Check for firmware update information
             parsedData.mqttOtaData
@@ -915,6 +897,87 @@ class roborock_mqtt_connector {
   }
 
   /**
+   * A presence report for one robot (protocol 500 `online`).
+   *
+   * A retained snapshot is not a transition, and a repeat of the last value
+   * says nothing new. A robot that goes offline while it is already known to
+   * have dropped off the network (its LAN socket stopped answering first, see
+   * lib/unreachableEpisodes.js) is told at info as part of that story, not as
+   * a second warning, and the way back says how long it was gone.
+   *
+   * @param {string} duid
+   * @param {boolean} online
+   * @param {{retain?: boolean, dup?: boolean}} [packet]
+   * @returns {void}
+   */
+  notePresence(duid, online, packet = {}) {
+    const retained = packet?.retain === true;
+    const duplicate = packet?.dup === true;
+    const label = describeDevice(this.adapter, duid);
+
+    this.adapter.log.debug(
+      `MQTT presence for ${label}: online=${online}; retain=${retained}; dup=${duplicate}.`
+    );
+    if (retained) {
+      // A subscription snapshot is not evidence of a new transition.
+      return;
+    }
+
+    // DUP does not prove we received the earlier delivery. Process it
+    // normally and suppress logs by the observed value, not the flag.
+    const previous = this.robotPresenceByDuid.get(duid);
+    this.robotPresenceByDuid.set(duid, online);
+    if (previous === online) {
+      return;
+    }
+    const now =
+      typeof this.adapter.now === "function" ? this.adapter.now() : Date.now();
+    const episodes = this.adapter.unreachableEpisodes;
+
+    if (!online) {
+      this.presenceOfflineSince.set(duid, now);
+      const alreadyUnreachable = episodes?.isOpen(duid) === true;
+      episodes?.open(duid, "presence");
+      if (alreadyUnreachable) {
+        this.adapter.log.info(
+          `${label} also reports itself offline to the Roborock cloud, so it has dropped off the network (Wi-Fi, power or a restart). The plugin says so when it is back.`
+        );
+        return;
+      }
+      const lanAvailable =
+        this.adapter.isB01Device?.(duid) === false &&
+        this.adapter.isCloudOnlyModeEnabled?.() !== true;
+      const offlineDetail =
+        " Cloud commands may fail." +
+        (lanAvailable ? " LAN commands may still work." : "");
+      this.adapter.log.warn(
+        previous === undefined
+          ? `${label}: first live MQTT presence report is offline.${offlineDetail}`
+          : `${label} reports itself offline via MQTT.${offlineDetail}`
+      );
+      return;
+    }
+
+    const episodeLasted = episodes?.close(duid) ?? null;
+    const offlineSince = this.presenceOfflineSince.get(duid);
+    this.presenceOfflineSince.delete(duid);
+    if (previous === undefined) {
+      this.adapter.log.info(
+        `${label}: first live MQTT presence report is online.`
+      );
+      return;
+    }
+    // previous === false
+    const lasted =
+      episodeLasted ?? (offlineSince === undefined ? null : now - offlineSince);
+    this.adapter.log.info(
+      lasted === null
+        ? `${label} is back online.`
+        : `${label} is back online after ${describeOutage(lasted)}.`
+    );
+  }
+
+  /**
    * QoS 0, as python-roborock publishes every V1 and B01 request
    * (`MqttQos.AT_MOST_ONCE`; only A01 appliances need QoS 1, and this plugin
    * drives no A01 device). QoS 1 was inherited from the ioBroker adapter and
@@ -932,10 +995,46 @@ class roborock_mqtt_connector {
    *   so the caller can fail the request at once instead of waiting out its
    *   timeout and reading a dead link as a silent robot.
    */
+  isReady() {
+    return !this.readiness.stopped && this.readiness.isReady();
+  }
+
+  waitUntilReady({ timeoutMs = 10000 } = {}) {
+    const connectedAtWait = this.connected;
+    const linkAtWait = this.linkId;
+    return this.readiness.wait(timeoutMs).catch((error) => {
+      // An unsent request is not robot silence. But a connected client whose
+      // reply subscription never succeeds must not stay stuck forever either.
+      if (
+        error.code === "MQTT_READINESS_TIMEOUT" &&
+        connectedAtWait &&
+        linkAtWait === this.linkId &&
+        this.connected &&
+        !this.sessionDiagnostics.subscriptionAcknowledged &&
+        !this.readiness.stopped
+      ) {
+        this.unsubscribedExpiries += 1;
+        if (this.unsubscribedExpiries >= 3) {
+          this.adapter.restartCloudSession?.(
+            `${this.unsubscribedExpiries} requests in a row could not be sent because the connected MQTT session did not acknowledge its reply subscription`
+          );
+        }
+      }
+      throw error;
+    });
+  }
+
   sendMessage(duid, roborockMessage, onNotSent) {
     if (!client) {
       // Shut down between the caller's connection check and this publish.
       onNotSent?.(new Error("The MQTT client is closed"));
+      return;
+    }
+    try {
+      this.readiness.assertReady();
+    } catch (error) {
+      if (!onNotSent) throw error;
+      onNotSent(error);
       return;
     }
     client.publish(
@@ -994,6 +1093,7 @@ class roborock_mqtt_connector {
   disconnect() {
     this.sessionWanted = false;
     this.clearReconnectTimer();
+    this.readiness.stop();
     this.clearInitialConnectTimeout();
     const closing = client;
     client = undefined;

@@ -36,6 +36,7 @@ const { describeDroppedFrames } = require("./lib/roborock_mqtt_connector");
 const { UnansweredMethodBreaker } = require("./lib/unansweredMethodBreaker");
 const { TransportTally } = require("./lib/transportTally");
 const { LateReplyTracker } = require("./lib/lateReplies");
+const { UnreachableEpisodes } = require("./lib/unreachableEpisodes");
 const { resolveRequestPolicy } = require("./lib/requestPolicy");
 
 // The Q7 work statuses, in the v1 numbering mapStatusToV1 gives them, in
@@ -405,6 +406,16 @@ const SIMPLE_VACUUM_COMMANDS = new Set([
 // transport summary (lib/transportTally.js) counts the rest.
 const TRANSIENT_ERROR_LOG_THROTTLE_MS = 60 * 60 * 1000;
 // python-roborock mqtt/health_manager.py: TIMEOUT_THRESHOLD, RESTART_COOLDOWN.
+// The failures a robot that has dropped off the network causes; see
+// lib/unreachableEpisodes.js. "cloud unavailable" is the account's MQTT
+// link, not the robot, and keeps its own warning.
+const ROBOT_UNREACHABLE_KINDS = new Set([
+  "cloud timeout",
+  "local timeout",
+  "timeout",
+  "device offline",
+  "local connection unavailable",
+]);
 const CLOUD_SILENCES_BEFORE_SESSION_RESTART = 3;
 const CLOUD_SESSION_RESTART_COOLDOWN_MS = 30 * 60 * 1000;
 const MATTER_CLEAN_MODE_COMMAND_TIMEOUT_MS = 2000;
@@ -513,6 +524,9 @@ class Roborock {
     this.transportTally = new TransportTally(this.log, (duid) =>
       this.describeDevice(duid)
     );
+    // A robot that has dropped off the network, from its first symptom to its
+    // first sign of life. See lib/unreachableEpisodes.js and catchError().
+    this.unreachableEpisodes = new UnreachableEpisodes(() => this.now());
     this.baseURL = options.baseURL || "usiot.roborock.com";
 
     this.userData = options.userData || null;
@@ -3411,6 +3425,17 @@ class Roborock {
     if (health.consecutiveSilences < CLOUD_SILENCES_BEFORE_SESSION_RESTART) {
       return false;
     }
+    const restarted = this.restartCloudSession(
+      `${health.consecutiveSilences} cloud requests in a row went unanswered while the MQTT connection reported itself up`
+    );
+    if (restarted) health.consecutiveSilences = 0;
+    return restarted;
+  }
+
+  /** @param {string} reason @returns {boolean} whether a restart was started */
+  restartCloudSession(reason) {
+    if (this.stopped) return false;
+    const health = this.cloudSessionHealth;
     const now = Date.now();
     if (
       health.lastRestartAt !== 0 &&
@@ -3418,11 +3443,9 @@ class Roborock {
     ) {
       return false;
     }
-    const silences = health.consecutiveSilences;
     health.lastRestartAt = now;
-    health.consecutiveSilences = 0;
     this.log.info(
-      `${silences} cloud requests in a row went unanswered while the MQTT connection reported itself up, so the plugin is starting a fresh MQTT session — the same rule python-roborock applies (3 in a row, at most once every 30 minutes). A request in flight at this moment may fail once.`
+      `${reason}, so the plugin is starting a fresh MQTT session (at most once every 30 minutes). A request in flight at this moment may fail once.`
     );
     void Promise.resolve()
       .then(() => this.rr_mqtt_connector?.reconnectClient?.(true))
@@ -3456,6 +3479,8 @@ class Roborock {
    * @returns {void}
    */
   noteRequestAnswered(duid, method) {
+    // An answer, over either transport, is a sign of life.
+    this.unreachableEpisodes?.close(duid);
     this.noteMethodAnswered(duid, method);
   }
 
@@ -4789,6 +4814,35 @@ class Roborock {
       const message = hasContext
         ? `Failed to execute ${attribute} on robot ${this.describeDevice(duid)} (${model || "unknown model"}): ${error}`
         : String(error);
+
+      // A ROBOT OFF THE NETWORK IS ONE EVENT (lib/unreachableEpisodes.js).
+      // A request neither transport answered is the robot's absence, not a
+      // fault in either transport: it opens the episode with one plain
+      // warning. While the episode is open, the failures it causes are told
+      // at debug; the hourly transport line still counts every one.
+      if (
+        duid !== undefined &&
+        typeof error === "object" &&
+        error?.robotSilentOnBothTransports === true &&
+        this.unreachableEpisodes?.open(duid, "both-silent") === true
+      ) {
+        this.log.warn(
+          `${this.describeDevice(duid)} answered ${attribute} neither on the LAN nor over the cloud, so it has probably dropped off the network (Wi-Fi, power or a restart). Until it answers again, the failures this causes are logged at debug; the hourly line counts them.`
+        );
+        this.log.debug(message);
+        return;
+      }
+      if (
+        transientErrorKind &&
+        ROBOT_UNREACHABLE_KINDS.has(transientErrorKind) &&
+        duid !== undefined &&
+        this.unreachableEpisodes?.isOpen(duid)
+      ) {
+        this.log.debug(
+          `${message} (${this.describeDevice(duid)} is off the network, which has already been reported.)`
+        );
+        return;
+      }
 
       if (transientErrorKind) {
         const throttledWarning = this.getThrottledTransientWarning(
@@ -6547,6 +6601,8 @@ class Roborock {
       return existing.promise;
     }
 
+    await this.rr_mqtt_connector.waitUntilReady?.();
+
     const messageID = b01Q7Adapter.createB01MessageId();
     const timestamp = Math.floor(Date.now() / 1000);
     const payload = await this.message.buildPayload(
@@ -6570,48 +6626,59 @@ class Roborock {
       );
     }
 
+    const concurrent = this.pendingB01MapRequests.get(duid);
+    if (concurrent) return concurrent.promise;
+
     let entry;
     const promise = new Promise((resolve, reject) => {
-      const timeout = this.setTimeout(() => {
-        // Live frames during the wait mean the robot is talking; it sent no
-        // saved map. That is not a robot that did not answer, and saying so
-        // tells the field which kind of frame a request gets back.
-        const error =
-          entry.liveFrames > 0
-            ? Object.assign(
-                new Error(
-                  `${this.describeDevice(duid)} sent ${entry.liveFrames} live map frame(s) (map type 0) but no saved map within 20s of the B01 map request.`
-                ),
-                { unansweredRequest: false, liveFramesArrived: true }
-              )
-            : Object.assign(
-                new Error(
-                  `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
-                ),
-                {
-                  unansweredRequest: true,
-                  transportWasUp: this.rr_mqtt_connector.isConnected(),
-                }
-              );
-        this.settleB01MapRequest(duid, entry, error);
-      }, 20000);
-      entry = { resolve, reject, timeout, liveFrames: 0 };
+      entry = { resolve, reject, timeout: undefined, liveFrames: 0 };
     });
     entry.promise = promise;
     this.pendingB01MapRequests.set(duid, entry);
+    const onTimeout = () => {
+      // Live frames during the wait mean the robot is talking; it sent no
+      // saved map. That is not a robot that did not answer, and saying so
+      // tells the field which kind of frame a request gets back.
+      const error =
+        entry.liveFrames > 0
+          ? Object.assign(
+              new Error(
+                `${this.describeDevice(duid)} sent ${entry.liveFrames} live map frame(s) (map type 0) but no saved map within 20s of the B01 map request.`
+              ),
+              { unansweredRequest: false, liveFramesArrived: true }
+            )
+          : Object.assign(
+              new Error(
+                `B01 map request timed out after 20s for ${this.describeDevice(duid)}.`
+              ),
+              {
+                unansweredRequest: true,
+                transportWasUp: this.rr_mqtt_connector.isConnected(),
+              }
+            );
+      this.settleB01MapRequest(duid, entry, error);
+    };
     // Refused by mqtt.js (the link dropped): fail now as a transport refusal,
     // which the give-up register does not count, rather than after 20 s as a
     // robot that did not answer.
-    this.rr_mqtt_connector.sendMessage(duid, roborockMessage, () => {
-      this.settleB01MapRequest(
-        duid,
-        entry,
-        refusal(
-          "cloud unavailable",
-          `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
-        )
-      );
-    });
+    try {
+      this.rr_mqtt_connector.sendMessage(duid, roborockMessage, () => {
+        this.settleB01MapRequest(
+          duid,
+          entry,
+          refusal(
+            "cloud unavailable",
+            `The Roborock cloud connection was lost before the B01 map request for ${this.describeDevice(duid)} could be sent, so it was not sent.`
+          )
+        );
+      });
+    } catch (error) {
+      this.settleB01MapRequest(duid, entry, error);
+    }
+    if (this.pendingB01MapRequests.get(duid) === entry) {
+      entry.timeout = this.setTimeout(onTimeout, 20000);
+      entry.timeout.unref?.();
+    }
     return promise;
   }
 
