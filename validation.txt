@@ -1,0 +1,1196 @@
+From https://github.com/mathiashornbek/homebridge-roborock-matter
+ * tag               v3.42.0    -> FETCH_HEAD
+Auto-merging README.md
+Auto-merging __tests__/matter-vacuum.test.js
+CONFLICT (content): Merge conflict in __tests__/matter-vacuum.test.js
+Auto-merging __tests__/mqtt-session-observations.test.js
+Auto-merging __tests__/ordinary-mqtt-readiness.test.js
+CONFLICT (add/add): Merge conflict in __tests__/ordinary-mqtt-readiness.test.js
+Auto-merging docs/mqtt-send-readiness.md
+CONFLICT (add/add): Merge conflict in docs/mqtt-send-readiness.md
+Auto-merging roborockLib/lib/messageQueueHandler.js
+CONFLICT (content): Merge conflict in roborockLib/lib/messageQueueHandler.js
+Auto-merging roborockLib/lib/roborock_mqtt_connector.js
+CONFLICT (content): Merge conflict in roborockLib/lib/roborock_mqtt_connector.js
+Auto-merging roborockLib/roborockAPI.js
+CONFLICT (content): Merge conflict in roborockLib/roborockAPI.js
+Auto-merging src/matter_vacuum_accessory.ts
+CONFLICT (content): Merge conflict in src/matter_vacuum_accessory.ts
+Automatic merge failed; fix conflicts and then commit the result.
+[detached HEAD 1970e9a] Integrate v3.42.0 while retaining optional recovery and schedule controls
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: 'homebridge@1.8.3',
+npm warn EBADENGINE   required: { node: '^18.15.0 || ^20.7.0' },
+npm warn EBADENGINE   current: { node: 'v22.23.4', npm: '10.9.9' }
+npm warn EBADENGINE }
+npm warn EBADENGINE Unsupported engine {
+npm warn EBADENGINE   package: 'hap-nodejs@0.12.2',
+npm warn EBADENGINE   required: { node: '^18 || ^20' },
+npm warn EBADENGINE   current: { node: 'v22.23.4', npm: '10.9.9' }
+npm warn EBADENGINE }
+npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated q@1.1.2: You or someone you depend on is using Q, the JavaScript Promise library that gave JavaScript developers strong feelings about promises. They can almost certainly migrate to the native JavaScript promise now. Thank you literally everyone for joining me in this bet against the odds. Be excellent to each other.
+npm warn deprecated
+npm warn deprecated (For a CapTP with native promises, see @endo/eventual-send and @endo/captp)
+npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+npm warn deprecated glob@11.1.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+
+added 801 packages, and audited 802 packages in 9s
+
+66 packages are looking for funding
+  run `npm fund` for details
+
+40 vulnerabilities (4 moderate, 36 high)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force
+
+Run `npm audit` for details.
+
+> homebridge-roborock-matter@3.42.0 lint
+> prettier --check .
+
+Checking formatting...
+All matched files use Prettier code style!
+
+> homebridge-roborock-matter@3.42.0 typecheck
+> tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.roborockLib.json
+
+
+> homebridge-roborock-matter@3.42.0 build
+> rimraf ./dist && tsc
+
+
+> homebridge-roborock-matter@3.42.0 test
+> jest --runInBand
+
+PASS __tests__/matter-vacuum.test.js
+PASS __tests__/b01-q7-protocol.test.js
+PASS __tests__/a-cloud-schedule-probe-reads-and-never-writes.test.js
+PASS __tests__/roborockAPI.test.js
+PASS __tests__/state-sensors-report-what-the-robot-is-doing.test.js
+PASS __tests__/applied-clean-type-outranks-a-lagging-robot-report.test.js
+PASS __tests__/a-schedule-the-robot-denies-is-read-from-the-cloud.test.js
+PASS __tests__/mqtt-session-observations.test.js
+PASS __tests__/b01-live-room.test.js
+PASS __tests__/hap-schedule-naming.test.js
+PASS __tests__/ordinary-mqtt-readiness.test.js
+PASS __tests__/the-dock-says-what-it-is-doing.test.js
+PASS __tests__/a-dock-chore-or-transit-does-not-announce-a-cleaning.test.js
+PASS __tests__/schedule-settings-contract.test.js
+PASS __tests__/robustness-hardening.test.js
+PASS __tests__/readme-claims-match-what-was-measured.test.js
+PASS __tests__/a-newly-registered-accessory-starts-from-the-robots-real-status.test.js
+PASS __tests__/local-transport-resilience.test.js
+PASS __tests__/mqtt-session-recreation.test.js
+PASS __tests__/a-stopped-robot-says-why.test.js
+PASS __tests__/room-mapping-is-counted-under-its-own-name.test.js
+PASS __tests__/action-switches-are-an-opt-in.test.js
+PASS __tests__/hap-schedule-cache.test.js
+PASS __tests__/mqtt-session-breaker.test.js
+PASS __tests__/matter-publish-line-logs-every-change.test.js
+PASS __tests__/the-model-row-is-a-name-not-a-code.test.js
+PASS __tests__/local-server-fast-refresh.test.js
+PASS __tests__/every-matter-start-applies-the-displayed-clean-mode.test.js
+PASS __tests__/a-moved-robot-is-found-at-its-new-address.test.js
+PASS __tests__/clean-mode-prep-fits-its-window.test.js
+PASS __tests__/an-empty-water-tank-reaches-the-home-app.test.js
+PASS __tests__/schedule-write-reconciliation.test.js
+PASS __tests__/a-charging-flag-does-not-outrank-a-robot-out-cleaning.test.js
+PASS __tests__/an-empty-tank-can-reach-the-tile.test.js
+PASS __tests__/a-q10-gets-q10-frames.test.js
+PASS __tests__/action-switch-press-uses-the-matter-command-path.test.js
+PASS __tests__/matter-clean-modes.test.js
+PASS __tests__/messageQueueHandler.test.js
+PASS __tests__/unknown-status-attributes-are-reported-once.test.js
+PASS __tests__/remote-reason-names-the-real-cause.test.js
+PASS __tests__/the-first-b01-poll-waits-for-the-cloud-session.test.js
+PASS __tests__/a-room-refresh-that-cannot-succeed-is-not-retried-every-poll.test.js
+PASS __tests__/refused-sends-are-not-plugin-errors.test.js
+PASS __tests__/an-empty-tank-blocks-nothing-on-a-vacuum-run.test.js
+PASS __tests__/command-refresh-stays-out-of-the-callers-budget.test.js
+PASS __tests__/an-unconfirmed-clean-type-is-reported-to-the-caller.test.js
+PASS __tests__/the-cloud-scene-writes-are-gated-and-shaped.test.js
+PASS __tests__/a-refused-schedule-write-keeps-the-switch-where-it-was.test.js
+PASS __tests__/a-cloud-scene-carries-the-schedule-the-robot-denies.test.js
+PASS __tests__/unchecking-the-switch-setting-takes-the-tiles-with-it.test.js
+PASS __tests__/b01-full-chain-simulation.test.js
+PASS __tests__/a-custom-server-is-used-for-login.test.js
+  ● Console
+
+    console.error
+      2FA verification request failed: self-signed certificate
+
+    [0m [90m 262 |[39m       })[33m;[39m
+     [90m 263 |[39m     } [36mcatch[39m (error[33m:[39m any) {
+    [31m[1m>[22m[39m[90m 264 |[39m       console[33m.[39merror(requestFailedLogLabel[33m,[39m error[33m?[39m[33m.[39mmessage [33m||[39m error)[33m;[39m
+     [90m     |[39m               [31m[1m^[22m[39m
+     [90m 265 |[39m       [36mreturn[39m {
+     [90m 266 |[39m         ok[33m:[39m [36mfalse[39m[33m,[39m
+     [90m 267 |[39m         message[33m:[39m error[33m?[39m[33m.[39mmessage [33m||[39m requestFailedFallbackMessage[33m,[39m[0m
+
+      at RoborockUiServer.error [as performSignedLogin] (src/ui/index.ts:264:15)
+      at Object.<anonymous> (__tests__/a-custom-server-is-used-for-login.test.js:124:20)
+
+    console.error
+      2FA verification failed: {
+        code: 2010,
+        msg: 'invalid_credentials',
+        data: { reason: 'invalid_login_pin' }
+      }
+
+    [0m [90m 286 |[39m     }
+     [90m 287 |[39m
+    [31m[1m>[22m[39m[90m 288 |[39m     console[33m.[39merror(failureLogLabel[33m,[39m loginResult)[33m;[39m
+     [90m     |[39m             [31m[1m^[22m[39m
+     [90m 289 |[39m     [90m// Roborock's own text ("user agreement not accepted") does not say what[39m
+     [90m 290 |[39m     [90m// to do; the known refusals do.[39m
+     [90m 291 |[39m     [36mconst[39m refusal [33m=[39m roborockAuth[33m.[39mdescribeLoginRefusal(loginResult)[33m;[39m[0m
+
+      at RoborockUiServer.error [as performSignedLogin] (src/ui/index.ts:288:13)
+      at Object.<anonymous> (__tests__/a-custom-server-is-used-for-login.test.js:162:20)
+
+    console.error
+      2FA verification request failed: The custom server URL must start with https:// (got "http://"). The login sends your email and PIN, so it never goes over plain HTTP.
+
+    [0m [90m 262 |[39m       })[33m;[39m
+     [90m 263 |[39m     } [36mcatch[39m (error[33m:[39m any) {
+    [31m[1m>[22m[39m[90m 264 |[39m       console[33m.[39merror(requestFailedLogLabel[33m,[39m error[33m?[39m[33m.[39mmessage [33m||[39m error)[33m;[39m
+     [90m     |[39m               [31m[1m^[22m[39m
+     [90m 265 |[39m       [36mreturn[39m {
+     [90m 266 |[39m         ok[33m:[39m [36mfalse[39m[33m,[39m
+     [90m 267 |[39m         message[33m:[39m error[33m?[39m[33m.[39mmessage [33m||[39m requestFailedFallbackMessage[33m,[39m[0m
+
+      at RoborockUiServer.error [as performSignedLogin] (src/ui/index.ts:264:15)
+      at Object.<anonymous> (__tests__/a-custom-server-is-used-for-login.test.js:173:20)
+
+PASS __tests__/a-routine-toggle-is-the-apps-own-edit.test.js
+PASS __tests__/a-known-field-is-not-called-unmapped.test.js
+PASS __tests__/capability-isolation.test.js
+PASS __tests__/schedule-write-queue.test.js
+PASS __tests__/a-silent-poll-is-actually-counted.test.js
+PASS __tests__/selecting-every-room-is-not-the-mornings-rooms.test.js
+PASS __tests__/hiding-the-stored-clean-mode-does-not-strand-the-robot.test.js
+PASS __tests__/the-cloud-signs-the-body-it-is-sent.test.js
+PASS __tests__/clean-mode-prep-sends-every-command.test.js
+PASS __tests__/a-standing-tank-fault-is-not-re-raised-every-minute.test.js
+PASS __tests__/the-settings-page-cannot-quietly-change-what-it-shows.test.js
+PASS __tests__/the-switches-say-which-qr-code-to-scan.test.js
+PASS __tests__/classic-live-room.test.js
+PASS __tests__/a-robot-that-stops-answering-is-left-alone.test.js
+PASS __tests__/the-robot-is-asked-which-protocol-it-speaks.test.js
+PASS __tests__/a-refill-dock-with-water-does-not-block-an-onboard-shortage.test.js
+PASS __tests__/matter-pairing-guidance-points-at-the-robots-own-code.test.js
+PASS __tests__/a-stated-refusal-is-not-a-plugin-error.test.js
+PASS __tests__/matter-fault-reporting.test.js
+PASS __tests__/the-poller-stops-asking-a-question-that-never-gets-answered.test.js
+PASS __tests__/a-hello-belongs-to-its-own-socket.test.js
+PASS __tests__/every-setting-is-in-every-place.test.js
+PASS __tests__/a-stop-or-a-newer-start-ends-a-start-in-progress.test.js
+PASS __tests__/a-new-run-starts-with-clean-live-room-counters.test.js
+PASS __tests__/the-heartbeat-does-not-stop-when-the-robot-does.test.js
+PASS __tests__/startup-concurrency.test.js
+PASS __tests__/a-smartplan-robot-gets-the-mode-home-asked-for.test.js
+PASS __tests__/hap-names-pass-homekit-name-rules.test.js
+PASS __tests__/a-frame-for-another-controller-is-not-our-bug.test.js
+PASS __tests__/every-mqtt-connection-is-a-new-client-with-its-own-id.test.js
+PASS __tests__/resume-continues-the-paused-room-clean.test.js
+PASS __tests__/a-q7-live-position-comes-from-what-it-pushes.test.js
+PASS __tests__/a-prerelease-must-never-publish-as-latest.test.js
+PASS __tests__/a-local-connection-that-stops-answering-is-replaced.test.js
+PASS __tests__/the-home-data-refresh-applies-what-changed.test.js
+PASS __tests__/clean-mode-keeps-the-known-suction-level.test.js
+PASS __tests__/a-q10-is-not-sent-q7-frames-it-cannot-read.test.js
+PASS __tests__/shutdown-and-resources-are-tidy.test.js
+PASS __tests__/a-cloud-timeout-says-whether-the-reply-ever-arrived.test.js
+PASS __tests__/a-login-sends-what-roborock-asks-for.test.js
+  ● Console
+
+    console.error
+      2FA verification failed: { code: 3009, msg: 'user agreement not accepted', data: null }
+
+    [0m [90m 286 |[39m     }
+     [90m 287 |[39m
+    [31m[1m>[22m[39m[90m 288 |[39m     console[33m.[39merror(failureLogLabel[33m,[39m loginResult)[33m;[39m
+     [90m     |[39m             [31m[1m^[22m[39m
+     [90m 289 |[39m     [90m// Roborock's own text ("user agreement not accepted") does not say what[39m
+     [90m 290 |[39m     [90m// to do; the known refusals do.[39m
+     [90m 291 |[39m     [36mconst[39m refusal [33m=[39m roborockAuth[33m.[39mdescribeLoginRefusal(loginResult)[33m;[39m[0m
+
+      at RoborockUiServer.error [as performSignedLogin] (src/ui/index.ts:288:13)
+      at Object.<anonymous> (__tests__/a-login-sends-what-roborock-asks-for.test.js:223:20)
+
+PASS __tests__/cloud-silence-separates-unattributed-traffic-from-none.test.js
+PASS __tests__/an-implicit-save-writes-only-its-own-fields.test.js
+PASS __tests__/a-rejected-session-is-not-retried-as-a-network-problem.test.js
+PASS __tests__/live-status-gate-matches-what-the-publish-reads.test.js
+PASS __tests__/a-hidden-clean-mode-is-never-offered-or-accepted.test.js
+PASS __tests__/every-successful-start-publishes-the-robots.test.js
+PASS __tests__/mqtt-session-real-reconnect.test.js
+PASS __tests__/the-settings-page-follows-homebridge-s-theme.test.js
+PASS __tests__/a-closed-settings-page-is-not-a-crash.test.js
+PASS __tests__/crash-safety-and-discovery.test.js
+PASS __tests__/ui-server-local-probe.test.js
+PASS __tests__/a-stopped-or-retried-start-leaves-nothing-behind.test.js
+PASS __tests__/vacuum-room-mapping.test.js
+PASS __tests__/a-q10-live-room-is-not-polled.test.js
+PASS __tests__/the-routines-accessory-is-registered-when-it-has-switches.test.js
+PASS __tests__/shutdown-closes-the-discovery-socket.test.js
+PASS __tests__/a-network-blip-is-not-a-silent-robot.test.js
+PASS __tests__/a-q10-read-refusal-is-calm-by-construction.test.js
+PASS __tests__/a-finished-b01-clean-is-not-an-unmapped-fault.test.js
+PASS __tests__/a-restart-does-not-repeat-a-standing-tank-warning.test.js
+PASS __tests__/a-robot-that-drops-off-the-network-is-one-warning.test.js
+PASS __tests__/the-heartbeat-still-heals-a-dropped-write.test.js
+PASS __tests__/the-slow-lane-and-the-fast-start.test.js
+PASS __tests__/a-q10-status-poll-is-not-a-failure.test.js
+PASS __tests__/mqtt-presence-notifications.test.js
+PASS __tests__/a-refused-reply-is-not-an-empty-answer.test.js
+PASS __tests__/log-lines-name-the-robot.test.js
+PASS __tests__/a-reply-that-comes-too-late-is-called-late.test.js
+PASS __tests__/late-replies-belong-to-the-current-silence.test.js
+PASS __tests__/a-reconnect-does-not-wait-for-a-dead-link.test.js
+PASS __tests__/b01-room-mapping-asks-for-nothing-it-cannot-read.test.js
+PASS __tests__/the-dock-status-word-carries-the-tanks.test.js
+PASS __tests__/schedule-generic-poll-ownership.test.js
+PASS __tests__/live-room-diagnosis.test.js
+PASS __tests__/a-timed-out-timer-read-does-not-withhold-routines.test.js
+PASS __tests__/a-b01-fault-reaches-apple-home.test.js
+PASS __tests__/a-hello-drop-with-the-cloud-down-is-refused-at-once.test.js
+PASS __tests__/b01-replies-do-not-hide-a-v1-robots-cloud-silence.test.js
+PASS __tests__/b01-v1-poll-skipping.test.js
+PASS __tests__/a-write-batch-cannot-wait-on-a-refresh-queued-behind-it.test.js
+PASS __tests__/a-refused-area-selection-says-what-it-refused.test.js
+PASS __tests__/one-reading-of-the-account-does-not-remove-a-robot.test.js
+PASS __tests__/a-local-request-lost-with-its-socket-is-retried-over-the-cloud.test.js
+PASS __tests__/a-cloud-request-is-sent-the-way-python-roborock-sends-it.test.js
+PASS __tests__/schedule-scene-reconciliation.test.js
+PASS __tests__/local-connections-are-kept-alive-and-reconnected-at-once.test.js
+PASS __tests__/each-request-is-blamed-for-its-own-silence.test.js
+PASS __tests__/an-l01-robot-always-waits-for-its-hello.test.js
+PASS __tests__/a-b01-robot-registers-with-the-rooms-that-arrive-at-start.test.js
+PASS __tests__/a-robot-halted-away-from-its-dock-is-not-docked.test.js
+PASS __tests__/cloud-only-markers-are-reconciled.test.js
+PASS __tests__/operational-state-is-advertised.test.js
+PASS __tests__/capability-detection.test.js
+PASS __tests__/routine-momentary-acknowledgement.test.js
+PASS __tests__/a-b01-push-is-read-in-its-own-dialect.test.js
+PASS __tests__/a-bad-cloud-day-is-survivable.test.js
+PASS __tests__/a-cleared-fault-gives-the-tile-its-real-state-back.test.js
+PASS __tests__/the-room-selection-survives-a-restart.test.js
+PASS __tests__/a-quiet-tank-is-not-a-refilled-tank.test.js
+PASS __tests__/only-a-finished-run-completes-the-rooms.test.js
+PASS __tests__/a-client-closed-mid-handshake-cannot-end-the-process.test.js
+PASS __tests__/a-reconnect-to-the-account-leaves-the-lan-sockets-alone.test.js
+PASS __tests__/a-placeholder-position-is-not-a-robot-between-rooms.test.js
+PASS __tests__/a-full-dirty-water-tank-reaches-the-home-app.test.js
+PASS __tests__/the-periodic-poll-makes-no-cloud-request-nobody-reads.test.js
+PASS __tests__/every-switch-is-wired-all-the-way-through.test.js
+PASS __tests__/a-q10-reads-its-own-status-codes-from-home-data.test.js
+PASS __tests__/every-sensor-is-wired-all-the-way-through.test.js
+PASS __tests__/a-service-area-write-matter-would-refuse-is-not-published.test.js
+PASS __tests__/a-fault-is-never-published-beside-a-working-state.test.js
+PASS __tests__/action-switches-survive-the-legacy-sweep.test.js
+PASS __tests__/an-owner-report-decides-a-new-dock-type.test.js
+PASS __tests__/a-recovery-line-names-only-a-failure-the-log-announced.test.js
+PASS __tests__/a-transport-artefact-is-not-a-silent-method.test.js
+PASS __tests__/an-off-dock-robot-does-not-report-a-charging-battery.test.js
+PASS __tests__/b01-live-room-latency.test.js
+PASS __tests__/live-dps-mapping.test.js
+PASS __tests__/a-login-retry-does-not-outlive-shutdown.test.js
+PASS __tests__/a-docked-b01-robot-shows-no-stale-fault.test.js
+PASS __tests__/cloud-ok-acknowledgement.test.js
+PASS __tests__/live-room-docs-match-the-code.test.js
+PASS __tests__/housekeeping-at-an-idle-dock-does-not-repeat-a-tank-warning.test.js
+PASS __tests__/an-empty-tank-does-not-turn-a-cleaning-robot-into-an-error.test.js
+PASS __tests__/a-robot-that-answers-only-the-hello-is-reported-once.test.js
+PASS __tests__/each-silence-is-counted-once-and-a-refusal-is-an-answer.test.js
+PASS __tests__/a-schedule-switch-answers-home-within-its-write-timeout.test.js
+PASS __tests__/a-busy-state-without-a-matter-name-keeps-the-run.test.js
+PASS __tests__/a-custom-server-without-its-url-sends-nothing.test.js
+  ● Console
+
+    console.error
+      2FA email request failed: The custom server URL "" is not a URL. Enter it as https://host or https://host:port.
+
+    [0m [90m 159 |[39m       [36mreturn[39m { ok[33m:[39m [36mtrue[39m[33m,[39m message[33m:[39m [32m"Verification email sent."[39m }[33m;[39m
+     [90m 160 |[39m     } [36mcatch[39m (error[33m:[39m any) {
+    [31m[1m>[22m[39m[90m 161 |[39m       console[33m.[39merror([32m"2FA email request failed:"[39m[33m,[39m error[33m?[39m[33m.[39mmessage [33m||[39m error)[33m;[39m
+     [90m     |[39m               [31m[1m^[22m[39m
+     [90m 162 |[39m       [36mreturn[39m {
+     [90m 163 |[39m         ok[33m:[39m [36mfalse[39m[33m,[39m
+     [90m 164 |[39m         message[33m:[39m error[33m?[39m[33m.[39mmessage [33m||[39m [32m"Failed to send verification email."[39m[33m,[39m[0m
+
+      at RoborockUiServer.error [as sendTwoFactorEmail] (src/ui/index.ts:161:15)
+      at __tests__/a-custom-server-without-its-url-sends-nothing.test.js:124:22
+
+    console.error
+      2FA verification request failed: The custom server URL "" is not a URL. Enter it as https://host or https://host:port.
+
+    [0m [90m 262 |[39m       })[33m;[39m
+     [90m 263 |[39m     } [36mcatch[39m (error[33m:[39m any) {
+    [31m[1m>[22m[39m[90m 264 |[39m       console[33m.[39merror(requestFailedLogLabel[33m,[39m error[33m?[39m[33m.[39mmessage [33m||[39m error)[33m;[39m
+     [90m     |[39m               [31m[1m^[22m[39m
+     [90m 265 |[39m       [36mreturn[39m {
+     [90m 266 |[39m         ok[33m:[39m [36mfalse[39m[33m,[39m
+     [90m 267 |[39m         message[33m:[39m error[33m?[39m[33m.[39mmessage [33m||[39m requestFailedFallbackMessage[33m,[39m[0m
+
+      at RoborockUiServer.error [as performSignedLogin] (src/ui/index.ts:264:15)
+      at __tests__/a-custom-server-without-its-url-sends-nothing.test.js:124:22
+
+    console.error
+      Login request failed: The custom server URL "" is not a URL. Enter it as https://host or https://host:port.
+
+    [0m [90m 262 |[39m       })[33m;[39m
+     [90m 263 |[39m     } [36mcatch[39m (error[33m:[39m any) {
+    [31m[1m>[22m[39m[90m 264 |[39m       console[33m.[39merror(requestFailedLogLabel[33m,[39m error[33m?[39m[33m.[39mmessage [33m||[39m error)[33m;[39m
+     [90m     |[39m               [31m[1m^[22m[39m
+     [90m 265 |[39m       [36mreturn[39m {
+     [90m 266 |[39m         ok[33m:[39m [36mfalse[39m[33m,[39m
+     [90m 267 |[39m         message[33m:[39m error[33m?[39m[33m.[39mmessage [33m||[39m requestFailedFallbackMessage[33m,[39m[0m
+
+      at RoborockUiServer.error [as performSignedLogin] (src/ui/index.ts:264:15)
+      at __tests__/a-custom-server-without-its-url-sends-nothing.test.js:124:22
+
+PASS __tests__/a-debug-log-is-safe-to-paste.test.js
+PASS __tests__/stale-accessory-guard.test.js
+PASS __tests__/a-b01-answer-without-a-status-is-not-idle.test.js
+PASS __tests__/the-transport-failure-rate-is-reported-every-hour.test.js
+PASS __tests__/a-paused-room-clean-resumes-from-the-robots-own-report.test.js
+PASS __tests__/a-live-q7-frame-does-not-rewrite-the-room-list.test.js
+PASS __tests__/a-dropped-map-reply-says-so.test.js
+PASS __tests__/a-q7-map-id-is-not-asked-every-ten-seconds.test.js
+PASS __tests__/an-automation-start-on-a-paused-run-resumes-it.test.js
+PASS __tests__/b01-live-room-coordinates.test.js
+PASS __tests__/a-stopped-run-s-skipped-rooms-stay-skipped.test.js
+PASS __tests__/a-robot-swapping-its-mop-mid-run-is-not-at-rest.test.js
+PASS __tests__/installing-the-package-runs-no-build.test.js
+PASS __tests__/a-schedule-deleted-while-homebridge-was-down-loses-its-switch.test.js
+PASS __tests__/a-q10-exposes-its-rooms.test.js
+PASS __tests__/a-write-the-store-refused-is-not-believed.test.js
+PASS __tests__/a-request-numbered-429-is-not-a-rate-limit.test.js
+PASS __tests__/a-cluster-the-endpoint-lacks-is-not-written.test.js
+PASS __tests__/report-settings-come-from-saved-config.test.js
+PASS __tests__/a-publish-the-link-refuses-fails-at-once.test.js
+PASS __tests__/a-decoded-mqtt-message-counts-toward-its-robot.test.js
+PASS __tests__/an-unknown-b01-model-is-not-spoken-to.test.js
+PASS __tests__/a-quiet-robot-does-not-withdraw-a-standing-tank-fault.test.js
+PASS __tests__/a-hung-cloud-request-does-not-block-the-switches.test.js
+PASS __tests__/password-logins-are-capped-at-python-roborocks-rates.test.js
+PASS __tests__/a-room-without-a-map-does-not-freeze-the-room-list.test.js
+PASS __tests__/readme-test-count-is-not-invented.test.js
+PASS __tests__/matter-service-area.test.js
+PASS __tests__/a-custom-server-login-asks-only-what-it-serves.test.js
+PASS __tests__/capability-model-gating.test.js
+PASS __tests__/shipped-locales-are-selectable.test.js
+PASS __tests__/b01-map-decoder-reads-what-it-needs.test.js
+PASS __tests__/a-q10-is-asked-to-push-its-status.test.js
+PASS __tests__/a-timeout-does-not-cut-a-local-reply-in-half.test.js
+PASS __tests__/the-hourly-transport-line-is-logged-when-its-hour-ends.test.js
+PASS __tests__/a-shared-robot-gets-a-runtime.test.js
+PASS __tests__/a-classic-live-room-reads-the-map-as-python-does.test.js
+PASS __tests__/vacuum-command-options.test.js
+PASS __tests__/a-login-server-error-is-not-a-refused-login.test.js
+PASS __tests__/a-paused-q10-room-clean-is-resumed-not-restarted.test.js
+PASS __tests__/another-controllers-photo-does-not-answer-our-request.test.js
+PASS __tests__/the-node-range-covers-what-ci-and-homebridge-run.test.js
+PASS __tests__/platform-device-update.test.js
+PASS __tests__/diagnostics-redaction.test.js
+PASS __tests__/an-undecodable-map-reply-is-not-a-silent-robot.test.js
+PASS __tests__/a-quiet-mqtt-session-is-restarted.test.js
+PASS __tests__/map-and-network-requests-never-go-over-the-lan.test.js
+PASS __tests__/two-quick-schedule-toggles-end-on-what-roborock-holds.test.js
+PASS __tests__/schedule-startup-recovery.test.js
+PASS __tests__/a-late-lan-reply-is-not-a-cloud-answer.test.js
+PASS __tests__/routine-cloud-events-are-logged-quietly.test.js
+PASS __tests__/a-login-outage-does-not-use-up-the-day.test.js
+PASS __tests__/diagnostics-priority-keys.test.js
+PASS __tests__/a-default-install-repeats-a-failure-warning-after-an-hour.test.js
+PASS __tests__/a-q10-gets-no-classic-diagnostic-states.test.js
+PASS __tests__/roborock-crypto.test.js
+PASS __tests__/the-clean-mode-follows-the-robots-own-water-level.test.js
+PASS __tests__/a-custom-server-without-its-cloud-import-says-what-to-do.test.js
+  ● Console
+
+    console.error
+      2FA verification failed: {
+        code: 41201,
+        msg: 'cloud_user_data_required',
+        data: {
+          reason: 'cloud_snapshot_missing',
+          hint: 'Fetch cloud data once via /ui/api/cloud/request-code and /ui/api/cloud/submit-code, then retry login.',
+          required_snapshot: '/data/cloud_snapshot.json'
+        }
+      }
+
+    [0m [90m 286 |[39m     }
+     [90m 287 |[39m
+    [31m[1m>[22m[39m[90m 288 |[39m     console[33m.[39merror(failureLogLabel[33m,[39m loginResult)[33m;[39m
+     [90m     |[39m             [31m[1m^[22m[39m
+     [90m 289 |[39m     [90m// Roborock's own text ("user agreement not accepted") does not say what[39m
+     [90m 290 |[39m     [90m// to do; the known refusals do.[39m
+     [90m 291 |[39m     [36mconst[39m refusal [33m=[39m roborockAuth[33m.[39mdescribeLoginRefusal(loginResult)[33m;[39m[0m
+
+      at RoborockUiServer.error [as performSignedLogin] (src/ui/index.ts:288:13)
+      at Object.<anonymous> (__tests__/a-custom-server-without-its-cloud-import-says-what-to-do.test.js:61:18)
+
+PASS __tests__/persist-debounce.test.js
+PASS __tests__/two-maps-with-one-name-are-both-published.test.js
+PASS __tests__/a-reading-without-rooms-keeps-the-room-names.test.js
+PASS __tests__/saros10-status-fields.test.js
+PASS __tests__/hap-schedule-api.test.js
+PASS __tests__/the-settings-page-keeps-a-region-it-does-not-list.test.js
+PASS __tests__/a-room-list-that-blinks-does-not-shrink-the-selection.test.js
+PASS __tests__/a-b01-state-the-tables-lack-is-unknown.test.js
+PASS __tests__/a-refused-request-leaves-the-others-alone.test.js
+PASS __tests__/a-schedule-switch-reads-the-trigger-it-writes.test.js
+PASS __tests__/a-saved-login-that-cannot-be-decrypted-says-so.test.js
+PASS __tests__/a-dock-word-saying-fine-with-zero-is-not-ignored.test.js
+PASS __tests__/a-start-in-flight-at-shutdown-stops.test.js
+PASS __tests__/a-room-clean-names-no-room-it-is-not-sure-of.test.js
+PASS __tests__/localConnector.test.js
+PASS __tests__/a-duplicate-cached-accessory-is-dropped.test.js
+PASS __tests__/identify-does-not-undo-a-start.test.js
+PASS __tests__/roborock-mqtt-connector.test.js
+
+Test Suites: 256 passed, 256 total
+Tests:       2892 passed, 2892 total
+Snapshots:   0 total
+Time:        40.598 s
+Ran all test suites.
+TAP version 13
+# Subtest: changes one existing disabled job and restores every original field
+ok 1 - changes one existing disabled job and restores every original field
+  ---
+  duration_ms: 22.891247
+  type: 'test'
+  ...
+# Subtest: enabled jobs without explicit expectation, unexpected times and near-term runs are refused
+ok 2 - enabled jobs without explicit expectation, unexpected times and near-term runs are refused
+  ---
+  duration_ms: 1.047659
+  type: 'test'
+  ...
+# Subtest: explicitly expected enabled job is edited and restored without changing its flag or task
+ok 3 - explicitly expected enabled job is edited and restored without changing its flag or task
+  ---
+  duration_ms: 3.291715
+  type: 'test'
+  ...
+# Subtest: explicit enabled expectation rejects false, string, missing and invalid expected values
+ok 4 - explicit enabled expectation rejects false, string, missing and invalid expected values
+  ---
+  duration_ms: 0.759202
+  type: 'test'
+  ...
+# Subtest: enabled trials retain the six-hour guard for both original and proposed times
+ok 5 - enabled trials retain the six-hour guard for both original and proposed times
+  ---
+  duration_ms: 2.247653
+  type: 'test'
+  ...
+# Subtest: cloud flag changes before or during an enabled trial are never overwritten
+ok 6 - cloud flag changes before or during an enabled trial are never overwritten
+  ---
+  duration_ms: 5.194008
+  type: 'test'
+  ...
+# Subtest: snapshot failure and concurrent change before write never mutate schedules
+ok 7 - snapshot failure and concurrent change before write never mutate schedules
+  ---
+  duration_ms: 4.852973
+  type: 'test'
+  ...
+# Subtest: a lost change acknowledgement is resolved by reads then restoration
+ok 8 - a lost change acknowledgement is resolved by reads then restoration
+  ---
+  duration_ms: 5.411419
+  type: 'test'
+  ...
+# Subtest: a lost restoration acknowledgement is checked rather than retried blindly
+ok 9 - a lost restoration acknowledgement is checked rather than retried blindly
+  ---
+  duration_ms: 3.395369
+  type: 'test'
+  ...
+# Subtest: a rejected write does not claim time-edit support or send an unnecessary restore
+ok 10 - a rejected write does not claim time-edit support or send an unnecessary restore
+  ---
+  duration_ms: 2.939245
+  type: 'test'
+  ...
+# Subtest: unexpected task changes are not overwritten by automatic restoration
+ok 11 - unexpected task changes are not overwritten by automatic restoration
+  ---
+  duration_ms: 2.632512
+  type: 'test'
+  ...
+# Subtest: failed restoration cannot be reported as success
+ok 12 - failed restoration cannot be reported as success
+  ---
+  duration_ms: 2.646392
+  type: 'test'
+  ...
+# Subtest: cancellation before write is respected
+ok 13 - cancellation before write is respected
+  ---
+  duration_ms: 2.601195
+  type: 'test'
+  ...
+# Subtest: transport signs exact sent bytes, blocks redirects and cannot write another job
+ok 14 - transport signs exact sent bytes, blocks redirects and cannot write another job
+  ---
+  duration_ms: 18.778408
+  type: 'test'
+  ...
+# Subtest: private originals cannot be overwritten and the execute flag is required
+ok 15 - private originals cannot be overwritten and the execute flag is required
+  ---
+  duration_ms: 4.145337
+  type: 'test'
+  ...
+# Subtest: CLI defaults to disabled and accepts only explicit boolean enabled expectations
+ok 16 - CLI defaults to disabled and accepts only explicit boolean enabled expectations
+  ---
+  duration_ms: 0.347284
+  type: 'test'
+  ...
+# Subtest: UI encrypted login works without UserData and takes precedence over a stale cache
+ok 17 - UI encrypted login works without UserData and takes precedence over a stale cache
+  ---
+  duration_ms: 5.367194
+  type: 'test'
+  ...
+# Subtest: missing, invalid and incorrect keys are never created or replaced
+ok 18 - missing, invalid and incorrect keys are never created or replaced
+  ---
+  duration_ms: 2.252069
+  type: 'test'
+  ...
+# Subtest: legacy cache remains supported and multiple platform accounts are refused
+ok 19 - legacy cache remains supported and multiple platform accounts are refused
+  ---
+  duration_ms: 0.715147
+  type: 'test'
+  ...
+# Subtest: complete nested settings survive string and array limits; secrets do not
+ok 20 - complete nested settings survive string and array limits; secrets do not
+  ---
+  duration_ms: 2.321421
+  type: 'test'
+  ...
+# Subtest: nine jobs survive and only three bounded OPTIONS requests run
+ok 21 - nine jobs survive and only three bounded OPTIONS requests run
+  ---
+  duration_ms: 4.015455
+  type: 'test'
+  ...
+# Subtest: unsupported shapes and empty results never cause extra requests
+ok 22 - unsupported shapes and empty results never cause extra requests
+  ---
+  duration_ms: 0.18962
+  type: 'test'
+  ...
+# Subtest: OPTIONS failures stay data and do not leak response bodies
+ok 23 - OPTIONS failures stay data and do not leak response bodies
+  ---
+  duration_ms: 0.425919
+  type: 'test'
+  ...
+# Subtest: fingerprint changes with task settings but not with time
+ok 24 - fingerprint changes with task settings but not with time
+  ---
+  duration_ms: 1.010093
+  type: 'test'
+  ...
+# Subtest: plugin debug mode keeps upstream discovery without the extra method probes
+ok 25 - plugin debug mode keeps upstream discovery without the extra method probes
+  ---
+  duration_ms: 6.607878
+  type: 'test'
+  ...
+# Subtest: journal is private, survives replacement and refuses corrupt saved originals
+ok 26 - journal is private, survives replacement and refuses corrupt saved originals
+  ---
+  duration_ms: 6.912077
+  type: 'test'
+  ...
+# Subtest: adapter uses existing authentication, correct timer envelopes and acknowledged docking
+ok 27 - adapter uses existing authentication, correct timer envelopes and acknowledged docking
+  ---
+  duration_ms: 1.076321
+  type: 'test'
+  ...
+# Subtest: the resume preference survives storage and invalid values cannot silently enable resume
+ok 28 - the resume preference survives storage and invalid values cannot silently enable resume
+  ---
+  duration_ms: 3.560293
+  type: 'test'
+  ...
+# Subtest: stacks by current times, re-evaluates after completion, and restores exact originals
+ok 29 - stacks by current times, re-evaluates after completion, and restores exact originals
+  ---
+  duration_ms: 34.335885
+  type: 'test'
+  ...
+# Subtest: pause survives restart with only per-vacuum controls selected
+ok 30 - pause survives restart with only per-vacuum controls selected
+  ---
+  duration_ms: 1.211711
+  type: 'test'
+  ...
+# Subtest: pause survives restart with only all-vacuum controls selected
+ok 31 - pause survives restart with only all-vacuum controls selected
+  ---
+  duration_ms: 0.840953
+  type: 'test'
+  ...
+# Subtest: delay survives restart with only per-vacuum controls selected
+ok 32 - delay survives restart with only per-vacuum controls selected
+  ---
+  duration_ms: 3.167662
+  type: 'test'
+  ...
+# Subtest: delay survives restart with only all-vacuum controls selected
+ok 33 - delay survives restart with only all-vacuum controls selected
+  ---
+  duration_ms: 2.553264
+  type: 'test'
+  ...
+# Subtest: hiding the last pause control restores an indefinite pause while leaving the preference OFF
+ok 34 - hiding the last pause control restores an indefinite pause while leaving the preference OFF
+  ---
+  duration_ms: 1.110551
+  type: 'test'
+  ...
+# Subtest: hiding the last delay control restores stacked times before the daily reset
+ok 35 - hiding the last delay control restores stacked times before the daily reset
+  ---
+  duration_ms: 4.55996
+  type: 'test'
+  ...
+# Subtest: hiding the last delay control also restores an indefinite cutoff pause
+ok 36 - hiding the last delay control also restores an indefinite cutoff pause
+  ---
+  duration_ms: 1.038546
+  type: 'test'
+  ...
+# Subtest: a paused vacuum receives no time edit; a new manual clean is docked only on an explicit press
+ok 37 - a paused vacuum receives no time edit; a new manual clean is docked only on an explicit press
+  ---
+  duration_ms: 1.138453
+  type: 'test'
+  ...
+# Subtest: pausing a delayed vacuum restores times while timers remain off, then unpause restores its mask
+ok 38 - pausing a delayed vacuum restores times while timers remain off, then unpause restores its mask
+  ---
+  duration_ms: 6.348754
+  type: 'test'
+  ...
+# Subtest: disabled and off-day schedules are not shifted
+ok 39 - disabled and off-day schedules are not shifted
+  ---
+  duration_ms: 0.993899
+  type: 'test'
+  ...
+# Subtest: crossing midnight rotates weekdays but reaching the reset converts to a pause
+ok 40 - crossing midnight rotates weekdays but reaching the reset converts to a pause
+  ---
+  duration_ms: 1.381542
+  type: 'test'
+  ...
+# Subtest: saved originals recover after a restart and a lost write acknowledgement
+ok 41 - saved originals recover after a restart and a lost write acknowledgement
+  ---
+  duration_ms: 2.190989
+  type: 'test'
+  ...
+# Subtest: an outage during cancellation retains active state until restoration succeeds
+ok 42 - an outage during cancellation retains active state until restoration succeeds
+  ---
+  duration_ms: 4.996976
+  type: 'test'
+  ...
+# Subtest: restoration preserves manual enable changes and abandons conflicting cron edits
+ok 43 - restoration preserves manual enable changes and abandons conflicting cron edits
+  ---
+  duration_ms: 2.71973
+  type: 'test'
+  ...
+# Subtest: no schedule mutation starts if saving originals fails
+ok 44 - no schedule mutation starts if saving originals fails
+  ---
+  duration_ms: 0.765471
+  type: 'test'
+  ...
+# Subtest: turning a feature off restores saved changes at startup
+ok 45 - turning a feature off restores saved changes at startup
+  ---
+  duration_ms: 1.507599
+  type: 'test'
+  ...
+# Subtest: stateful ON is idempotent; momentary delay presses still add time
+ok 46 - stateful ON is idempotent; momentary delay presses still add time
+  ---
+  duration_ms: 2.017902
+  type: 'test'
+  ...
+# Subtest: calendar rejects ambiguous or nonexistent DST times and respects configurable reset
+ok 47 - calendar rejects ambiguous or nonexistent DST times and respects configurable reset
+  ---
+  duration_ms: 0.593307
+  type: 'test'
+  ...
+# Subtest: fresh status and timer parsers never infer missing state as inactive
+ok 48 - fresh status and timer parsers never infer missing state as inactive
+  ---
+  duration_ms: 0.254937
+  type: 'test'
+  ...
+# Subtest: Delay Active OFF can cancel its own cutoff pause without canceling an ordinary pause
+ok 49 - Delay Active OFF can cancel its own cutoff pause without canceling an ordinary pause
+  ---
+  duration_ms: 0.752923
+  type: 'test'
+  ...
+# Subtest: models that mirror timer enable into cloud.enabled preserve the fresh flag during edits
+ok 50 - models that mirror timer enable into cloud.enabled preserve the fresh flag during edits
+  ---
+  duration_ms: 4.559009
+  type: 'test'
+  ...
+# Subtest: turning an inactive Pause switch OFF does not cancel a separate active delay
+ok 51 - turning an inactive Pause switch OFF does not cancel a separate active delay
+  ---
+  duration_ms: 1.956162
+  type: 'test'
+  ...
+# Subtest: hiding the ordinary pause feature restores its mask even if Delay remains enabled
+ok 52 - hiding the ordinary pause feature restores its mask even if Delay remains enabled
+  ---
+  duration_ms: 0.654707
+  type: 'test'
+  ...
+# Subtest: the three evening schedules shift using the wire timeZoneId and restore their exact payloads
+ok 53 - the three evening schedules shift using the wire timeZoneId and restore their exact payloads
+  ---
+  duration_ms: 9.825153
+  type: 'test'
+  ...
+# Subtest: invalid recurrence or timeZoneId is rejected before any schedule writes
+ok 54 - invalid recurrence or timeZoneId is rejected before any schedule writes
+  ---
+  duration_ms: 4.450018
+  type: 'test'
+  ...
+# Subtest: calendar uses the cloud timezone even when the host timezone differs
+ok 55 - calendar uses the cloud timezone even when the host timezone differs
+  ---
+  duration_ms: 0.546899
+  type: 'test'
+  ...
+# Subtest: automatic resume defaults ON and the preference alone never operates a robot
+ok 56 - automatic resume defaults ON and the preference alone never operates a robot
+  ---
+  duration_ms: 0.298231
+  type: 'test'
+  ...
+# Subtest: indefinite pause survives multiple resets and a restart without undoing manual enables
+ok 57 - indefinite pause survives multiple resets and a restart without undoing manual enables
+  ---
+  duration_ms: 0.626947
+  type: 'test'
+  ...
+# Subtest: re-enabling automatic resume after missed resets waits until the next reset
+ok 58 - re-enabling automatic resume after missed resets waits until the next reset
+  ---
+  duration_ms: 4.189002
+  type: 'test'
+  ...
+# Subtest: a new delay press does not expire an indefinite ordinary pause
+ok 59 - a new delay press does not expire an indefinite ordinary pause
+  ---
+  duration_ms: 0.564254
+  type: 'test'
+  ...
+# Subtest: delayed times still restore daily with automatic pause resume OFF
+ok 60 - delayed times still restore daily with automatic pause resume OFF
+  ---
+  duration_ms: 4.10648
+  type: 'test'
+  ...
+# Subtest: a delay converted to a pause honors the preference and can still be canceled
+ok 61 - a delay converted to a pause honors the preference and can still be canceled
+  ---
+  duration_ms: 0.63567
+  type: 'test'
+  ...
+# Subtest: recovery and disabling pause exposure still restore with automatic resume OFF
+ok 62 - recovery and disabling pause exposure still restore with automatic resume OFF
+  ---
+  duration_ms: 1.000049
+  type: 'test'
+  ...
+# Subtest: a failed preference save preserves the saved setting and pause deadline
+ok 63 - a failed preference save preserves the saved setting and pause deadline
+  ---
+  duration_ms: 0.551255
+  type: 'test'
+  ...
+# Subtest: queued expiration rechecks a preference switched OFF before it can run
+ok 64 - queued expiration rechecks a preference switched OFF before it can run
+  ---
+  duration_ms: 0.456515
+  type: 'test'
+  ...
+# Subtest: changing the shared preference preserves an existing stacked delay across restart
+ok 65 - changing the shared preference preserves an existing stacked delay across restart
+  ---
+  duration_ms: 3.282652
+  type: 'test'
+  ...
+# Subtest: new controls are opt-in and independent of the legacy action-switch master
+ok 66 - new controls are opt-in and independent of the legacy action-switch master
+  ---
+  duration_ms: 328.150749
+  type: 'test'
+  ...
+# Subtest: missing scope settings default to all-vacuum controls and still operate every vacuum
+ok 67 - missing scope settings default to all-vacuum controls and still operate every vacuum
+  ---
+  duration_ms: 37.619599
+  type: 'test'
+  ...
+# Subtest: control exposure supports individual pause only
+ok 68 - control exposure supports individual pause only
+  ---
+  duration_ms: 29.982219
+  type: 'test'
+  ...
+# Subtest: control exposure supports individual delay only
+ok 69 - control exposure supports individual delay only
+  ---
+  duration_ms: 22.638013
+  type: 'test'
+  ...
+# Subtest: control exposure supports all pause and individual delay
+ok 70 - control exposure supports all pause and individual delay
+  ---
+  duration_ms: 27.188729
+  type: 'test'
+  ...
+# Subtest: control exposure supports individual pause and all delay
+ok 71 - control exposure supports individual pause and all delay
+  ---
+  duration_ms: 19.193892
+  type: 'test'
+  ...
+# Subtest: control exposure supports all pause hidden but delay remains
+ok 72 - control exposure supports all pause hidden but delay remains
+  ---
+  duration_ms: 18.706722
+  type: 'test'
+  ...
+# Subtest: control exposure supports no scope selected
+ok 73 - control exposure supports no scope selected
+  ---
+  duration_ms: 19.817474
+  type: 'test'
+  ...
+# Subtest: control exposure supports masters off override selected scopes
+ok 74 - control exposure supports masters off override selected scopes
+  ---
+  duration_ms: 18.818777
+  type: 'test'
+  ...
+# Subtest: deselecting per-vacuum controls removes cached copies even during empty discovery and preserves all controls
+ok 75 - deselecting per-vacuum controls removes cached copies even during empty discovery and preserves all controls
+  ---
+  duration_ms: 16.911519
+  type: 'test'
+  ...
+# Subtest: deselecting all-vacuum controls preserves selected individual controls and the shared preference
+ok 76 - deselecting all-vacuum controls preserves selected individual controls and the shared preference
+  ---
+  duration_ms: 14.715342
+  type: 'test'
+  ...
+# Subtest: pause stays optimistic through initialization, GETs and refreshes; aggregate follows any robot
+ok 77 - pause stays optimistic through initialization, GETs and refreshes; aggregate follows any robot
+  ---
+  duration_ms: 32.213387
+  type: 'test'
+  ...
+# Subtest: resume stays OFF while restoring; failure reverts ON and logs an error
+ok 78 - resume stays OFF while restoring; failure reverts ON and logs an error
+  ---
+  duration_ms: 11.998126
+  type: 'test'
+  ...
+# Subtest: failed partial pause reverts OFF despite tentative journal flags until recovery completes
+ok 79 - failed partial pause reverts OFF despite tentative journal flags until recovery completes
+  ---
+  duration_ms: 14.500975
+  type: 'test'
+  ...
+# Subtest: newer individual OFF survives an older all-vacuum ON and executes after the whole batch
+ok 80 - newer individual OFF survives an older all-vacuum ON and executes after the whole batch
+  ---
+  duration_ms: 18.139534
+  type: 'test'
+  ...
+# Subtest: all-vacuum partial failure rolls back only the failed robot and keeps aggregate any-paused semantics
+ok 81 - all-vacuum partial failure rolls back only the failed robot and keeps aggregate any-paused semantics
+  ---
+  duration_ms: 14.858743
+  type: 'test'
+  ...
+# Subtest: Delay Active is optimistic but the Delay button remains momentary
+ok 82 - Delay Active is optimistic but the Delay button remains momentary
+  ---
+  duration_ms: 15.989806
+  type: 'test'
+  ...
+# Subtest: Delay Active reflects any delayed robot and OFF cancels both without resuming ordinary pauses
+ok 83 - Delay Active reflects any delayed robot and OFF cancels both without resuming ordinary pauses
+  ---
+  duration_ms: 17.491215
+  type: 'test'
+  ...
+# Subtest: momentary OFF sends no command; all-vacuum actions continue after one failure
+ok 84 - momentary OFF sends no command; all-vacuum actions continue after one failure
+  ---
+  duration_ms: 18.336755
+  type: 'test'
+  ...
+# Subtest: stateful ON requests one delay and disabling exposure removes only these controls
+ok 85 - stateful ON requests one delay and disabling exposure removes only these controls
+  ---
+  duration_ms: 15.354547
+  type: 'test'
+  ...
+# Subtest: delay pulse ends after 1.5 seconds with a pending cloud request
+ok 86 - delay pulse ends after 1.5 seconds with a pending cloud request
+  ---
+  duration_ms: 1613.350108
+  type: 'test'
+  ...
+# Subtest: delay pulse ends after 1.5 seconds with a success cloud request
+ok 87 - delay pulse ends after 1.5 seconds with a success cloud request
+  ---
+  duration_ms: 1613.097503
+  type: 'test'
+  ...
+# Subtest: delay pulse ends after 1.5 seconds with a failure cloud request
+ok 88 - delay pulse ends after 1.5 seconds with a failure cloud request
+  ---
+  duration_ms: 1612.398413
+  type: 'test'
+  ...
+# Subtest: real HAP emits OFF after intervening reads and an already-OFF cached value
+ok 89 - real HAP emits OFF after intervening reads and an already-OFF cached value
+  ---
+  duration_ms: 1616.69729
+  type: 'test'
+  ...
+# Subtest: Pause Active keeps its accessory identity and one shared preference defaults ON
+ok 90 - Pause Active keeps its accessory identity and one shared preference defaults ON
+  ---
+  duration_ms: 13.755013
+  type: 'test'
+  ...
+# Subtest: preference requests retain press order with pauses and revert on persistence failure
+ok 91 - preference requests retain press order with pauses and revert on persistence failure
+  ---
+  duration_ms: 10.717442
+  type: 'test'
+  ...
+# Subtest: failed Delay Active ON reverts OFF when no schedule changes remain
+ok 92 - failed Delay Active ON reverts OFF when no schedule changes remain
+  ---
+  duration_ms: 17.137893
+  type: 'test'
+  ...
+# Subtest: failed delay start keeps Delay Active ON while schedule recovery remains
+ok 93 - failed delay start keeps Delay Active ON while schedule recovery remains
+  ---
+  duration_ms: 11.481983
+  type: 'test'
+  ...
+# Subtest: failed delay cancel keeps Delay Active ON while schedule recovery remains
+ok 94 - failed delay cancel keeps Delay Active ON while schedule recovery remains
+  ---
+  duration_ms: 10.195811
+  type: 'test'
+  ...
+# Subtest: new and existing settings without scope keys default to all-vacuum controls
+ok 95 - new and existing settings without scope keys default to all-vacuum controls
+  ---
+  duration_ms: 10.640008
+  type: 'test'
+  ...
+# Subtest: explicit false and individual selections survive load, form save, and reload
+ok 96 - explicit false and individual selections survive load, form save, and reload
+  ---
+  duration_ms: 5.044156
+  type: 'test'
+  ...
+# Subtest: masters hide their own indented options without erasing remembered selections
+ok 97 - masters hide their own indented options without erasing remembered selections
+  ---
+  duration_ms: 1.804628
+  type: 'test'
+  ...
+# Subtest: unrelated automatic saves do not persist unsaved scope changes
+ok 98 - unrelated automatic saves do not persist unsaved scope changes
+  ---
+  duration_ms: 3.056979
+  type: 'test'
+  ...
+# Subtest: schema and markup agree on all-vacuum defaults
+ok 99 - schema and markup agree on all-vacuum defaults
+  ---
+  duration_ms: 5.724682
+  type: 'test'
+  ...
+# Subtest: preventive refresh defaults to 180 minutes for old or invalid configs
+ok 100 - preventive refresh defaults to 180 minutes for old or invalid configs
+  ---
+  duration_ms: 17.310117
+  type: 'test'
+  ...
+# Subtest: both recovery flags are required without erasing the chosen interval
+ok 101 - both recovery flags are required without erasing the chosen interval
+  ---
+  duration_ms: 1.755025
+  type: 'test'
+  ...
+# Subtest: the interval saves as a number and reloads without saving pending pause/delay edits
+ok 102 - the interval saves as a number and reloads without saving pending pause/delay edits
+  ---
+  duration_ms: 2.820529
+  type: 'test'
+  ...
+# Subtest: one fresh GET distinguishes cloud state from historical timer state and masks secrets
+ok 103 - one fresh GET distinguishes cloud state from historical timer state and masks secrets
+  ---
+  duration_ms: 8.040711
+  type: 'test'
+  ...
+# Subtest: missing logs remain unknown and string flags are not silently converted
+ok 104 - missing logs remain unknown and string flags are not silently converted
+  ---
+  duration_ms: 0.616571
+  type: 'test'
+  ...
+# Subtest: unrelated robots and malformed log entries cannot supply a timer observation
+ok 105 - unrelated robots and malformed log entries cannot supply a timer observation
+  ---
+  duration_ms: 0.803809
+  type: 'test'
+  ...
+# Subtest: read-only transport blocks PUT and OPTIONS before any fetch
+ok 106 - read-only transport blocks PUT and OPTIONS before any fetch
+  ---
+  duration_ms: 17.355835
+  type: 'test'
+  ...
+# Subtest: explicit method inspection reads once and probes only the selected job
+ok 107 - explicit method inspection reads once and probes only the selected job
+  ---
+  duration_ms: 1.012567
+  type: 'test'
+  ...
+# Subtest: explicit probes cannot enable writes, request bodies or other job routes
+ok 108 - explicit probes cannot enable writes, request bodies or other job routes
+  ---
+  duration_ms: 1.051755
+  type: 'test'
+  ...
+# Subtest: an absent selected job never causes method probes
+ok 109 - an absent selected job never causes method probes
+  ---
+  duration_ms: 0.388534
+  type: 'test'
+  ...
+# Subtest: an idle vacuum only postpones future schedules, not an earlier completed run
+ok 110 - an idle vacuum only postpones future schedules, not an earlier completed run
+  ---
+  duration_ms: 1.327803
+  type: 'test'
+  ...
+# Subtest: cleaning at 09:06 includes the 09:00 schedule and later schedules
+ok 111 - cleaning at 09:06 includes the 09:00 schedule and later schedules
+  ---
+  duration_ms: 0.241847
+  type: 'test'
+  ...
+# Subtest: an active run started more than ten minutes ago is outside the heuristic
+ok 112 - an active run started more than ten minutes ago is outside the heuristic
+  ---
+  duration_ms: 0.122431
+  type: 'test'
+  ...
+# Subtest: ten minutes is inclusive and a schedule due at the press is recent, not future
+ok 113 - ten minutes is inclusive and a schedule due at the press is recent, not future
+  ---
+  duration_ms: 0.260114
+  type: 'test'
+  ...
+# Subtest: only the most recent of two different recent times is selected
+ok 114 - only the most recent of two different recent times is selected
+  ---
+  duration_ms: 0.199955
+  type: 'test'
+  ...
+# Subtest: simultaneous recent schedules are reported as ambiguous; future schedules still qualify
+ok 115 - simultaneous recent schedules are reported as ambiguous; future schedules still qualify
+  ---
+  duration_ms: 1.014154
+  type: 'test'
+  ...
+# Subtest: disabled schedules, other occurrence days, and already-paused vacuums are excluded
+ok 116 - disabled schedules, other occurrence days, and already-paused vacuums are excluded
+  ---
+  duration_ms: 0.200897
+  type: 'test'
+  ...
+# Subtest: repeat presses use the delayed effective time, not the original start
+ok 117 - repeat presses use the delayed effective time, not the original start
+  ---
+  duration_ms: 0.144133
+  type: 'test'
+  ...
+# Subtest: a second press while docked keeps postponing a still-future delayed occurrence
+ok 118 - a second press while docked keeps postponing a still-future delayed occurrence
+  ---
+  duration_ms: 0.335706
+  type: 'test'
+  ...
+# Subtest: does not mutate its input and refuses unknown robot/enable states
+ok 119 - does not mutate its input and refuses unknown robot/enable states
+  ---
+  duration_ms: 0.595881
+  type: 'test'
+  ...
+1..119
+# tests 119
+# suites 0
+# pass 119
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7492.922231
+.........
+----------------------------------------------------------------------
+Ran 9 tests in 0.003s
+
+OK
+To https://github.com/pponce/homebridge-roborock-matter-plus
+   eefcec1..1970e9a  HEAD -> SCHEDULE_PAUSE_DELAY
+PUBLISHED 1970e9a370c2899b3ae48e54973578e9979af886
