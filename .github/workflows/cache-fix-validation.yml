@@ -27,6 +27,31 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
-      - run: npm test -- --runInBand
+      - run: npm test -- --runInBand --json --outputFile=/tmp/cache-test-results.json
         env:
           CI: true
+      - name: Save test summary
+        if: always()
+        run: |
+          node - <<'JS'
+          const fs = require("fs");
+          const input = "/tmp/cache-test-results.json";
+          if (fs.existsSync(input)) {
+            const r = JSON.parse(fs.readFileSync(input, "utf8"));
+            const summary = {
+              success: r.success,
+              numTotalTests: r.numTotalTests,
+              numPassedTests: r.numPassedTests,
+              numFailedTests: r.numFailedTests,
+              numTotalTestSuites: r.numTotalTestSuites,
+              failures: r.testResults.filter(t => t.status !== "passed").map(t => ({name:t.name, message:t.message, assertions:t.assertionResults.filter(a=>a.status==="failed").map(a=>({name:a.fullName, failureMessages:a.failureMessages}))}))
+            };
+            fs.mkdirSync("work-notes", { recursive: true });
+            fs.writeFileSync("work-notes/cache-validation.json", JSON.stringify(summary, null, 2) + "\n");
+          }
+          JS
+          if [ -f work-notes/cache-validation.json ]; then
+            git add work-notes/cache-validation.json
+            git commit -m "Record cache validation results [skip ci]" || true
+            git push
+          fi
