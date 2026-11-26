@@ -41,7 +41,10 @@ function coordinator(platform, manager) {
 }
 
 function scheduleSwitch(manager) {
-  return manager.getServiceById(hap.Service.Switch, "roborock-schedule-timer-1");
+  return manager.getServiceById(
+    hap.Service.Switch,
+    "roborock-schedule-timer-1"
+  );
 }
 
 function nameDefinitions(service) {
@@ -102,7 +105,9 @@ test("a bloated cache is saved compactly before cloud reads, preserving identity
   expect(JSON.stringify(saved[0]).length).toBeLessThan(
     JSON.stringify(bloated).length / 100
   );
-  restored.services.forEach((entry, i) => expect(entry).toBe(originalServices[i]));
+  restored.services.forEach((entry, i) =>
+    expect(entry).toBe(originalServices[i])
+  );
   scheduleSwitch(restored).characteristics.forEach((entry, i) =>
     expect(entry).toBe(active[i])
   );
@@ -110,8 +115,9 @@ test("a bloated cache is saved compactly before cloud reads, preserving identity
   await schedules.initialize("Test Robot");
   expect(nameDefinitions(scheduleSwitch(restored))).toHaveLength(1);
   expect(
-    scheduleSwitch(restored).getCharacteristic(hap.Characteristic.ConfiguredName)
-      .value
+    scheduleSwitch(restored).getCharacteristic(
+      hap.Characteristic.ConfiguredName
+    ).value
   ).toBe("Morning clean");
   expect(restored.UUID).toBe(manager.UUID);
   expect(scheduleSwitch(restored).subtype).toBe(service.subtype);
