@@ -5,7 +5,6 @@ const {
   hap,
   makeScheduleAccount,
   makeSchedulePlatform,
-  scene,
 } = require("../test-support/schedule-account");
 const RoborockHapScheduleAccessory =
   require("../src/hap_schedule_accessory.ts").default;
@@ -133,7 +132,12 @@ test("routine restoration compacts cached definitions and repeated renames stay 
   const platform = makeSchedulePlatform(makeScheduleAccount({ duid: DUID }));
   const schedules = coordinator(platform, accessory());
   const routines = accessory("Routines");
-  const routine = scene({ id: 17, name: "Kitchen clean", duid: DUID });
+  const routine = {
+    id: "17",
+    name: "Kitchen clean",
+    raw: {},
+    schedule: null,
+  };
   schedules.attachRoutineAccessory(routines);
   schedules.syncRoutines([routine]);
   const service = routines.getServiceById(

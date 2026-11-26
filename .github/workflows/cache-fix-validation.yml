@@ -1,9 +1,10 @@
 name: Cache fix validation
 on:
   push:
-    branches: [verify/schedule-cache-upstream]
+    branches: [verify/schedule-cache-upstream, verify/schedule-cache-plus, verify/schedule-cache-schedule]
 permissions:
-  contents: write
+  contents: read
+  checks: write
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -14,44 +15,37 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Format changed files
-        run: |
-          npx prettier --write src/hap_schedule_accessory.ts __tests__/schedule-cache-size.test.js __tests__/hap-schedule-naming.test.js __tests__/routine-momentary-acknowledgement.test.js __tests__/a-schedule-the-robot-denies-is-read-from-the-cloud.test.js __tests__/hap-names-pass-homekit-name-rules.test.js
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src __tests__
-          if ! git diff --cached --quiet; then
-            git commit -m "Format cache regression tests [skip ci]"
-            git push
-          fi
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run build
       - run: npm test -- --runInBand --json --outputFile=/tmp/cache-test-results.json
         env:
           CI: true
-      - name: Save test summary
-        if: always()
+      - name: Run fork diagnostic tests
         run: |
-          node - <<'JS'
-          const fs = require("fs");
-          const input = "/tmp/cache-test-results.json";
-          if (fs.existsSync(input)) {
-            const r = JSON.parse(fs.readFileSync(input, "utf8"));
-            const summary = {
-              success: r.success,
-              numTotalTests: r.numTotalTests,
-              numPassedTests: r.numPassedTests,
-              numFailedTests: r.numFailedTests,
-              numTotalTestSuites: r.numTotalTestSuites,
-              failures: r.testResults.filter(t => t.status !== "passed").map(t => ({name:t.name, message:t.message, assertions:t.assertionResults.filter(a=>a.status==="failed").map(a=>({name:a.fullName, failureMessages:a.failureMessages}))}))
-            };
-            fs.mkdirSync("work-notes", { recursive: true });
-            fs.writeFileSync("work-notes/cache-validation.json", JSON.stringify(summary, null, 2) + "\n");
-          }
-          JS
-          if [ -f work-notes/cache-validation.json ]; then
-            git add work-notes/cache-validation.json
-            git commit -m "Record cache validation results [skip ci]" || true
-            git push
+          if compgen -G "tests/*.test.cjs" > /dev/null; then
+            node --test tests/*.test.cjs
           fi
+          if compgen -G "tests/test_*.py" > /dev/null; then
+            python3 -m unittest discover -s tests -p 'test_*.py'
+          fi
+      - name: Report test results
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const file = '/tmp/cache-test-results.json';
+            if (!fs.existsSync(file)) return;
+            const r = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const failures = r.testResults.filter(t => t.status !== 'passed').map(t => ({name:t.name, message:t.message}));
+            await github.rest.checks.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              name: 'Cache regression results', head_sha: context.sha,
+              status: 'completed', conclusion: r.success ? 'success' : 'failure',
+              output: {
+                title: r.numPassedTests + '/' + r.numTotalTests + ' tests passed',
+                summary: r.numTotalTestSuites + ' suites. ' + r.numFailedTests + ' failures.',
+                text: JSON.stringify(failures, null, 2).slice(0,60000)
+              }
+            });
