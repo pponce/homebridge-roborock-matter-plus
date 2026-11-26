@@ -1,0 +1,32 @@
+name: Cache fix validation
+on:
+  push:
+    branches: [verify/schedule-cache-upstream]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Format changed files
+        run: |
+          npx prettier --write src/hap_schedule_accessory.ts __tests__/schedule-cache-size.test.js __tests__/hap-schedule-naming.test.js __tests__/routine-momentary-acknowledgement.test.js __tests__/a-schedule-the-robot-denies-is-read-from-the-cloud.test.js __tests__/hap-names-pass-homekit-name-rules.test.js
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src __tests__
+          if ! git diff --cached --quiet; then
+            git commit -m "Format cache regression tests [skip ci]"
+            git push
+          fi
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test -- --runInBand
+        env:
+          CI: true
