@@ -1,7 +1,10 @@
 name: Cache fix validation
 on:
   push:
-    branches: [verify/schedule-cache-upstream, verify/schedule-cache-plus, verify/schedule-cache-schedule]
+    branches:
+      - verify/schedule-cache-upstream
+      - verify/schedule-cache-plus
+      - verify/schedule-cache-schedule
 permissions:
   contents: read
   checks: write
@@ -15,7 +18,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run lint
+      - run: npm run lint 2>&1 | tee /tmp/cache-lint.log
+        id: lint
+        continue-on-error: true
       - run: npm run typecheck
       - run: npm run build
       - run: npm test -- --runInBand --json --outputFile=/tmp/cache-test-results.json
@@ -36,7 +41,11 @@ jobs:
           script: |
             const fs = require('fs');
             const file = '/tmp/cache-test-results.json';
-            if (!fs.existsSync(file)) return;
+            const lint = fs.existsSync('/tmp/cache-lint.log') ? fs.readFileSync('/tmp/cache-lint.log','utf8') : '';
+            if (!fs.existsSync(file)) {
+              await github.rest.checks.create({owner:context.repo.owner,repo:context.repo.repo,name:'Cache validation diagnostics',head_sha:context.sha,status:'completed',conclusion:'failure',output:{title:'Checks did not reach tests',summary:lint.slice(-60000)}});
+              return;
+            }
             const r = JSON.parse(fs.readFileSync(file, 'utf8'));
             const failures = r.testResults.filter(t => t.status !== 'passed').map(t => ({name:t.name, message:t.message}));
             await github.rest.checks.create({
@@ -46,6 +55,9 @@ jobs:
               output: {
                 title: r.numPassedTests + '/' + r.numTotalTests + ' tests passed',
                 summary: r.numTotalTestSuites + ' suites. ' + r.numFailedTests + ' failures.',
-                text: JSON.stringify(failures, null, 2).slice(0,60000)
+                text: (lint + '\n' + JSON.stringify(failures, null, 2)).slice(0,60000)
               }
             });
+      - name: Require formatting checks
+        if: always() && steps.lint.outcome == 'failure'
+        run: exit 1
