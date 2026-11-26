@@ -1,0 +1,51 @@
+name: Cache fix validation
+on:
+  push:
+    branches: [verify/schedule-cache-upstream, verify/schedule-cache-plus, verify/schedule-cache-schedule]
+permissions:
+  contents: read
+  checks: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test -- --runInBand --json --outputFile=/tmp/cache-test-results.json
+        env:
+          CI: true
+      - name: Run fork diagnostic tests
+        run: |
+          if compgen -G "tests/*.test.cjs" > /dev/null; then
+            node --test tests/*.test.cjs
+          fi
+          if compgen -G "tests/test_*.py" > /dev/null; then
+            python3 -m unittest discover -s tests -p 'test_*.py'
+          fi
+      - name: Report test results
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const file = '/tmp/cache-test-results.json';
+            if (!fs.existsSync(file)) return;
+            const r = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const failures = r.testResults.filter(t => t.status !== 'passed').map(t => ({name:t.name, message:t.message}));
+            await github.rest.checks.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              name: 'Cache regression results', head_sha: context.sha,
+              status: 'completed', conclusion: r.success ? 'success' : 'failure',
+              output: {
+                title: r.numPassedTests + '/' + r.numTotalTests + ' tests passed',
+                summary: r.numTotalTestSuites + ' suites. ' + r.numFailedTests + ' failures.',
+                text: JSON.stringify(failures, null, 2).slice(0,60000)
+              }
+            });
